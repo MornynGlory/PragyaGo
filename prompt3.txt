@@ -1,0 +1,51 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AsyncStorageAdapter, createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { Database } from '../types/supabase';
+
+const SUPABASE_URL = process.env.SUPABASE_URL ?? '';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? '';
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  throw new Error('Missing Supabase environment variables. Ensure SUPABASE_URL and SUPABASE_ANON_KEY are set in .env and that .env is added to .gitignore.');
+}
+
+export const supabase: SupabaseClient<Database> = createClient<Database>(
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
+  {
+    auth: {
+      storage: new AsyncStorageAdapter(AsyncStorage),
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: false,
+    },
+  }
+);
+
+export type CurrentUserProfile = Database['public']['Tables']['profiles']['Row'];
+
+export async function getCurrentUser(): Promise<{
+  user: Database['public']['Tables']['profiles']['Row'] | null;
+  profile: CurrentUserProfile | null;
+}> {
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return { user: null, profile: null };
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('id, email, role')
+    .eq('id', user.id)
+    .single();
+
+  if (profileError || !profile) {
+    return { user, profile: null };
+  }
+
+  return { user, profile };
+}

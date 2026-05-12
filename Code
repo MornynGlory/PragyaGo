@@ -1,0 +1,444 @@
+# PragyaGo - React Native Expo Project
+
+## Project Structure
+
+```
+PragyaGo/
+├── app/
+│   ├── _layout.tsx           # Root layout with role-based navigation
+│   ├── index.tsx             # Role selection entry point
+│   ├── rider/
+│   │   ├── _layout.tsx       # Rider stack navigator
+│   │   ├── home.tsx          # Rider home screen
+│   │   ├── booking.tsx       # Rider booking screen
+│   │   └── trips.tsx         # Rider trips history
+│   └── driver/
+│       ├── _layout.tsx       # Driver stack navigator
+│       ├── home.tsx          # Driver home screen
+│       ├── earnings.tsx      # Driver earnings screen
+│       └── trips.tsx         # Driver trips history
+├── components/
+│   ├── ui/
+│   │   ├── Button.tsx
+│   │   ├── Card.tsx
+│   │   └── Input.tsx
+│   └── Navigation/
+│       ├── RiderTabBar.tsx
+│       └── DriverTabBar.tsx
+├── lib/
+│   ├── supabase.ts           # Supabase client setup
+│   └── helpers.ts            # Utility functions
+├── hooks/
+│   ├── useAuth.ts            # Authentication hook
+│   └── useUserRole.ts        # User role hook
+├── constants/
+│   ├── colors.ts
+│   ├── config.ts
+│   └── theme.ts
+├── app.json
+├── tsconfig.json
+├── package.json
+└── README.md
+```
+
+## Setup Instructions
+
+### 1. Create the project structure
+
+```bash
+cd c:\Users\USER\PragyaGo
+npx create-expo-app@latest Code --template
+cd Code
+```
+
+### 2. Install dependencies
+
+```bash
+npm install
+npm install expo-router
+npm install @react-navigation/native @react-navigation/bottom-tabs @react-navigation/native-stack
+npm install react-native-screens react-native-safe-area-context
+npm install @supabase/supabase-js
+npm install typescript @types/react @types/react-native --save-dev
+npx expo install expo-font expo-splash-screen
+```
+
+### 3. Key Files Implementation
+
+#### app/_layout.tsx
+```typescript
+import { Stack } from 'expo-router';
+import { useUserRole } from '@/hooks/useUserRole';
+import { ActivityIndicator, View } from 'react-native';
+
+export default function RootLayout() {
+  const { role, loading } = useUserRole();
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      {role === null ? (
+        <Stack.Screen name="index" />
+      ) : role === 'rider' ? (
+        <Stack.Screen name="rider" />
+      ) : (
+        <Stack.Screen name="driver" />
+      )}
+    </Stack>
+  );
+}
+```
+
+#### app/index.tsx (Role Selection)
+```typescript
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { router } from 'expo-router';
+import { COLORS } from '@/constants/colors';
+
+export default function RoleSelection() {
+  const [loading, setLoading] = useState(false);
+
+  const handleRoleSelection = async (role: 'rider' | 'driver') => {
+    setLoading(true);
+    // Store role preference in AsyncStorage or context
+    // For now, navigate directly
+    if (role === 'rider') {
+      router.replace('/rider');
+    } else {
+      router.replace('/driver');
+    }
+    setLoading(false);
+  };
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Welcome to PragyaGo</Text>
+      <Text style={styles.subtitle}>Choose your role</Text>
+
+      <TouchableOpacity
+        style={[styles.button, styles.riderButton]}
+        onPress={() => handleRoleSelection('rider')}
+        disabled={loading}
+      >
+        <Text style={styles.buttonText}>🚗 I'm a Rider</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[styles.button, styles.driverButton]}
+        onPress={() => handleRoleSelection('driver')}
+        disabled={loading}
+      >
+        <Text style={styles.buttonText}>🚙 I'm a Driver</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: COLORS.background,
+    paddingHorizontal: 20,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: COLORS.primary,
+    marginBottom: 10,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: COLORS.text,
+    marginBottom: 40,
+  },
+  button: {
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 12,
+    marginBottom: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  riderButton: {
+    backgroundColor: COLORS.primary,
+  },
+  driverButton: {
+    backgroundColor: COLORS.secondary,
+  },
+  buttonText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#fff',
+  },
+});
+```
+
+#### app/rider/_layout.tsx
+```typescript
+import { BottomTabNavigationOptions, createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Stack } from 'expo-router';
+import Home from './home';
+import Booking from './booking';
+import Trips from './trips';
+import { COLORS } from '@/constants/colors';
+
+const Tab = createBottomTabNavigator();
+
+export default function RiderLayout() {
+  return (
+    <Tab.Navigator
+      screenOptions={{
+        headerShown: true,
+        headerStyle: { backgroundColor: COLORS.primary },
+        headerTintColor: '#fff',
+        headerTitleStyle: { fontWeight: 'bold' },
+        tabBarActiveTintColor: COLORS.primary,
+        tabBarInactiveTintColor: COLORS.gray,
+      }}
+    >
+      <Tab.Screen
+        name="home"
+        component={Home}
+        options={{
+          title: 'Home',
+          tabBarLabel: 'Home',
+        }}
+      />
+      <Tab.Screen
+        name="booking"
+        component={Booking}
+        options={{
+          title: 'Book Ride',
+          tabBarLabel: 'Book',
+        }}
+      />
+      <Tab.Screen
+        name="trips"
+        component={Trips}
+        options={{
+          title: 'My Trips',
+          tabBarLabel: 'Trips',
+        }}
+      />
+    </Tab.Navigator>
+  );
+}
+```
+
+#### app/driver/_layout.tsx
+```typescript
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import Home from './home';
+import Earnings from './earnings';
+import Trips from './trips';
+import { COLORS } from '@/constants/colors';
+
+const Tab = createBottomTabNavigator();
+
+export default function DriverLayout() {
+  return (
+    <Tab.Navigator
+      screenOptions={{
+        headerShown: true,
+        headerStyle: { backgroundColor: COLORS.secondary },
+        headerTintColor: '#fff',
+        headerTitleStyle: { fontWeight: 'bold' },
+        tabBarActiveTintColor: COLORS.secondary,
+        tabBarInactiveTintColor: COLORS.gray,
+      }}
+    >
+      <Tab.Screen
+        name="home"
+        component={Home}
+        options={{ title: 'Home', tabBarLabel: 'Home' }}
+      />
+      <Tab.Screen
+        name="earnings"
+        component={Earnings}
+        options={{ title: 'Earnings', tabBarLabel: 'Earnings' }}
+      />
+      <Tab.Screen
+        name="trips"
+        component={Trips}
+        options={{ title: 'My Trips', tabBarLabel: 'Trips' }}
+      />
+    </Tab.Navigator>
+  );
+}
+```
+
+#### lib/supabase.ts
+```typescript
+import { createClient } from '@supabase/supabase-js';
+
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
+
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+```
+
+#### constants/colors.ts
+```typescript
+export const COLORS = {
+  primary: '#2563eb',      // Blue for riders
+  secondary: '#10b981',    // Green for drivers
+  background: '#f3f4f6',
+  text: '#1f2937',
+  gray: '#9ca3af',
+  white: '#ffffff',
+  error: '#ef4444',
+  success: '#10b981',
+};
+```
+
+#### hooks/useUserRole.ts
+```typescript
+import { useEffect, useState } from 'react';
+import { useRouter, useRootNavigationState } from 'expo-router';
+
+type UserRole = 'rider' | 'driver' | null;
+
+export function useUserRole() {
+  const [role, setRole] = useState<UserRole>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Fetch user role from AsyncStorage or context
+    // For now, simulating async operation
+    setTimeout(() => {
+      // setRole('rider'); // or 'driver'
+      setLoading(false);
+    }, 500);
+  }, []);
+
+  return { role, loading };
+}
+```
+
+## Running the Project
+
+```bash
+npx expo start
+```
+
+Press:
+- `i` to run on iOS simulator
+- `a` to run on Android emulator
+- `w` to open web version
+
+## Supabase SQL Schema
+
+```sql
+-- Enable UUID generation for Supabase/PostgreSQL
+create extension if not exists "pgcrypto";
+
+-- Enums
+create type user_role as enum ('rider', 'driver');
+create type ride_status as enum ('requested', 'accepted', 'in_progress', 'completed', 'cancelled');
+create type payment_method as enum ('cash', 'momo');
+create type payment_status as enum ('pending', 'success', 'failed');
+
+-- Profiles table
+create table if not exists profiles (
+  id uuid not null primary key references auth.users(id) on delete cascade,
+  role user_role not null,
+  full_name text not null,
+  phone text not null,
+  created_at timestamptz not null default now()
+);
+
+-- Drivers table
+create table if not exists drivers (
+  id uuid not null primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  is_online boolean not null default false,
+  current_lat numeric(9,6),
+  current_lng numeric(9,6),
+  rating numeric(3,2) not null default 0,
+  total_rides integer not null default 0,
+  vehicle_number text not null unique
+);
+
+-- Rides table
+create table if not exists rides (
+  id uuid not null primary key default gen_random_uuid(),
+  rider_id uuid not null references profiles(id) on delete cascade,
+  driver_id uuid references drivers(id) on delete set null,
+  pickup_lat numeric(9,6) not null,
+  pickup_lng numeric(9,6) not null,
+  pickup_address text not null,
+  dropoff_lat numeric(9,6) not null,
+  dropoff_lng numeric(9,6) not null,
+  dropoff_address text not null,
+  status ride_status not null default 'requested',
+  fare_ghs numeric(10,2) not null,
+  payment_method payment_method not null,
+  created_at timestamptz not null default now(),
+  completed_at timestamptz
+);
+
+-- Payments table
+create table if not exists payments (
+  id uuid not null primary key default gen_random_uuid(),
+  ride_id uuid not null references rides(id) on delete cascade,
+  amount_ghs numeric(10,2) not null,
+  method payment_method not null,
+  paystack_reference text,
+  status payment_status not null default 'pending',
+  created_at timestamptz not null default now()
+);
+
+-- Ratings table
+create table if not exists ratings (
+  id uuid not null primary key default gen_random_uuid(),
+  ride_id uuid not null references rides(id) on delete cascade,
+  rated_by uuid not null references profiles(id) on delete cascade,
+  rated_user uuid not null references profiles(id) on delete cascade,
+  score smallint not null check (score >= 1 and score <= 5),
+  comment text,
+  created_at timestamptz not null default now()
+);
+
+-- Indexes for performance
+create index if not exists idx_rides_rider_id on rides(rider_id);
+create index if not exists idx_rides_driver_id on rides(driver_id);
+create index if not exists idx_payments_ride_id on payments(ride_id);
+create index if not exists idx_ratings_ride_id on ratings(ride_id);
+
+-- Row Level Security for rides
+alter table rides enable row level security;
+
+create policy riders_can_view_own_rides on rides
+  for select
+  using (
+    auth.uid() = rider_id
+  );
+
+create policy drivers_can_view_assigned_rides on rides
+  for select
+  using (
+    exists (
+      select 1 from drivers
+      where drivers.profile_id = auth.uid()
+        and drivers.id = rides.driver_id
+    )
+  );
+
+-- Optional: allow authenticated users to insert their own rides
+create policy riders_can_insert_own_rides on rides
+  for insert
+  with check (
+    auth.uid() = rider_id
+  );
+```
+
