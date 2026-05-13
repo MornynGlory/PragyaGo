@@ -1,0 +1,199 @@
+import { GetServerSideProps } from 'next';
+import { createClient } from '@supabase/supabase-js';
+
+type DriverRecord = {
+  id: string;
+  latitude: number;
+  longitude: number;
+};
+
+type Props = {
+  authenticated: boolean;
+  password?: string;
+  totalRidesToday?: number;
+  totalRevenueGhs?: number;
+  activeDrivers?: DriverRecord[];
+  error?: string;
+};
+
+function buildMapUrl(drivers: DriverRecord[]) {
+  if (!drivers.length) {
+    return 'https://staticmap.openstreetmap.de/staticmap.php?center=0,0&zoom=2&size=700x400';
+  }
+
+  const centerLat = drivers.reduce((sum, driver) => sum + driver.latitude, 0) / drivers.length;
+  const centerLon = drivers.reduce((sum, driver) => sum + driver.longitude, 0) / drivers.length;
+  const markerSets = drivers
+    .map((driver) => `${driver.latitude},${driver.longitude},lightblue1`)
+    .join('|');
+
+  return `https://staticmap.openstreetmap.de/staticmap.php?center=${centerLat},${centerLon}&zoom=12&size=700x400&markers=${encodeURIComponent(markerSets)}`;
+}
+
+export default function AdminOverviewPage({
+  authenticated,
+  password,
+  totalRidesToday = 0,
+  totalRevenueGhs = 0,
+  activeDrivers = [],
+  error,
+}: Props) {
+  if (!authenticated) {
+    return (
+      <main style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem', maxWidth: 540, margin: '0 auto' }}>
+        <h1>PragyaGo Admin Login</h1>
+        <p>Enter the admin password to view the dashboard.</p>
+        <form method="get" action="/admin">
+          <label htmlFor="password" style={{ display: 'block', marginBottom: '0.5rem' }}>
+            Password
+          </label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            style={{ width: '100%', padding: '0.75rem', marginBottom: '1rem', borderRadius: 6, border: '1px solid #ccc' }}
+          />
+          <button
+            type="submit"
+            style={{ padding: '0.75rem 1.25rem', borderRadius: 6, border: 'none', background: '#0066cc', color: '#fff' }}
+          >
+            Sign in
+          </button>
+        </form>
+        {error ? <p style={{ marginTop: '1rem', color: 'crimson' }}>{error}</p> : null}
+      </main>
+    );
+  }
+
+  const mapUrl = buildMapUrl(activeDrivers);
+
+  return (
+    <main style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem', maxWidth: 1100, margin: '0 auto' }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '1rem' }}>
+        <div>
+          <p style={{ textTransform: 'uppercase', letterSpacing: '0.12em', margin: 0, color: '#555' }}>PragyaGo Admin Overview</p>
+          <h1 style={{ margin: '0.25rem 0 0' }}>Live fleet dashboard</h1>
+        </div>
+        <div style={{ color: '#666' }}>
+          <p style={{ margin: 0 }}>Logged in as admin</p>
+          <p style={{ margin: '0.25rem 0 0', fontSize: '0.95rem' }}>Refreshes whenever you reload the page.</p>
+        </div>
+      </header>
+
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginTop: '2rem' }}>
+        <article style={{ padding: '1.25rem', borderRadius: 16, background: '#f7fbff', border: '1px solid #e4ebf6' }}>
+          <p style={{ margin: 0, color: '#777' }}>Total rides today</p>
+          <p style={{ margin: '0.75rem 0 0', fontSize: '2rem', fontWeight: 700 }}>{totalRidesToday}</p>
+        </article>
+
+        <article style={{ padding: '1.25rem', borderRadius: 16, background: '#fff8f0', border: '1px solid #fae3d9' }}>
+          <p style={{ margin: 0, color: '#777' }}>Total revenue (GHS)</p>
+          <p style={{ margin: '0.75rem 0 0', fontSize: '2rem', fontWeight: 700 }}>GHS {totalRevenueGhs.toFixed(2)}</p>
+        </article>
+
+        <article style={{ padding: '1.25rem', borderRadius: 16, background: '#ecf9f0', border: '1px solid #d5efd7' }}>
+          <p style={{ margin: 0, color: '#777' }}>Active drivers right now</p>
+          <p style={{ margin: '0.75rem 0 0', fontSize: '2rem', fontWeight: 700 }}>{activeDrivers.length}</p>
+        </article>
+      </section>
+
+      <section style={{ marginTop: '2rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+          <h2 style={{ margin: 0 }}>Online drivers map</h2>
+          <p style={{ margin: 0, color: '#555' }}>{activeDrivers.length} driver(s) online</p>
+        </div>
+
+        <div style={{ marginTop: '1rem', borderRadius: 18, overflow: 'hidden', border: '1px solid #dfe5eb' }}>
+          <img
+            src={mapUrl}
+            alt="Live map of online drivers"
+            style={{ width: '100%', display: 'block', minHeight: 400, objectFit: 'cover' }}
+          />
+        </div>
+
+        {activeDrivers.length ? (
+          <div style={{ marginTop: '1rem', display: 'grid', gap: '0.75rem' }}>
+            {activeDrivers.map((driver) => (
+              <div
+                key={driver.id}
+                style={{ padding: '0.85rem 1rem', borderRadius: 14, background: '#fff', border: '1px solid #e3e9ef' }}
+              >
+                <strong>Driver {driver.id}</strong>
+                <p style={{ margin: '0.5rem 0 0', color: '#555' }}>
+                  Lat: {driver.latitude.toFixed(5)}, Lon: {driver.longitude.toFixed(5)}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p style={{ marginTop: '1rem', color: '#555' }}>No drivers are currently online.</p>
+        )}
+      </section>
+    </main>
+  );
+}
+
+export const getServerSideProps: GetServerSideProps<Props> = async (context) => {
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  const password = Array.isArray(context.query.password) ? context.query.password[0] : context.query.password;
+
+  if (!adminPassword || password !== adminPassword) {
+    return {
+      props: {
+        authenticated: false,
+        error: password ? 'Invalid admin password.' : undefined,
+      },
+    };
+  }
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseKey) {
+    return {
+      props: {
+        authenticated: true,
+        totalRidesToday: 0,
+        totalRevenueGhs: 0,
+        activeDrivers: [],
+        error: 'Supabase configuration is missing. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY.',
+      },
+    };
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseKey);
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const startOfDay = today.toISOString();
+
+  const ridesResult = await supabase
+    .from('rides')
+    .select('amount,created_at')
+    .gte('created_at', startOfDay);
+
+  const rideRows = Array.isArray(ridesResult.data) ? ridesResult.data : [];
+  const totalRidesToday = rideRows.length;
+  const totalRevenueGhs = rideRows.reduce((sum, ride) => sum + Number((ride as any).amount || 0), 0);
+
+  const driverResult = await supabase.from('drivers').select('id,latitude,longitude,status');
+  const driverRows = Array.isArray(driverResult.data) ? driverResult.data : [];
+
+  const activeDrivers: DriverRecord[] = driverRows
+    .filter((driver: any) => driver && (driver.status === 'online' || driver.status === true))
+    .map((driver: any) => ({
+      id: String(driver.id),
+      latitude: Number(driver.latitude) || 0,
+      longitude: Number(driver.longitude) || 0,
+    }))
+    .filter((driver) => !Number.isNaN(driver.latitude) && !Number.isNaN(driver.longitude));
+
+  return {
+    props: {
+      authenticated: true,
+      password,
+      totalRidesToday,
+      totalRevenueGhs,
+      activeDrivers,
+    },
+  };
+};

@@ -1,0 +1,185 @@
+import { createClient } from '@supabase/supabase-js';
+
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
+const PAYSTACK_API_URL = 'https://api.paystack.co';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+export interface MoMoPaymentParams {
+  amount_ghs: number;
+  phone: string;
+  network: 'mtn' | 'telecel' | 'airteltigo';
+  rideId: string;
+  email?: string;
+}
+
+export interface PaymentVerificationResponse {
+  status: boolean;
+  message: string;
+  data: {
+    reference: string;
+    amount: number;
+    status: string;
+    customer: {
+      email: string;
+      phone: string;
+    };
+    metadata?: {
+      rideId: string;
+      network: string;
+    };
+  };
+}
+
+/**
+ * Initiates a Mobile Money payment via Paystack
+ */
+export async function initiateMoMoPayment(
+  params: MoMoPaymentParams
+): Promise<{ status: boolean; reference?: string; error?: string }> {
+  try {
+    if (!PAYSTACK_SECRET_KEY) {
+      throw new Error('PAYSTACK_SECRET_KEY environment variable is not set');
+    }
+
+    const amountInPesewas = Math.round(params.amount_ghs * 100); // Convert GHS to pesewas
+
+    const response = await fetch(`${PAYSTACK_API_URL}/charge`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email: params.email || 'customer@pragaygo.com',
+        amount: amountInPesewas,
+        mobile_money: {
+          phone: params.phone,
+          provider: mapNetworkToProvider(params.network),
+        },
+        metadata: {
+          rideId: params.rideId,
+          network: params.network,
+        },
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error('Paystack charge error:', data);
+      return {
+        status: false,
+        error: data.message || 'Failed to initiate payment',
+      };
+    }
+
+    // Store initial payment record in Supabase
+    if (data.data?.reference) {
+      await supabase.from('payments').insert({
+        reference: data.data.reference,
+        ride_id: params.rideId,
+        amount: params.amount_ghs,
+        status: 'pending',
+        payment_method: params.network,
+        phone: params.phone,
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    return {
+      status: data.status,
+      reference: data.data?.reference,
+    };
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : 'Unknown error occurred';
+    console.error('Error initiating MoMo payment:', errorMessage);
+    return {
+      status: false,
+      error: errorMessage,
+    };
+  }
+}
+
+/**
+ * Verifies a payment status with Paystack
+ */
+export async function verifyPayment(
+  reference: string
+): Promise<PaymentVerificationResponse | null> {
+  try {
+    if (!PAYSTACK_SECRET_KEY) {
+      throw new Error('PAYSTACK_SECRET_KEY environment variable is not set');
+    }
+
+    const response = await fetch(
+      `${PAYSTACK_API_URL}/transaction/verify/${reference}`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+        },
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error('Payment verification error:', data);
+      return null;
+    }
+
+    // Update payment status in Supabase
+    if (data.data?.reference) {
+      const paymentStatus = mapPaystackStatusToLocal(data.data.status);
+      await supabase
+        .from('payments')
+        .update({
+          status: paymentStatus,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('reference', reference);
+    }
+
+    return data;
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : 'Unknown error occurred';
+    console.error('Error verifying payment:', errorMessage);
+    return null;
+  }
+}
+
+/**
+ * Map mobile network to Paystack provider
+ */
+function mapNetworkToProvider(
+  network: 'mtn' | 'telecel' | 'airteltigo'
+): string {
+  const providerMap: Record<string, string> = {
+    mtn: 'MTN',
+    telecel: 'TELECEL',
+    airteltigo: 'AIRTEL',
+  };
+  return providerMap[network] || network.toUpperCase();
+}
+
+/**
+ * Map Paystack transaction status to local status
+ */
+function mapPaystackStatusToLocal(
+  paystackStatus: string
+): 'success' | 'failed' | 'pending' {
+  switch (paystackStatus.toLowerCase()) {
+    case 'success':
+      return 'success';
+    case 'failed':
+      return 'failed';
+    default:
+      return 'pending';
+  }
+}

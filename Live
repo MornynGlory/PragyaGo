@@ -1,0 +1,170 @@
+import BottomSheet from '@gorhom/bottom-sheet';
+import { useNavigation } from '@react-navigation/native';
+import * as Location from 'expo-location';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import MapView, { Marker } from 'react-native-maps';
+import { supabase } from '../../lib/supabase';
+
+const HomeScreen = () => {
+  const [location, setLocation] = useState(null);
+  const [isOnline, setIsOnline] = useState(false);
+  const [dailyEarnings, setDailyEarnings] = useState(0);
+  const [pendingRide, setPendingRide] = useState(null);
+  const mapRef = useRef(null);
+  const bottomSheetRef = useRef(null);
+  const navigation = useNavigation();
+
+  useEffect(() => {
+    (async () => {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission denied', 'Location permission is required');
+        return;
+      }
+      let loc = await Location.getCurrentPositionAsync({});
+      setLocation(loc.coords);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (isOnline && location) {
+      const interval = setInterval(async () => {
+        await supabase
+          .from('drivers')
+          .update({ current_lat: location.latitude, current_lng: location.longitude })
+          .eq('id', 'driver_id'); // Replace with actual driver ID
+      }, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [isOnline, location]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('rides')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rides' }, (payload) => {
+        const ride = payload.new;
+        if (location && calculateDistance(location.latitude, location.longitude, ride.pickup_lat, ride.pickup_lng) <= 3) {
+          setPendingRide(ride);
+          bottomSheetRef.current?.expand();
+        }
+      })
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, [location]);
+
+  useEffect(() => {
+    // Fetch daily earnings
+    const fetchEarnings = async () => {
+      const today = new Date().toISOString().split('T')[0];
+      const { data } = await supabase
+        .from('rides')
+        .select('fare')
+        .eq('driver_id', 'driver_id') // Replace with actual driver ID
+        .gte('created_at', today);
+      const total = data.reduce((sum, ride) => sum + ride.fare, 0);
+      setDailyEarnings(total);
+    };
+    fetchEarnings();
+  }, []);
+
+  const toggleOnline = async () => {
+    const newStatus = !isOnline;
+    setIsOnline(newStatus);
+    await supabase
+      .from('drivers')
+      .update({ is_online: newStatus })
+      .eq('id', 'driver_id'); // Replace with actual driver ID
+  };
+
+  const acceptRide = async () => {
+    await supabase
+      .from('rides')
+      .update({ status: 'accepted', driver_id: 'driver_id' }) // Replace with actual driver ID
+      .eq('id', pendingRide.id);
+    setPendingRide(null);
+    bottomSheetRef.current?.close();
+    navigation.navigate('ActiveRide', { ride: pendingRide });
+  };
+
+  const declineRide = () => {
+    setPendingRide(null);
+    bottomSheetRef.current?.close();
+  };
+
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // Radius of the earth in km
+    const dLat = deg2rad(lat2 - lat1);
+    const dLon = deg2rad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const d = R * c; // Distance in km
+    return d;
+  };
+
+  const deg2rad = (deg) => deg * (Math.PI / 180);
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.earnings}>Daily Earnings: GHS {dailyEarnings.toFixed(2)}</Text>
+      </View>
+      <MapView
+        ref={mapRef}
+        style={styles.map}
+        initialRegion={{
+          latitude: location?.latitude || 0,
+          longitude: location?.longitude || 0,
+          latitudeDelta: 0.0922,
+          longitudeDelta: 0.0421,
+        }}
+        showsUserLocation={true}
+      >
+        {location && <Marker coordinate={location} />}
+      </MapView>
+      <TouchableOpacity style={styles.toggleButton} onPress={toggleOnline}>
+        <Text style={styles.toggleText}>{isOnline ? 'Go Offline' : 'Go Online'}</Text>
+      </TouchableOpacity>
+      <BottomSheet
+        ref={bottomSheetRef}
+        index={-1}
+        snapPoints={['25%', '50%']}
+        enablePanDownToClose={true}
+      >
+        {pendingRide && (
+          <View style={styles.bottomSheetContent}>
+            <Text>Pickup: {pendingRide.pickup_address}</Text>
+            <Text>Dropoff: {pendingRide.dropoff_address}</Text>
+            <Text>Fare: GHS {pendingRide.estimated_fare}</Text>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity style={styles.acceptButton} onPress={acceptRide}>
+                <Text>Accept</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.declineButton} onPress={declineRide}>
+                <Text>Decline</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </BottomSheet>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  header: { padding: 10, backgroundColor: '#fff', alignItems: 'center' },
+  earnings: { fontSize: 18, fontWeight: 'bold' },
+  map: { flex: 1 },
+  toggleButton: { position: 'absolute', bottom: 50, left: 20, right: 20, backgroundColor: '#007bff', padding: 15, borderRadius: 5, alignItems: 'center' },
+  toggleText: { color: '#fff', fontSize: 16 },
+  bottomSheetContent: { padding: 20 },
+  buttonRow: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 20 },
+  acceptButton: { backgroundColor: 'green', padding: 10, borderRadius: 5 },
+  declineButton: { backgroundColor: 'red', padding: 10, borderRadius: 5 },
+});
+
+export default HomeScreen;

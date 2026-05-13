@@ -1,0 +1,189 @@
+import dynamic from 'next/dynamic';
+import type { GetServerSideProps } from 'next';
+import { createClient } from '@supabase/supabase-js';
+
+const Recharts = dynamic(() => import('recharts'), { ssr: false });
+
+type PaymentRow = {
+  ride_id: string | number | null;
+  amount: number;
+  method: string | null;
+  paystack_reference: string | null;
+  status: string | null;
+  created_at: string;
+};
+
+type Props = {
+  authorized: boolean;
+  payments?: PaymentRow[];
+  revenueByDay?: Array<{ date: string; revenue: number }>;
+  totals?: { momo: number; cash: number };
+};
+
+const parseCookies = (cookieHeader?: string) => {
+  const cookies: Record<string, string> = {};
+  cookieHeader?.split(';').forEach((cookie) => {
+    const [key, ...rest] = cookie.split('=');
+    if (!key) return;
+    cookies[key.trim()] = rest.join('=').trim();
+  });
+  return cookies;
+};
+
+export const getServerSideProps: GetServerSideProps<Props> = async (context) => {
+  const { req, res, query } = context;
+  const providedPassword = Array.isArray(query.password) ? query.password[0] : query.password || '';
+  const adminPassword = process.env.ADMIN_PASSWORD || '';
+  const cookies = parseCookies(req.headers.cookie);
+  const hasAuthCookie = cookies['admin-auth'] === '1';
+  const authorized = providedPassword === adminPassword || hasAuthCookie;
+
+  if (providedPassword === adminPassword && res) {
+    res.setHeader('Set-Cookie', 'admin-auth=1; Path=/admin; HttpOnly; Max-Age=3600');
+  }
+
+  if (!authorized) {
+    return { props: { authorized: false } };
+  }
+
+  const supabaseUrl = process.env.SUPABASE_URL || '';
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
+  const supabase = createClient(supabaseUrl, supabaseKey);
+
+  const { data, error } = await supabase
+    .from('payments')
+    .select('ride_id,amount,method,paystack_reference,status,created_at')
+    .order('created_at', { ascending: false });
+
+  const payments: PaymentRow[] = (error || !data ? [] : data).map((row: any) => ({
+    ride_id: row.ride_id,
+    amount: Number(row.amount || 0),
+    method: row.method || 'unknown',
+    paystack_reference: row.paystack_reference || '',
+    status: row.status || '',
+    created_at: row.created_at ? String(row.created_at) : '',
+  }));
+
+  const revenueMap: Record<string, number> = {};
+  let momo = 0;
+  let cash = 0;
+
+  payments.forEach((payment) => {
+    const dateKey = payment.created_at ? new Date(payment.created_at).toISOString().slice(0, 10) : 'unknown';
+    revenueMap[dateKey] = (revenueMap[dateKey] || 0) + payment.amount;
+
+    const method = (payment.method || '').toLowerCase();
+    if (method.includes('momo') || method.includes('mobile money') || method === 'mobilemoney') {
+      momo += payment.amount;
+    } else {
+      cash += payment.amount;
+    }
+  });
+
+  const revenueByDay = Object.entries(revenueMap)
+    .map(([date, revenue]) => ({ date, revenue }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  return {
+    props: {
+      authorized: true,
+      payments,
+      revenueByDay,
+      totals: { momo, cash },
+    },
+  };
+};
+
+const AdminPaymentsPage = ({ authorized, payments = [], revenueByDay = [], totals = { momo: 0, cash: 0 } }: Props) => {
+  if (!authorized) {
+    return (
+      <main style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 680, margin: '0 auto' }}>
+        <h1>Admin Payments</h1>
+        <p>Enter the admin password to access payment reports.</p>
+        <form method="get" style={{ display: 'grid', gap: 12, marginTop: 24 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            Password
+            <input name="password" type="password" required style={{ padding: 10, fontSize: 16 }} />
+          </label>
+          <button type="submit" style={{ padding: '10px 16px', fontSize: 16, cursor: 'pointer' }}>
+            Unlock
+          </button>
+        </form>
+      </main>
+    );
+  }
+
+  const pieData = [
+    { name: 'MoMo', value: totals.momo },
+    { name: 'Cash', value: totals.cash },
+  ];
+
+  return (
+    <main style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 1200, margin: '0 auto' }}>
+      <h1>PragyaGo Admin Payments</h1>
+      <section style={{ display: 'grid', gap: 24, marginTop: 24 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24 }}>
+          <div style={{ flex: 1, minWidth: 320, background: '#f8fafc', borderRadius: 16, padding: 20, boxShadow: '0 1px 3px rgba(15,23,42,.08)' }}>
+            <h2>Revenue Summary by Day</h2>
+            <div style={{ width: '100%', height: 320 }}>
+              <Recharts.ResponsiveContainer width="100%" height="100%">
+                <Recharts.BarChart data={revenueByDay} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+                  <Recharts.XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                  <Recharts.YAxis tick={{ fontSize: 12 }} />
+                  <Recharts.Tooltip />
+                  <Recharts.Bar dataKey="revenue" fill="#2563eb" />
+                </Recharts.BarChart>
+              </Recharts.ResponsiveContainer>
+            </div>
+          </div>
+
+          <div style={{ flex: 1, minWidth: 320, background: '#f8fafc', borderRadius: 16, padding: 20, boxShadow: '0 1px 3px rgba(15,23,42,.08)' }}>
+            <h2>MoMo vs Cash Split</h2>
+            <div style={{ width: '100%', height: 320 }}>
+              <Recharts.ResponsiveContainer width="100%" height="100%">
+                <Recharts.PieChart>
+                  <Recharts.Pie data={pieData} dataKey="value" nameKey="name" outerRadius={100} label />
+                  <Recharts.Cell fill="#2563eb" />
+                  <Recharts.Cell fill="#f97316" />
+                  <Recharts.Tooltip />
+                </Recharts.PieChart>
+              </Recharts.ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ background: '#fff', borderRadius: 16, padding: 20, boxShadow: '0 1px 3px rgba(15,23,42,.08)' }}>
+          <h2>All Payments</h2>
+          <div style="overflowX: auto;">
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', padding: '12px 10px', borderBottom: '2px solid #e2e8f0' }}>Ride ID</th>
+                  <th style={{ textAlign: 'left', padding: '12px 10px', borderBottom: '2px solid #e2e8f0' }}>Amount (GHS)</th>
+                  <th style={{ textAlign: 'left', padding: '12px 10px', borderBottom: '2px solid #e2e8f0' }}>Payment Method</th>
+                  <th style={{ textAlign: 'left', padding: '12px 10px', borderBottom: '2px solid #e2e8f0' }}>Paystack Reference</th>
+                  <th style={{ textAlign: 'left', padding: '12px 10px', borderBottom: '2px solid #e2e8f0' }}>Status</th>
+                  <th style={{ textAlign: 'left', padding: '12px 10px', borderBottom: '2px solid #e2e8f0' }}>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map((payment, index) => (
+                  <tr key={`${payment.ride_id}-${index}`} style={{ borderTop: '1px solid #e2e8f0' }}>
+                    <td style={{ padding: '12px 10px' }}>{payment.ride_id}</td>
+                    <td style={{ padding: '12px 10px' }}>{payment.amount.toFixed(2)}</td>
+                    <td style={{ padding: '12px 10px' }}>{payment.method}</td>
+                    <td style={{ padding: '12px 10px' }}>{payment.paystack_reference}</td>
+                    <td style={{ padding: '12px 10px' }}>{payment.status}</td>
+                    <td style={{ padding: '12px 10px' }}>{new Date(payment.created_at).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+};
+
+export default AdminPaymentsPage;

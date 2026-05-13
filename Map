@@ -1,0 +1,88 @@
+import React, { useState, useEffect } from 'react';
+import { View, Text, Button, TouchableOpacity } from 'react-native';
+import MapView, { Marker, Polyline } from 'react-native-maps';
+import { supabase } from '../supabaseClient';
+import { useNavigation } from '@react-navigation/native';
+
+const ActiveRideScreen = ({ route }) => {
+  const { rideId } = route.params;
+  const navigation = useNavigation();
+  const [status, setStatus] = useState('Heading to pickup');
+  const [ride, setRide] = useState(null);
+  const [rating, setRating] = useState(0);
+
+  useEffect(() => {
+    fetchRide();
+  }, []);
+
+  const fetchRide = async () => {
+    const { data } = await supabase.from('rides').select('*').eq('id', rideId).single();
+    setRide(data);
+    setStatus(data.status || 'Heading to pickup');
+  };
+
+  const advanceStatus = async () => {
+    let newStatus;
+    if (status === 'Heading to pickup') {
+      newStatus = 'Rider on board';
+    } else if (status === 'Rider on board') {
+      newStatus = 'Trip complete';
+    }
+    if (newStatus) {
+      await supabase.from('rides').update({ status: newStatus }).eq('id', rideId);
+      setStatus(newStatus);
+    }
+  };
+
+  const submitRating = async () => {
+    await supabase.from('rides').update({ rider_rating: rating }).eq('id', rideId);
+    navigation.navigate('Home');
+  };
+
+  if (!ride) return <Text>Loading...</Text>;
+
+  const driverLocation = { latitude: ride.driver_lat, longitude: ride.driver_lng };
+  const pickup = { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+  const dropoff = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
+  const routeCoordinates = [driverLocation, pickup, dropoff];
+
+  return (
+    <View style={{ flex: 1 }}>
+      <MapView
+        style={{ flex: 1 }}
+        initialRegion={{
+          latitude: driverLocation.latitude,
+          longitude: driverLocation.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        }}
+      >
+        <Marker coordinate={driverLocation} title="Driver" />
+        <Marker coordinate={pickup} title="Pickup" />
+        <Marker coordinate={dropoff} title="Dropoff" />
+        <Polyline coordinates={routeCoordinates} strokeColor="#000" strokeWidth={3} />
+      </MapView>
+      <View style={{ position: 'absolute', bottom: 0, width: '100%', backgroundColor: 'white', padding: 20 }}>
+        <Text>{status}</Text>
+        {status !== 'Trip complete' && <Button title="Advance Status" onPress={advanceStatus} />}
+        {status === 'Trip complete' && (
+          <View>
+            <Text>Distance: {ride.distance} km</Text>
+            <Text>Fare: {ride.fare} GHS</Text>
+            <Text>Rate this rider:</Text>
+            <View style={{ flexDirection: 'row' }}>
+              {[1,2,3,4,5].map(star => (
+                <TouchableOpacity key={star} onPress={() => setRating(star)}>
+                  <Text style={{ fontSize: 24 }}>{rating >= star ? '★' : '☆'}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Button title="Submit Rating" onPress={submitRating} />
+          </View>
+        )}
+      </View>
+    </View>
+  );
+};
+
+export default ActiveRideScreen;

@@ -1,0 +1,235 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+);
+
+interface Driver {
+  id: string;
+  name: string;
+  phone: string;
+  rating: number;
+  total_rides: number;
+  status: 'approved' | 'suspended' | 'pending';
+  joined_date: string;
+  online: boolean;
+}
+
+export default function AdminDrivers() {
+  const [authenticated, setAuthenticated] = useState(false);
+  const [password, setPassword] = useState('');
+  const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [updating, setUpdating] = useState<string | null>(null);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    try {
+      const response = await fetch('/api/admin/verify-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+
+      if (response.ok) {
+        setAuthenticated(true);
+        setPassword('');
+      } else {
+        alert('Invalid password');
+      }
+    } catch (error) {
+      console.error('Auth error:', error);
+      alert('Authentication failed');
+    }
+  };
+
+  useEffect(() => {
+    if (authenticated) {
+      fetchDrivers();
+    }
+  }, [authenticated]);
+
+  const fetchDrivers = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('drivers')
+        .select('id, name, phone, rating, total_rides, status, joined_date, online')
+        .order('joined_date', { ascending: false });
+
+      if (error) throw error;
+      setDrivers(data || []);
+    } catch (error) {
+      console.error('Error fetching drivers:', error);
+      alert('Failed to fetch drivers');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateDriverStatus = async (driverId: string, newStatus: 'approved' | 'suspended') => {
+    setUpdating(driverId);
+    try {
+      const { error } = await supabase
+        .from('drivers')
+        .update({ status: newStatus })
+        .eq('id', driverId);
+
+      if (error) throw error;
+
+      setDrivers(drivers.map(d => 
+        d.id === driverId ? { ...d, status: newStatus } : d
+      ));
+    } catch (error) {
+      console.error('Error updating driver:', error);
+      alert('Failed to update driver status');
+    } finally {
+      setUpdating(null);
+    }
+  };
+
+  if (!authenticated) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg shadow-xl p-8 w-full max-w-md">
+          <h1 className="text-3xl font-bold text-gray-800 mb-2">PragyaGo Admin</h1>
+          <p className="text-gray-600 mb-6">Driver Management</p>
+          
+          <form onSubmit={handleLogin}>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Admin Password
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter admin password"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              />
+            </div>
+            <button
+              type="submit"
+              className="w-full bg-indigo-600 text-white py-2 rounded-lg font-semibold hover:bg-indigo-700 transition"
+            >
+              Login
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-7xl mx-auto">
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-4xl font-bold text-gray-800">Driver Management</h1>
+          <button
+            onClick={() => setAuthenticated(false)}
+            className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition"
+          >
+            Logout
+          </button>
+        </div>
+
+        <div className="bg-white rounded-lg shadow-md overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-100 border-b border-gray-200">
+                <tr>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Name</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Phone</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Rating</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Total Rides</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Online</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Join Date</th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {loading ? (
+                  <tr>
+                    <td colSpan={8} className="px-6 py-4 text-center text-gray-500">
+                      Loading drivers...
+                    </td>
+                  </tr>
+                ) : drivers.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-6 py-4 text-center text-gray-500">
+                      No drivers found
+                    </td>
+                  </tr>
+                ) : (
+                  drivers.map((driver) => (
+                    <tr key={driver.id} className="hover:bg-gray-50 transition">
+                      <td className="px-6 py-4 text-sm text-gray-900 font-medium">{driver.name}</td>
+                      <td className="px-6 py-4 text-sm text-gray-600">{driver.phone}</td>
+                      <td className="px-6 py-4 text-sm text-gray-900">
+                        <span className="flex items-center gap-1">
+                          ⭐ {driver.rating.toFixed(1)}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-900">{driver.total_rides}</td>
+                      <td className="px-6 py-4 text-sm">
+                        <span
+                          className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${
+                            driver.status === 'approved'
+                              ? 'bg-green-100 text-green-800'
+                              : driver.status === 'suspended'
+                              ? 'bg-red-100 text-red-800'
+                              : 'bg-yellow-100 text-yellow-800'
+                          }`}
+                        >
+                          {driver.status.charAt(0).toUpperCase() + driver.status.slice(1)}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm">
+                        <span
+                          className={`inline-block px-2 py-1 rounded text-xs font-semibold ${
+                            driver.online
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-gray-100 text-gray-800'
+                          }`}
+                        >
+                          {driver.online ? '🟢 Online' : '⚫ Offline'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-600">
+                        {new Date(driver.joined_date).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-4 text-sm">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => updateDriverStatus(driver.id, 'approved')}
+                            disabled={driver.status === 'approved' || updating === driver.id}
+                            className="px-3 py-1 bg-green-600 text-white text-xs font-semibold rounded hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {updating === driver.id ? '...' : 'Approve'}
+                          </button>
+                          <button
+                            onClick={() => updateDriverStatus(driver.id, 'suspended')}
+                            disabled={driver.status === 'suspended' || updating === driver.id}
+                            className="px-3 py-1 bg-red-600 text-white text-xs font-semibold rounded hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {updating === driver.id ? '...' : 'Suspend'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,241 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
+import { supabase } from '@/lib/supabase';
+import { GooglePlacesAutocomplete } from '@/components/GooglePlacesAutocomplete';
+import { BottomSheet } from '@/components/BottomSheet';
+import { Button } from '@/components/ui/button';
+
+const Map = dynamic(() => import('@/components/Map'), { ssr: false });
+
+interface Driver {
+  id: string;
+  latitude: number;
+  longitude: number;
+  is_online: boolean;
+}
+
+interface LocationData {
+  lat: number;
+  lng: number;
+  address: string;
+}
+
+export default function RiderHomeScreen() {
+  const router = useRouter();
+  const [userLocation, setUserLocation] = useState<LocationData | null>(null);
+  const [nearbyDrivers, setNearbyDrivers] = useState<Driver[]>([]);
+  const [destination, setDestination] = useState<LocationData | null>(null);
+  const [estimatedFare, setEstimatedFare] = useState<number | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'momo'>('cash');
+  const [loading, setLoading] = useState(false);
+  const bottomSheetRef = useRef(null);
+
+  // Get user's current GPS location
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUserLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+            address: 'Current Location',
+          });
+        },
+        (error) => {
+          console.error('Error getting location:', error);
+        }
+      );
+    }
+  }, []);
+
+  // Query nearby online drivers within 5km
+  useEffect(() => {
+    if (!userLocation) return;
+
+    const fetchNearbyDrivers = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('drivers')
+          .select('id, latitude, longitude, is_online')
+          .eq('is_online', true);
+
+        if (error) throw error;
+
+        // Filter drivers within 5km radius
+        const nearby = (data || []).filter((driver) => {
+          const distance = calculateDistance(
+            userLocation.lat,
+            userLocation.lng,
+            driver.latitude,
+            driver.longitude
+          );
+          return distance <= 5;
+        });
+
+        setNearbyDrivers(nearby);
+      } catch (error) {
+        console.error('Error fetching drivers:', error);
+      }
+    };
+
+    const interval = setInterval(fetchNearbyDrivers, 10000); // Refresh every 10 seconds
+    fetchNearbyDrivers();
+
+    return () => clearInterval(interval);
+  }, [userLocation]);
+
+  // Calculate distance between two coordinates (in km)
+  const calculateDistance = (
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number
+  ): number => {
+    const R = 6371; // Earth's radius in km
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLng = ((lng2 - lng1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  // Calculate estimated fare
+  const handleDestinationSelect = (location: LocationData) => {
+    setDestination(location);
+
+    if (userLocation) {
+      const distance = calculateDistance(
+        userLocation.lat,
+        userLocation.lng,
+        location.lat,
+        location.lng
+      );
+      const fare = 3 + distance * 1.5; // Base fare GHS 3 + GHS 1.5 per km
+      setEstimatedFare(Math.round(fare * 100) / 100);
+    }
+  };
+
+  // Request a Pragya ride
+  const handleRequestRide = async () => {
+    if (!userLocation || !destination) return;
+
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('rides')
+        .insert([
+          {
+            rider_id: (await supabase.auth.getUser()).data.user?.id,
+            pickup_lat: userLocation.lat,
+            pickup_lng: userLocation.lng,
+            pickup_address: userLocation.address,
+            destination_lat: destination.lat,
+            destination_lng: destination.lng,
+            destination_address: destination.address,
+            estimated_fare: estimatedFare,
+            payment_method: paymentMethod,
+            status: 'waiting',
+            created_at: new Date().toISOString(),
+          },
+        ])
+        .select();
+
+      if (error) throw error;
+
+      // Navigate to waiting screen
+      router.push(`/app/rider/waiting/${data[0].id}`);
+    } catch (error) {
+      console.error('Error requesting ride:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="relative w-full h-screen">
+      {/* Map with user location and drivers */}
+      {userLocation && (
+        <Map
+          center={{ lat: userLocation.lat, lng: userLocation.lng }}
+          drivers={nearbyDrivers}
+          userLocation={userLocation}
+        />
+      )}
+
+      {/* Bottom Sheet with search and ride request */}
+      <BottomSheet ref={bottomSheetRef}>
+        <div className="p-6 space-y-4">
+          {/* Search bar */}
+          <div>
+            <label className="text-gray-600 text-sm mb-2 block">
+              Where do you want to go?
+            </label>
+            <GooglePlacesAutocomplete
+              onSelectPlace={handleDestinationSelect}
+              placeholder="Enter destination"
+            />
+          </div>
+
+          {/* Fare estimation */}
+          {destination && estimatedFare && (
+            <div className="bg-gray-50 p-4 rounded-lg">
+              <p className="text-gray-600 text-sm">Estimated Fare</p>
+              <p className="text-2xl font-bold text-green-600">
+                GHS {estimatedFare.toFixed(2)}
+              </p>
+              <p className="text-gray-500 text-xs mt-1">
+                Base: GHS 3 + GHS 1.5/km
+              </p>
+            </div>
+          )}
+
+          {/* Payment Options */}
+          {destination && (
+            <div className="space-y-2">
+              <p className="text-gray-600 text-sm font-semibold">Payment</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setPaymentMethod('cash')}
+                  className={`flex-1 py-3 px-4 rounded-lg border-2 font-semibold transition ${
+                    paymentMethod === 'cash'
+                      ? 'border-green-500 bg-green-50 text-green-700'
+                      : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  💰 Pay Cash
+                </button>
+                <button
+                  onClick={() => setPaymentMethod('momo')}
+                  className={`flex-1 py-3 px-4 rounded-lg border-2 font-semibold transition ${
+                    paymentMethod === 'momo'
+                      ? 'border-orange-500 bg-orange-50 text-orange-700'
+                      : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  📱 Pay with MoMo
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Request Button */}
+          <Button
+            onClick={handleRequestRide}
+            disabled={!destination || loading}
+            className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Requesting...' : '🛵 Request Pragya'}
+          </Button>
+        </div>
+      </BottomSheet>
+    </div>
+  );
+}

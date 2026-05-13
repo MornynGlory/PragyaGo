@@ -85,3 +85,4 @@ create policy drivers_can_view_assigned_rides on rides
 create policy riders_can_insert_own_rides on rides
   for insert
   with check (auth.uid() = rider_id);
+  

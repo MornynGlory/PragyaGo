@@ -1,0 +1,319 @@
+import Constants from 'expo-constants';
+import * as Device from 'expo-device';
+import * as Notifications from 'expo-notifications';
+import { supabase } from './supabaseClient';
+
+// Configure how notifications are handled when app is in foreground
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
+
+/**
+ * Register device for push notifications and save token to Supabase
+ */
+export async function registerForPushNotifications(userId: string) {
+  try {
+    // Check if device supports push notifications
+    if (!Device.isDevice) {
+      console.log('Push notifications only work on physical devices');
+      return;
+    }
+
+    // Request user permission
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+
+    if (finalStatus !== 'granted') {
+      console.log('Permission not granted for push notifications');
+      return;
+    }
+
+    // Get the Expo push token
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId || Constants.easConfig?.projectId;
+    const expoPushToken = (
+      await Notifications.getExpoPushTokenAsync({
+        projectId: projectId,
+      })
+    ).data;
+
+    console.log('Expo Push Token:', expoPushToken);
+
+    // Save token to Supabase user profile
+    const { error } = await supabase
+      .from('users')
+      .update({ expo_push_token: expoPushToken })
+      .eq('id', userId);
+
+    if (error) {
+      console.error('Error saving push token to Supabase:', error);
+    } else {
+      console.log('Push token saved to user profile');
+    }
+
+    // Set up Android notification channel
+    if (Device.osName === 'Android') {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'default',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#FF231F7C',
+      });
+    }
+
+    return expoPushToken;
+  } catch (error) {
+    console.error('Error registering for push notifications:', error);
+  }
+}
+
+/**
+ * Send push notification using Expo Push API
+ */
+export async function sendPushNotification(
+  expoPushToken: string,
+  title: string,
+  body: string,
+  data?: Record<string, any>
+) {
+  if (!expoPushToken) {
+    console.error('No Expo push token provided');
+    return;
+  }
+
+  const message = {
+    to: expoPushToken,
+    sound: 'default' as const,
+    title: title,
+    body: body,
+    data: data || {},
+    badge: 1,
+  };
+
+  try {
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Accept-encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(message),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      console.error('Error sending push notification:', result);
+    } else {
+      console.log('Push notification sent successfully:', result);
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error sending push notification:', error);
+  }
+}
+
+/**
+ * Notification triggers for various events
+ */
+
+// 1. Driver receives new ride request nearby
+export async function notifyDriverNewRideRequest(
+  driverExpoPushToken: string,
+  riderName: string,
+  amount: string
+) {
+  await sendPushNotification(
+    driverExpoPushToken,
+    'New Ride Request',
+    `New ride request nearby — GHS ${amount}`,
+    {
+      type: 'new_ride_request',
+      riderName: riderName,
+      amount: amount,
+    }
+  );
+}
+
+// 2. Rider receives driver accepted notification
+export async function notifyRiderDriverAccepted(
+  riderExpoPushToken: string,
+  driverName: string,
+  estimatedArrivalMinutes: number
+) {
+  await sendPushNotification(
+    riderExpoPushToken,
+    'Driver Accepted',
+    `Driver accepted your ride — arriving in ~${estimatedArrivalMinutes} mins`,
+    {
+      type: 'driver_accepted',
+      driverName: driverName,
+      eta: estimatedArrivalMinutes,
+    }
+  );
+}
+
+// 3. Rider receives driver arrived notification
+export async function notifyRiderDriverArrived(
+  riderExpoPushToken: string,
+  driverName: string
+) {
+  await sendPushNotification(
+    riderExpoPushToken,
+    'Driver Arrived',
+    'Your Pragya has arrived!',
+    {
+      type: 'driver_arrived',
+      driverName: driverName,
+    }
+  );
+}
+
+// 4. Driver receives payment notification
+export async function notifyDriverPaymentReceived(
+  driverExpoPushToken: string,
+  amount: string,
+  paymentMethod: string = 'MoMo'
+) {
+  await sendPushNotification(
+    driverExpoPushToken,
+    'Payment Received',
+    `Payment of GHS ${amount} received via ${paymentMethod}`,
+    {
+      type: 'payment_received',
+      amount: amount,
+      paymentMethod: paymentMethod,
+    }
+  );
+}
+
+/**
+ * Set up Supabase Realtime listeners and trigger notifications
+ */
+export function setupNotificationListeners(userId: string, userRole: 'driver' | 'rider') {
+  // Listen for ride requests (for drivers)
+  if (userRole === 'driver') {
+    const rideRequestsListener = supabase
+      .channel(`driver:${userId}:ride_requests`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'ride_requests',
+          filter: `driver_id=eq.${userId}`,
+        },
+        async (payload) => {
+          const newRequest = payload.new;
+          const riderData = await supabase
+            .from('users')
+            .select('expo_push_token')
+            .eq('id', newRequest.rider_id)
+            .single();
+
+          if (riderData.data?.expo_push_token) {
+            await notifyDriverNewRideRequest(
+              riderData.data.expo_push_token,
+              newRequest.rider_name || 'Rider',
+              newRequest.amount || '0'
+            );
+          }
+        }
+      )
+      .subscribe();
+  }
+
+  // Listen for ride acceptances (for riders)
+  if (userRole === 'rider') {
+    const rideAcceptanceListener = supabase
+      .channel(`rider:${userId}:ride_updates`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'rides',
+          filter: `rider_id=eq.${userId}`,
+        },
+        async (payload) => {
+          const updatedRide = payload.new;
+
+          // Driver accepted the ride
+          if (updatedRide.status === 'accepted' && updatedRide.driver_id) {
+            const driverData = await supabase
+              .from('users')
+              .select('expo_push_token')
+              .eq('id', updatedRide.driver_id)
+              .single();
+
+            if (driverData.data?.expo_push_token) {
+              await notifyRiderDriverAccepted(
+                driverData.data.expo_push_token,
+                updatedRide.driver_name || 'Driver',
+                updatedRide.estimated_arrival_minutes || 5
+              );
+            }
+          }
+
+          // Driver arrived
+          if (updatedRide.status === 'arrived') {
+            const driverData = await supabase
+              .from('users')
+              .select('expo_push_token')
+              .eq('id', updatedRide.driver_id)
+              .single();
+
+            if (driverData.data?.expo_push_token) {
+              await notifyRiderDriverArrived(
+                driverData.data.expo_push_token,
+                updatedRide.driver_name || 'Driver'
+              );
+            }
+          }
+        }
+      )
+      .subscribe();
+  }
+
+  // Listen for payments (for drivers)
+  if (userRole === 'driver') {
+    const paymentListener = supabase
+      .channel(`driver:${userId}:payments`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'payments',
+          filter: `driver_id=eq.${userId}`,
+        },
+        async (payload) => {
+          const payment = payload.new;
+          const driverData = await supabase
+            .from('users')
+            .select('expo_push_token')
+            .eq('id', payment.driver_id)
+            .single();
+
+          if (driverData.data?.expo_push_token) {
+            await notifyDriverPaymentReceived(
+              driverData.data.expo_push_token,
+              payment.amount || '0',
+              payment.payment_method || 'MoMo'
+            );
+          }
+        }
+      )
+      .subscribe();
+  }
+}

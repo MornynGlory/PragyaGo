@@ -1,0 +1,128 @@
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
+import { supabase } from '../../lib/supabase'; // Adjust path as needed
+import Map from '../../components/Map'; // Assume a Map component
+import Spinner from '../../components/Spinner'; // Assume a Spinner component
+import StarRating from '../../components/StarRating'; // Assume a StarRating component
+
+interface Ride {
+  id: string;
+  status: 'requested' | 'accepted' | 'in_progress' | 'completed';
+  driver_name?: string;
+  driver_rating?: number;
+  vehicle_number?: string;
+  pickup_lat?: number;
+  pickup_lng?: number;
+  destination_lat?: number;
+  destination_lng?: number;
+  fare?: number;
+  // Add other fields as needed
+}
+
+interface ActiveRideProps {
+  rideId: string;
+}
+
+const ActiveRide: React.FC<ActiveRideProps> = ({ rideId }) => {
+  const [ride, setRide] = useState<Ride | null>(null);
+  const [driverLocation, setDriverLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const router = useRouter();
+
+  useEffect(() => {
+    // Fetch initial ride data
+    const fetchRide = async () => {
+      const { data, error } = await supabase
+        .from('rides')
+        .select('*')
+        .eq('id', rideId)
+        .single();
+      if (error) console.error(error);
+      else setRide(data);
+    };
+    fetchRide();
+
+    // Subscribe to realtime updates
+    const channel = supabase
+      .channel('ride-updates')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'rides',
+        filter: `id=eq.${rideId}`,
+      }, (payload) => {
+        setRide(payload.new as Ride);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [rideId]);
+
+  const handleCancel = async () => {
+    await supabase.from('rides').update({ status: 'cancelled' }).eq('id', rideId);
+    router.push('/rider/home'); // Adjust path
+  };
+
+  const handleRating = async (rating: number) => {
+    // Assume updating ride with rating
+    await supabase.from('rides').update({ rider_rating: rating }).eq('id', rideId);
+    router.push('/rider/home');
+  };
+
+  if (!ride) return <Spinner />;
+
+  switch (ride.status) {
+    case 'requested':
+      return (
+        <div>
+          <h2>Finding your Pragya...</h2>
+          <Spinner />
+          <button onClick={handleCancel}>Cancel</button>
+        </div>
+      );
+    case 'accepted':
+      return (
+        <div>
+          <h2>Driver Accepted</h2>
+          <p>Name: {ride.driver_name}</p>
+          <p>Rating: {ride.driver_rating}</p>
+          <p>Vehicle: {ride.vehicle_number}</p>
+          <Map
+            center={{ lat: ride.pickup_lat!, lng: ride.pickup_lng! }}
+            markers={[
+              { lat: driverLocation?.lat || 0, lng: driverLocation?.lng || 0, label: 'Driver' },
+              { lat: ride.pickup_lat!, lng: ride.pickup_lng!, label: 'Pickup' },
+            ]}
+          />
+          {/* Assume realtime driver location updates */}
+        </div>
+      );
+    case 'in_progress':
+      return (
+        <div>
+          <h2>You're on your way!</h2>
+          <Map
+            center={{ lat: ride.pickup_lat!, lng: ride.pickup_lng! }}
+            route={[
+              { lat: ride.pickup_lat!, lng: ride.pickup_lng! },
+              { lat: ride.destination_lat!, lng: ride.destination_lng! },
+            ]}
+          />
+        </div>
+      );
+    case 'completed':
+      return (
+        <div>
+          <h2>Ride Completed</h2>
+          <p>Fare: ${ride.fare}</p>
+          <p>Receipt Summary: {/* Add summary */}</p>
+          <StarRating onRate={handleRating} />
+        </div>
+      );
+    default:
+      return <div>Unknown status</div>;
+  }
+};
+
+export default ActiveRide;
