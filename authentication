@@ -1,0 +1,501 @@
+#!/usr/bin/env node
+const fs = require('fs')
+const path = require('path')
+
+const root = path.dirname(__filename)
+
+function writeFile(relativePath, content) {
+  const filePath = path.join(root, relativePath)
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, content, 'utf8')
+  console.log(`Created ${relativePath}`)
+}
+
+writeFile('app/auth/login.tsx', `"use client"
+
+import type { FormEvent } from 'react'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { signIn } from '../../lib/supabase'
+
+export default function LoginPage() {
+  const router = useRouter()
+  const [phone, setPhone] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError('')
+    setLoading(true)
+
+    const response = await signIn(phone, password)
+    setLoading(false)
+
+    if (response.error) {
+      setError(response.error.message || 'Unable to sign in. Check your phone number and password.')
+      return
+    }
+
+    if (!response.user) {
+      setError('No user returned from sign in.')
+      return
+    }
+
+    const destination = response.user.role === 'Driver' ? '/driver/home' : '/rider/home'
+    router.push(destination)
+  }
+
+  return (
+    <main style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: '1rem' }}>
+      <div style={{ width: 'min(480px,100%)', padding: '2rem', border: '1px solid #e5e7eb', borderRadius: '1rem', boxShadow: '0 20px 60px rgba(15, 23, 42, 0.1)' }}>
+        <h1 style={{ marginBottom: '1.2rem', fontSize: '1.8rem' }}>PragyaGo Login</h1>
+        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
+          <label style={{ display: 'grid', gap: '0.5rem', fontSize: '0.95rem' }}>
+            Phone number
+            <input
+              type="tel"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              placeholder="+1234567890"
+              required
+              style={{ width: '100%', padding: '0.9rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: '0.5rem', fontSize: '0.95rem' }}>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Password"
+              required
+              style={{ width: '100%', padding: '0.9rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={loading}
+            style={{ padding: '0.95rem', borderRadius: '0.9rem', border: 'none', background: '#111827', color: '#fff', fontWeight: 700, cursor: 'pointer' }}
+          >
+            {loading ? 'Signing in…' : 'Login'}
+          </button>
+          {error ? <p style={{ color: '#b91c1c', margin: 0 }}>{error}</p> : null}
+        </form>
+        <p style={{ marginTop: '1.25rem', color: '#4b5563' }}>
+          New to PragyaGo?{' '}
+          <Link href="/auth/register" style={{ color: '#2563eb', textDecoration: 'underline' }}>
+            Create an account
+          </Link>
+        </p>
+      </div>
+    </main>
+  )
+}
+`)
+
+writeFile('app/auth/register.tsx', `"use client"
+
+import type { FormEvent } from 'react'
+import { useState, useMemo } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { signUp } from '../../lib/supabase'
+
+export default function RegisterPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const defaultRole = useMemo(() => {
+    const role = searchParams?.get('role')
+    return role === 'Driver' ? 'Driver' : 'Rider'
+  }, [searchParams])
+
+  const [fullName, setFullName] = useState('')
+  const [phone, setPhone] = useState('')
+  const [password, setPassword] = useState('')
+  const [role, setRole] = useState<'Rider' | 'Driver'>(defaultRole)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError('')
+    setLoading(true)
+
+    const response = await signUp(fullName, phone, password, role)
+    setLoading(false)
+
+    if (response.error) {
+      setError(response.error.message || 'Unable to register. Please verify your information.')
+      return
+    }
+
+    if (!response.user) {
+      setError('Registration did not return a valid user.')
+      return
+    }
+
+    const destination = response.user.role === 'Driver' ? '/driver/home' : '/rider/home'
+    router.push(destination)
+  }
+
+  return (
+    <main style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: '1rem' }}>
+      <div style={{ width: 'min(520px,100%)', padding: '2rem', border: '1px solid #e5e7eb', borderRadius: '1rem', boxShadow: '0 20px 60px rgba(15, 23, 42, 0.1)' }}>
+        <h1 style={{ marginBottom: '1.2rem', fontSize: '1.8rem' }}>Create your PragyaGo account</h1>
+        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
+          <label style={{ display: 'grid', gap: '0.5rem', fontSize: '0.95rem' }}>
+            Full name
+            <input
+              type="text"
+              value={fullName}
+              onChange={(event) => setFullName(event.target.value)}
+              placeholder="Jane Doe"
+              required
+              style={{ width: '100%', padding: '0.9rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: '0.5rem', fontSize: '0.95rem' }}>
+            Phone number
+            <input
+              type="tel"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              placeholder="+1234567890"
+              required
+              style={{ width: '100%', padding: '0.9rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: '0.5rem', fontSize: '0.95rem' }}>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Password"
+              required
+              style={{ width: '100%', padding: '0.9rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
+            />
+          </label>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.95rem', fontWeight: 600 }}>Role</span>
+            <button type="button" onClick={() => setRole('Rider')} style={{ padding: '0.8rem 1rem', borderRadius: '0.75rem', border: role === 'Rider' ? '2px solid #2563eb' : '1px solid #d1d5db', background: role === 'Rider' ? '#eff6ff' : '#fff', cursor: 'pointer' }}>
+              Rider
+            </button>
+            <button type="button" onClick={() => setRole('Driver')} style={{ padding: '0.8rem 1rem', borderRadius: '0.75rem', border: role === 'Driver' ? '2px solid #2563eb' : '1px solid #d1d5db', background: role === 'Driver' ? '#eff6ff' : '#fff', cursor: 'pointer' }}>
+              Driver
+            </button>
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            style={{ padding: '0.95rem', borderRadius: '0.9rem', border: 'none', background: '#111827', color: '#fff', fontWeight: 700, cursor: 'pointer' }}
+          >
+            {loading ? 'Registering…' : 'Register'}
+          </button>
+          {error ? <p style={{ color: '#b91c1c', margin: 0 }}>{error}</p> : null}
+        </form>
+        <p style={{ marginTop: '1.25rem', color: '#4b5563' }}>
+          Already have an account?{' '}
+          <Link href="/auth/login" style={{ color: '#2563eb', textDecoration: 'underline' }}>
+            Login
+          </Link>
+        </p>
+      </div>
+    </main>
+  )
+}
+`)
+
+writeFile('app/index.tsx', `"use client"
+
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { getCurrentUser } from '../lib/supabase'
+
+export default function HomePage() {
+  const router = useRouter()
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    async function checkSession() {
+      const current = await getCurrentUser()
+      if (current.user) {
+        const destination = current.role === 'Driver' ? '/driver/home' : '/rider/home'
+        router.replace(destination)
+        return
+      }
+      setLoading(false)
+    }
+
+    checkSession()
+  }, [router])
+
+  if (loading) {
+    return (
+      <div style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: '1rem' }}>
+        <p>Checking authentication status…</p>
+      </div>
+    )
+  }
+
+  return (
+    <main style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: '1rem' }}>
+      <div style={{ width: 'min(680px,100%)', padding: '2rem', border: '1px solid #e5e7eb', borderRadius: '1rem', boxShadow: '0 20px 60px rgba(15, 23, 42, 0.1)' }}>
+        <h1 style={{ marginBottom: '1rem', fontSize: '2rem' }}>Welcome to PragyaGo</h1>
+        <p style={{ marginBottom: '1.5rem', color: '#4b5563' }}>
+          Select your role to begin. If you already have an account, use the login page.
+        </p>
+        <div style={{ display: 'grid', gap: '1rem' }}>
+          <Link href="/auth/register?role=Rider" style={{ display: 'inline-flex', justifyContent: 'center', padding: '1rem', borderRadius: '0.9rem', border: '1px solid #d1d5db', background: '#fff', textDecoration: 'none', color: '#111827', fontWeight: 600 }}>
+            Register as Rider
+          </Link>
+          <Link href="/auth/register?role=Driver" style={{ display: 'inline-flex', justifyContent: 'center', padding: '1rem', borderRadius: '0.9rem', border: '1px solid #d1d5db', background: '#fff', textDecoration: 'none', color: '#111827', fontWeight: 600 }}>
+            Register as Driver
+          </Link>
+          <Link href="/auth/login" style={{ display: 'inline-flex', justifyContent: 'center', padding: '1rem', borderRadius: '0.9rem', border: '1px solid #2563eb', background: '#2563eb', color: '#fff', textDecoration: 'none', fontWeight: 600 }}>
+            Login to existing account
+          </Link>
+        </div>
+      </div>
+    </main>
+  )
+}
+`)
+
+writeFile('app/_layout.tsx', `"use client"
+
+import { useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { getCurrentUser, onAuthStateChange } from '../lib/supabase'
+import type { ReactNode } from 'react'
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  const router = useRouter()
+
+  useEffect(() => {
+    let isMounted = true
+
+    async function initialize() {
+      const current = await getCurrentUser()
+      if (!isMounted) return
+
+      if (current.user) {
+        const destination = current.role === 'Driver' ? '/driver/home' : '/rider/home'
+        if (window.location.pathname === '/' || window.location.pathname.startsWith('/auth')) {
+          router.replace(destination)
+        }
+      }
+    }
+
+    initialize()
+
+    const subscription = onAuthStateChange((event, sessionUser) => {
+      if (!sessionUser) {
+        if (window.location.pathname !== '/') {
+          router.replace('/')
+        }
+        return
+      }
+
+      const userRole = sessionUser.user_metadata?.role === 'Driver' ? 'Driver' : 'Rider'
+      if (window.location.pathname === '/' || window.location.pathname.startsWith('/auth')) {
+        router.replace(userRole === 'Driver' ? '/driver/home' : '/rider/home')
+      }
+    })
+
+    return () => {
+      isMounted = false
+      subscription?.unsubscribe?.()
+    }
+  }, [router])
+
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  )
+}
+`)
+
+writeFile('lib/supabase.ts', `import { createClient } from '@supabase/supabase-js'
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+
+export const supabase = createClient(supabaseUrl, supabaseKey)
+
+export type AuthUser = {
+  id: string
+  phone?: string | null
+  full_name?: string | null
+  role?: 'Rider' | 'Driver' | null
+}
+
+function mapUser(user: any): AuthUser {
+  return {
+    id: user.id,
+    phone: user.phone ?? null,
+    full_name: user.user_metadata?.full_name ?? null,
+    role: user.user_metadata?.role === 'Driver' ? 'Driver' : 'Rider',
+  }
+}
+
+export async function signUp(full_name: string, phone: string, password: string, role: 'Rider' | 'Driver') {
+  const { data, error } = await supabase.auth.signUp({ phone, password }, { data: { full_name, role } })
+  return {
+    user: data?.user ? mapUser(data.user) : null,
+    error,
+  }
+}
+
+export async function signIn(phone: string, password: string) {
+  const { data, error } = await supabase.auth.signInWithPassword({ phone, password })
+  return {
+    user: data?.user ? mapUser(data.user) : null,
+    error,
+  }
+}
+
+export async function signOut() {
+  const { error } = await supabase.auth.signOut()
+  return { error }
+}
+
+export async function getCurrentUser() {
+  const { data, error } = await supabase.auth.getSession()
+  if (error) {
+    return { user: null, role: null }
+  }
+
+  const user = data?.session?.user
+  if (!user) {
+    return { user: null, role: null }
+  }
+
+  const mapped = mapUser(user)
+  return {
+    user: mapped,
+    role: mapped.role,
+  }
+}
+
+export function onAuthStateChange(callback: (event: string, user: any | null) => void) {
+  return supabase.auth.onAuthStateChange((event, session) => {
+    callback(event, session?.user ?? null)
+  })
+}
+`)
+
+writeFile('app/rider/home.tsx', `"use client"
+
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { getCurrentUser, signOut } from '../../lib/supabase'
+
+export default function RiderHome() {
+  const router = useRouter()
+  const [loading, setLoading] = useState(true)
+  const [name, setName] = useState('Rider')
+
+  useEffect(() => {
+    async function load() {
+      const current = await getCurrentUser()
+      if (!current.user || current.role !== 'Rider') {
+        router.replace('/')
+        return
+      }
+      setName(current.user.full_name ?? 'Rider')
+      setLoading(false)
+    }
+    load()
+  }, [router])
+
+  async function handleLogout() {
+    await signOut()
+    router.push('/')
+  }
+
+  if (loading) {
+    return (
+      <div style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: '1rem' }}>
+        <p>Loading rider dashboard…</p>
+      </div>
+    )
+  }
+
+  return (
+    <main style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: '1rem' }}>
+      <div style={{ width: 'min(680px,100%)', padding: '2rem', border: '1px solid #e5e7eb', borderRadius: '1rem', boxShadow: '0 20px 60px rgba(15, 23, 42, 0.1)' }}>
+        <h1 style={{ marginBottom: '1rem' }}>Welcome back, {name}</h1>
+        <p style={{ marginBottom: '1.5rem', color: '#4b5563' }}>You are signed in as a Rider.</p>
+        <button
+          onClick={handleLogout}
+          style={{ padding: '0.95rem 1.25rem', borderRadius: '0.9rem', border: 'none', background: '#dc2626', color: '#fff', fontWeight: 700, cursor: 'pointer' }}
+        >
+          Logout
+        </button>
+      </div>
+    </main>
+  )
+}
+`)
+
+writeFile('app/driver/home.tsx', `"use client"
+
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { getCurrentUser, signOut } from '../../lib/supabase'
+
+export default function DriverHome() {
+  const router = useRouter()
+  const [loading, setLoading] = useState(true)
+  const [name, setName] = useState('Driver')
+
+  useEffect(() => {
+    async function load() {
+      const current = await getCurrentUser()
+      if (!current.user || current.role !== 'Driver') {
+        router.replace('/')
+        return
+      }
+      setName(current.user.full_name ?? 'Driver')
+      setLoading(false)
+    }
+    load()
+  }, [router])
+
+  async function handleLogout() {
+    await signOut()
+    router.push('/')
+  }
+
+  if (loading) {
+    return (
+      <div style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: '1rem' }}>
+        <p>Loading driver dashboard…</p>
+      </div>
+    )
+  }
+
+  return (
+    <main style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: '1rem' }}>
+      <div style={{ width: 'min(680px,100%)', padding: '2rem', border: '1px solid #e5e7eb', borderRadius: '1rem', boxShadow: '0 20px 60px rgba(15, 23, 42, 0.1)' }}>
+        <h1 style={{ marginBottom: '1rem' }}>Welcome back, {name}</h1>
+        <p style={{ marginBottom: '1.5rem', color: '#4b5563' }}>You are signed in as a Driver.</p>
+        <button
+          onClick={handleLogout}
+          style={{ padding: '0.95rem 1.25rem', borderRadius: '0.9rem', border: 'none', background: '#dc2626', color: '#fff', fontWeight: 700, cursor: 'pointer' }}
+        >
+          Logout
+        </button>
+      </div>
+    </main>
+  )
+}
+`)
+
+console.log('PragyaGo authentication flow files have been generated.')

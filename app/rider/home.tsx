@@ -1,18 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  Pressable,
-  ScrollView,
-  ActivityIndicator,
-  Alert,
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import MapView, { Marker } from 'react-native-maps';
+import { supabase } from '@/lib/supabase';
 import * as Location from 'expo-location';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import {
+    ActivityIndicator,
+    Alert,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
+} from 'react-native';
+import MapView, { Marker } from 'react-native-maps';
 
 interface LocationCoords {
   latitude: number;
@@ -85,36 +85,31 @@ export default function RiderHomeScreen() {
 
     setRequestingRide(true);
     try {
-      if (!isSupabaseConfigured()) {
-        Alert.alert(
-          'Demo Mode',
-          `Ride request (Demo): ${destination}\nPayment: ${paymentMethod}\nEstimated fare: $${fareEstimate}`
-        );
-      } else {
-        const { data, error } = await supabase
-          .from('rides')
-          .insert([
-            {
-              rider_id: 'temp-rider-id',
-              pickup_lat: location.latitude,
-              pickup_lng: location.longitude,
-              destination: destination,
-              status: 'requested',
-              payment_method: paymentMethod,
-              estimated_fare: fareEstimate,
-              created_at: new Date().toISOString(),
-            },
-          ])
-          .select();
+      if (!supabase) return;
 
-        if (error) {
-          Alert.alert('Error', 'Failed to request ride: ' + error.message);
-        } else {
-          Alert.alert(
-            'Ride Requested',
-            `Your Pragya ride has been requested! Estimated fare: $${fareEstimate}`
-          );
-        }
+      const { data, error } = await supabase
+        .from('rides')
+        .insert([
+          {
+            rider_id: 'temp-rider-id',
+            pickup_lat: location.latitude,
+            pickup_lng: location.longitude,
+            destination: destination,
+            status: 'requested',
+            payment_method: paymentMethod,
+            estimated_fare: fareEstimate,
+            created_at: new Date().toISOString(),
+          },
+        ])
+        .select();
+
+      if (error) {
+        Alert.alert('Error', 'Failed to request ride: ' + error.message);
+      } else {
+        Alert.alert(
+          'Ride Requested',
+          `Your Pragya ride has been requested! Estimated fare: $${fareEstimate}`
+        );
       }
 
       setDestination('');
@@ -125,6 +120,24 @@ export default function RiderHomeScreen() {
       console.error(error);
     } finally {
       setRequestingRide(false);
+    }
+  };
+
+  const handleSwitchToDriver = () => {
+    router.replace('/driver');
+  };
+
+  const handleLogout = async () => {
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        Alert.alert('Error', 'Failed to logout: ' + error.message);
+      } else {
+        router.replace('/');
+      }
+    } catch (error) {
+      console.error('Logout error:', error);
+      Alert.alert('Error', 'An unexpected error occurred during logout');
     }
   };
 
@@ -255,6 +268,16 @@ export default function RiderHomeScreen() {
             <Text style={styles.requestButtonText}>Request Pragya</Text>
           )}
         </Pressable>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Quick Actions</Text>
+          <Pressable style={styles.actionButton} onPress={handleSwitchToDriver}>
+            <Text style={styles.actionButtonText}>🚗 Switch to Driver Mode</Text>
+          </Pressable>
+          <Pressable style={[styles.actionButton, styles.logoutButton]} onPress={handleLogout}>
+            <Text style={[styles.actionButtonText, styles.logoutButtonText]}>🚪 Logout</Text>
+          </Pressable>
+        </View>
       </ScrollView>
     </View>
   );
@@ -397,5 +420,32 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 10,
+  },
+  actionButton: {
+    backgroundColor: '#fff',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  actionButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+  },
+  logoutButton: {
+    backgroundColor: '#FFE8E8',
+    borderColor: '#FF6B6B',
+  },
+  logoutButtonText: {
+    color: '#FF6B6B',
   },
 });

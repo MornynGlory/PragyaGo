@@ -1,18 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  Switch,
-  ActivityIndicator,
-  Alert,
-  ScrollView,
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import MapView, { Marker } from 'react-native-maps';
+import { supabase } from '@/lib/supabase';
 import * as Location from 'expo-location';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import {
+    ActivityIndicator,
+    Alert,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Switch,
+    Text,
+    View,
+} from 'react-native';
+import MapView, { Marker } from 'react-native-maps';
 
 interface LocationCoords {
   latitude: number;
@@ -66,13 +66,7 @@ export default function DriverHomeScreen() {
 
   const fetchDriverStats = async () => {
     try {
-      if (!isSupabaseConfigured()) {
-        // Use demo data when Supabase is not configured
-        setDailyEarnings(245.5);
-        setTotalRides(12);
-        setRating(4.8);
-        return;
-      }
+      if (!supabase) return;
 
       const { data, error } = await supabase
         .from('drivers')
@@ -100,10 +94,7 @@ export default function DriverHomeScreen() {
 
   const updateDriverStatus = async (online: boolean) => {
     try {
-      if (!isSupabaseConfigured()) {
-        Alert.alert('Demo Mode', online ? 'You are now online' : 'You are now offline');
-        return;
-      }
+      if (!supabase) return;
 
       const { error } = await supabase
         .from('drivers')
@@ -120,6 +111,24 @@ export default function DriverHomeScreen() {
       Alert.alert('Notice', online ? 'You are now online' : 'You are now offline');
       console.error('Error updating status:', error);
     }
+  };
+
+  const handleLogout = async () => {
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        Alert.alert('Error', 'Failed to logout: ' + error.message);
+      } else {
+        router.replace('/');
+      }
+    } catch (error) {
+      console.error('Logout error:', error);
+      Alert.alert('Error', 'An unexpected error occurred during logout');
+    }
+  };
+
+  const handleSwitchToRider = () => {
+    router.replace('/rider');
   };
 
   if (loading) {
@@ -217,6 +226,12 @@ export default function DriverHomeScreen() {
           </Pressable>
           <Pressable style={styles.actionButton}>
             <Text style={styles.actionButtonText}>⚙️ Settings</Text>
+          </Pressable>
+          <Pressable style={styles.actionButton} onPress={handleSwitchToRider}>
+            <Text style={styles.actionButtonText}>🚗 Switch to Rider Mode</Text>
+          </Pressable>
+          <Pressable style={[styles.actionButton, styles.logoutButton]} onPress={handleLogout}>
+            <Text style={[styles.actionButtonText, styles.logoutButtonText]}>🚪 Logout</Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -350,5 +365,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#333',
+  },
+  logoutButton: {
+    backgroundColor: '#FFE8E8',
+    borderColor: '#FF6B6B',
+  },
+  logoutButtonText: {
+    color: '#FF6B6B',
   },
 });
