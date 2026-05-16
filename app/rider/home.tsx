@@ -1,451 +1,450 @@
 import { supabase } from '@/lib/supabase';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
-
-interface LocationCoords {
-  latitude: number;
-  longitude: number;
-}
+import MapView, { Marker, UrlTile } from 'react-native-maps';
 
 export default function RiderHomeScreen() {
   const router = useRouter();
-  const [location, setLocation] = useState<LocationCoords | null>(null);
+  const mapRef = useRef<MapView>(null);
+  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [loading, setLoading] = useState(true);
   const [destination, setDestination] = useState('');
-  const [fareEstimate, setFareEstimate] = useState(0);
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'momo' | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [requestingRide, setRequestingRide] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'momo'>('cash');
+  const [nearbyDrivers, setNearbyDrivers] = useState<any[]>([]);
+  const [fareEstimate, setFareEstimate] = useState<number | null>(null);
+  const [requesting, setRequesting] = useState(false);
+  const [currentRide, setCurrentRide] = useState<any>(null);
+  const [rideStatus, setRideStatus] = useState('');
+  const rideSubscription = useRef<any>(null);
 
   useEffect(() => {
-    getCurrentLocation();
+    requestLocationPermission();
+    fetchNearbyDrivers();
+    const interval = setInterval(fetchNearbyDrivers, 10000);
+    return () => {
+      clearInterval(interval);
+      if (rideSubscription.current) {
+        supabase.removeChannel(rideSubscription.current);
+      }
+    };
   }, []);
+
+  const requestLocationPermission = async () => {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Denied', 'Location permission is required.');
+      return;
+    }
+    getCurrentLocation();
+  };
 
   const getCurrentLocation = async () => {
     try {
-      setLoading(true);
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission denied', 'We need location permission to show the map');
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+      setLocation(coords);
+      setLoading(false);
+      mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.05, longitudeDelta: 0.05 });
+    } catch (error) {
+      setLoading(false);
+      Alert.alert('Error', 'Could not get your location.');
+    }
+  };
+
+  const fetchNearbyDrivers = async () => {
+    try {
+      const { data: drivers } = await supabase
+        .from('drivers')
+        .select('*')
+        .eq('is_online', true)
+        .not('current_lat', 'is', null)
+        .not('current_lng', 'is', null);
+      if (drivers) setNearbyDrivers(drivers);
+    } catch (error) {
+      console.error('Error fetching drivers:', error);
+    }
+  };
+
+  const estimateFare = () => {
+    if (!destination.trim()) {
+      Alert.alert('Enter Destination', 'Please enter where you want to go.');
+      return;
+    }
+    const estimatedKm = Math.random() * 5 + 1;
+    const fare = 3 + estimatedKm * 1.5;
+    setFareEstimate(Math.round(fare * 10) / 10);
+  };
+
+  const subscribeToRideUpdates = async (rideId: string) => {
+    if (rideSubscription.current) {
+      await supabase.removeChannel(rideSubscription.current);
+    }
+
+    const channel = supabase
+      .channel(`ride-updates-${rideId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'rides',
+        filter: `id=eq.${rideId}`,
+      }, (payload) => {
+        const ride = payload.new;
+        setCurrentRide(ride);
+        setRideStatus(ride.status);
+
+        if (ride.status === 'accepted') {
+          Alert.alert('Driver Found! 🛺', 'A Pragya driver has accepted your ride and is on the way!');
+        } else if (ride.status === 'in_progress') {
+          Alert.alert('On Your Way! 🎉', 'You are now on your way to your destination.');
+        } else if (ride.status === 'completed') {
+          Alert.alert('Ride Complete!', `Fare: GHS ${ride.fare_ghs}\nThank you for using PragyaGo!`);
+          setCurrentRide(null);
+          setRideStatus('');
+          supabase.removeChannel(rideSubscription.current);
+        }
+      });
+
+    await channel.subscribe();
+    rideSubscription.current = channel;
+  };
+
+  const requestRide = async () => {
+    if (!destination.trim()) {
+      Alert.alert('Enter Destination', 'Please enter where you want to go.');
+      return;
+    }
+    if (!location) {
+      Alert.alert('Location Error', 'Could not get your location. Please try again.');
+      return;
+    }
+    if (!fareEstimate) {
+      Alert.alert('Estimate Fare', 'Please estimate the fare first.');
+      return;
+    }
+
+    setRequesting(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        Alert.alert('Error', 'Please login to request a ride.');
+        setRequesting(false);
         return;
       }
 
-      const currentLocation = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-
-      setLocation({
-        latitude: currentLocation.coords.latitude,
-        longitude: currentLocation.coords.longitude,
-      });
-    } catch (error) {
-      console.error('Error getting location:', error);
-      Alert.alert('Error', 'Failed to get your location');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const calculateFareEstimate = () => {
-    if (!destination.trim()) {
-      Alert.alert('Validation', 'Please enter a destination');
-      return;
-    }
-    const baseFare = 5;
-    const estimatedFare = baseFare + Math.random() * 15;
-    setFareEstimate(Math.round(estimatedFare * 100) / 100);
-  };
-
-  const handleRequestRide = async () => {
-    if (!destination.trim()) {
-      Alert.alert('Validation', 'Please enter a destination');
-      return;
-    }
-
-    if (!paymentMethod) {
-      Alert.alert('Validation', 'Please select a payment method');
-      return;
-    }
-
-    if (!location) {
-      Alert.alert('Error', 'Location not available');
-      return;
-    }
-
-    setRequestingRide(true);
-    try {
-      if (!supabase) return;
-
-      const { data, error } = await supabase
+      const { data: ride, error } = await supabase
         .from('rides')
-        .insert([
-          {
-            rider_id: 'temp-rider-id',
-            pickup_lat: location.latitude,
-            pickup_lng: location.longitude,
-            destination: destination,
-            status: 'requested',
-            payment_method: paymentMethod,
-            estimated_fare: fareEstimate,
-            created_at: new Date().toISOString(),
-          },
-        ])
-        .select();
+        .insert([{
+          rider_id: user.id,
+          pickup_lat: location.latitude,
+          pickup_lng: location.longitude,
+          pickup_address: 'Current Location',
+          dropoff_lat: location.latitude + 0.01,
+          dropoff_lng: location.longitude + 0.01,
+          dropoff_address: destination,
+          status: 'requested',
+          fare_ghs: fareEstimate,
+          payment_method: paymentMethod,
+          created_at: new Date().toISOString(),
+        }])
+        .select()
+        .single();
 
       if (error) {
-        Alert.alert('Error', 'Failed to request ride: ' + error.message);
-      } else {
-        Alert.alert(
-          'Ride Requested',
-          `Your Pragya ride has been requested! Estimated fare: $${fareEstimate}`
-        );
+        Alert.alert('Error', error.message);
+      } else if (ride) {
+        setCurrentRide(ride);
+        setRideStatus('requested');
+        await subscribeToRideUpdates(ride.id);
+        Alert.alert('Ride Requested! 🛺', 'Looking for a Pragya driver near you...');
+        setDestination('');
+        setFareEstimate(null);
       }
-
-      setDestination('');
-      setPaymentMethod(null);
-      setFareEstimate(0);
     } catch (error) {
-      Alert.alert('Error', 'An unexpected error occurred');
-      console.error(error);
+      Alert.alert('Error', 'Could not request ride. Please try again.');
     } finally {
-      setRequestingRide(false);
+      setRequesting(false);
     }
   };
 
-  const handleSwitchToDriver = () => {
-    router.replace('/driver');
+  const cancelRide = async () => {
+    if (!currentRide) return;
+    const { error } = await supabase
+      .from('rides')
+      .update({ status: 'cancelled' })
+      .eq('id', currentRide.id);
+
+    if (!error) {
+      setCurrentRide(null);
+      setRideStatus('');
+      if (rideSubscription.current) {
+        await supabase.removeChannel(rideSubscription.current);
+      }
+      Alert.alert('Ride Cancelled', 'Your ride has been cancelled.');
+    }
   };
 
   const handleLogout = async () => {
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) {
-        Alert.alert('Error', 'Failed to logout: ' + error.message);
-      } else {
-        router.replace('/');
-      }
-    } catch (error) {
-      console.error('Logout error:', error);
-      Alert.alert('Error', 'An unexpected error occurred during logout');
-    }
+    await supabase.auth.signOut();
+    router.replace('/');
   };
 
-  if (loading) {
-    return (
-      <View style={styles.container}>
-        <ActivityIndicator size="large" color="#007AFF" />
-      </View>
-    );
-  }
+  const getRideStatusLabel = () => {
+    if (rideStatus === 'requested') return '🔍 Finding your Pragya...';
+    if (rideStatus === 'accepted') return '🛺 Driver is on the way!';
+    if (rideStatus === 'in_progress') return '🎉 You are on your way!';
+    return '';
+  };
 
   return (
     <View style={styles.container}>
-      {location && (
-        <MapView
-          style={styles.map}
-          initialRegion={{
-            latitude: location.latitude,
-            longitude: location.longitude,
-            latitudeDelta: 0.05,
-            longitudeDelta: 0.05,
-          }}
-        >
-          <Marker
-            coordinate={location}
-            title="Your Location"
-            pinColor="blue"
-          />
-        </MapView>
+      {/* Map */}
+      <View style={styles.mapContainer}>
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#2563eb" />
+            <Text style={styles.loadingText}>Getting your location...</Text>
+          </View>
+        ) : (
+          <MapView
+            ref={mapRef}
+            style={styles.map}
+            initialRegion={{
+              latitude: location?.latitude || 7.3349,
+              longitude: location?.longitude || -2.3123,
+              latitudeDelta: 0.05,
+              longitudeDelta: 0.05,
+            }}
+          >
+            <UrlTile
+              urlTemplate="https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
+              maximumZ={19}
+              flipY={false}
+            />
+            {location && (
+              <Marker coordinate={location} title="You are here" pinColor="#2563eb" />
+            )}
+            {nearbyDrivers.map((driver) => (
+              <Marker
+                key={driver.id}
+                coordinate={{ latitude: driver.current_lat, longitude: driver.current_lng }}
+                title="Pragya Driver"
+                description={`Rating: ⭐ ${driver.rating}`}
+                pinColor="#1D9E75"
+              />
+            ))}
+          </MapView>
+        )}
+      </View>
+
+      {/* Active Ride Status */}
+      {currentRide && (
+        <View style={styles.rideStatusBanner}>
+          <Text style={styles.rideStatusText}>{getRideStatusLabel()}</Text>
+          <Text style={styles.rideStatusSub}>To: {currentRide.dropoff_address}</Text>
+          <Text style={styles.rideStatusFare}>GHS {currentRide.fare_ghs} · {currentRide.payment_method?.toUpperCase()}</Text>
+          {rideStatus === 'requested' && (
+            <TouchableOpacity style={styles.cancelButton} onPress={cancelRide}>
+              <Text style={styles.cancelButtonText}>Cancel Ride</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       )}
 
-      <ScrollView style={styles.bottomSheet} scrollEnabled={true}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Request a Pragya</Text>
-          <Pressable onPress={() => router.back()}>
-            <Text style={styles.backButton}>← Back</Text>
-          </Pressable>
-        </View>
+      {/* Bottom Panel - only show when no active ride */}
+      {!currentRide && (
+        <ScrollView style={styles.bottomPanel}>
+          <Text style={styles.panelTitle}>Where do you want to go?</Text>
+          <Text style={styles.driversCount}>
+            {nearbyDrivers.length > 0
+              ? `🛺 ${nearbyDrivers.length} Pragya driver${nearbyDrivers.length > 1 ? 's' : ''} nearby`
+              : '😔 No drivers nearby right now'}
+          </Text>
 
-        <View style={styles.section}>
-          <Text style={styles.label}>Pickup Location</Text>
-          <View style={styles.locationDisplay}>
-            <Text style={styles.locationText}>
-              {location
-                ? `${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}`
-                : 'Getting location...'}
-            </Text>
+          <View style={styles.inputContainer}>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter your destination"
+              value={destination}
+              onChangeText={setDestination}
+              placeholderTextColor="#999"
+              onSubmitEditing={estimateFare}
+            />
           </View>
-        </View>
 
-        <View style={styles.section}>
-          <Text style={styles.label}>Destination</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter destination"
-            value={destination}
-            onChangeText={setDestination}
-            placeholderTextColor="#999"
-          />
-        </View>
-
-        {destination.trim() && (
-          <Pressable
-            style={styles.estimateButton}
-            onPress={calculateFareEstimate}
-          >
-            <Text style={styles.estimateButtonText}>Get Fare Estimate</Text>
-          </Pressable>
-        )}
-
-        {fareEstimate > 0 && (
-          <View style={styles.fareCard}>
-            <Text style={styles.fareLabel}>Estimated Fare</Text>
-            <Text style={styles.fareAmount}>${fareEstimate.toFixed(2)}</Text>
-          </View>
-        )}
-
-        <View style={styles.section}>
-          <Text style={styles.label}>Payment Method</Text>
-          <View style={styles.paymentOptions}>
-            <Pressable
-              style={[
-                styles.paymentButton,
-                paymentMethod === 'cash' && styles.paymentButtonActive,
-              ]}
-              onPress={() => setPaymentMethod('cash')}
-            >
-              <Text
-                style={[
-                  styles.paymentButtonText,
-                  paymentMethod === 'cash' && styles.paymentButtonTextActive,
-                ]}
-              >
-                💵 Pay Cash
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={[
-                styles.paymentButton,
-                paymentMethod === 'momo' && styles.paymentButtonActive,
-              ]}
-              onPress={() => setPaymentMethod('momo')}
-            >
-              <Text
-                style={[
-                  styles.paymentButtonText,
-                  paymentMethod === 'momo' && styles.paymentButtonTextActive,
-                ]}
-              >
-                📱 Pay MoMo
-              </Text>
-            </Pressable>
-          </View>
-        </View>
-
-        <Pressable
-          style={[
-            styles.requestButton,
-            (requestingRide || !destination) && styles.requestButtonDisabled,
-          ]}
-          onPress={handleRequestRide}
-          disabled={requestingRide || !destination}
-        >
-          {requestingRide ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.requestButtonText}>Request Pragya</Text>
+          {!fareEstimate && (
+            <TouchableOpacity style={styles.estimateButton} onPress={estimateFare}>
+              <Text style={styles.estimateButtonText}>Estimate Fare</Text>
+            </TouchableOpacity>
           )}
-        </Pressable>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
-          <Pressable style={styles.actionButton} onPress={handleSwitchToDriver}>
-            <Text style={styles.actionButtonText}>🚗 Switch to Driver Mode</Text>
-          </Pressable>
-          <Pressable style={[styles.actionButton, styles.logoutButton]} onPress={handleLogout}>
-            <Text style={[styles.actionButtonText, styles.logoutButtonText]}>🚪 Logout</Text>
-          </Pressable>
-        </View>
-      </ScrollView>
+          {fareEstimate && (
+            <View style={styles.fareContainer}>
+              <Text style={styles.fareLabel}>Estimated Fare</Text>
+              <Text style={styles.fareAmount}>GHS {fareEstimate}</Text>
+            </View>
+          )}
+
+          <View style={styles.paymentContainer}>
+            <Text style={styles.paymentLabel}>Payment Method</Text>
+            <View style={styles.paymentOptions}>
+              <TouchableOpacity
+                style={[styles.paymentOption, paymentMethod === 'cash' && styles.paymentActive]}
+                onPress={() => setPaymentMethod('cash')}
+              >
+                <Text style={[styles.paymentText, paymentMethod === 'cash' && styles.paymentTextActive]}>
+                  Cash
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.paymentOption, paymentMethod === 'momo' && styles.paymentActive]}
+                onPress={() => setPaymentMethod('momo')}
+              >
+                <Text style={[styles.paymentText, paymentMethod === 'momo' && styles.paymentTextActive]}>
+                  MoMo
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.requestButton, requesting && styles.buttonDisabled]}
+            onPress={requestRide}
+            disabled={requesting}
+          >
+            {requesting ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.requestButtonText}>🛺 Request Pragya</Text>
+            )}
+          </TouchableOpacity>
+
+          <View style={styles.actionRow}>
+            <TouchableOpacity style={styles.switchButton} onPress={() => router.replace('/driver')}>
+              <Text style={styles.switchButtonText}>Switch to Driver</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+              <Text style={styles.logoutButtonText}>Logout</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  mapContainer: { flex: 1, minHeight: 300 },
+  map: { flex: 1 },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingText: { marginTop: 12, fontSize: 14, color: '#666' },
+  rideStatusBanner: {
+    backgroundColor: '#185FA5',
+    padding: 16,
+    margin: 10,
+    borderRadius: 10,
+  },
+  rideStatusText: { fontSize: 16, fontWeight: 'bold', color: '#fff', marginBottom: 4 },
+  rideStatusSub: { fontSize: 13, color: '#E6F1FB', marginBottom: 2 },
+  rideStatusFare: { fontSize: 13, color: '#E6F1FB', marginBottom: 10 },
+  cancelButton: {
+    backgroundColor: '#FF3B30',
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  cancelButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+  bottomPanel: {
     backgroundColor: '#fff',
-  },
-  map: {
-    width: '100%',
-    height: '40%',
-  },
-  bottomSheet: {
-    flex: 1,
-    backgroundColor: '#f9f9f9',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    paddingHorizontal: 20,
-    paddingTop: 16,
+    padding: 16,
+    maxHeight: 400,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  backButton: {
-    fontSize: 16,
-    color: '#007AFF',
-    fontWeight: '600',
-  },
-  section: {
-    marginBottom: 16,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 8,
-  },
+  panelTitle: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 4 },
+  driversCount: { fontSize: 13, color: '#1D9E75', marginBottom: 12 },
+  inputContainer: { marginBottom: 10 },
   input: {
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 8,
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 14,
-    backgroundColor: '#fff',
+    backgroundColor: '#f9f9f9',
     color: '#333',
-  },
-  locationDisplay: {
-    backgroundColor: '#E8F0FE',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: '#007AFF',
-  },
-  locationText: {
-    fontSize: 14,
-    color: '#007AFF',
-    fontWeight: '500',
   },
   estimateButton: {
-    backgroundColor: '#007AFF',
-    paddingVertical: 12,
+    backgroundColor: '#f0f0f0',
+    paddingVertical: 10,
     borderRadius: 8,
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 10,
   },
-  estimateButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  fareCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: '#34C759',
-  },
-  fareLabel: {
-    fontSize: 12,
-    color: '#999',
-    fontWeight: '500',
-  },
-  fareAmount: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#34C759',
-    marginTop: 4,
-  },
-  paymentOptions: {
+  estimateButtonText: { color: '#333', fontWeight: '600' },
+  fareContainer: {
     flexDirection: 'row',
-    gap: 12,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#E1F5EE',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 10,
   },
-  paymentButton: {
+  fareLabel: { fontSize: 14, color: '#085041' },
+  fareAmount: { fontSize: 18, fontWeight: 'bold', color: '#1D9E75' },
+  paymentContainer: { marginBottom: 12 },
+  paymentLabel: { fontSize: 13, fontWeight: '600', color: '#333', marginBottom: 8 },
+  paymentOptions: { flexDirection: 'row', gap: 10 },
+  paymentOption: {
     flex: 1,
-    borderWidth: 2,
-    borderColor: '#ddd',
+    paddingVertical: 10,
     borderRadius: 8,
-    paddingVertical: 12,
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  paymentButtonActive: {
-    borderColor: '#007AFF',
-    backgroundColor: '#E8F0FE',
-  },
-  paymentButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
-  },
-  paymentButtonTextActive: {
-    color: '#007AFF',
-  },
-  requestButton: {
-    backgroundColor: '#FF6B6B',
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginVertical: 20,
-    marginBottom: 40,
-  },
-  requestButtonDisabled: {
-    backgroundColor: '#ccc',
-    opacity: 0.6,
-  },
-  requestButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 10,
-  },
-  actionButton: {
-    backgroundColor: '#fff',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    marginBottom: 10,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: '#ddd',
+    alignItems: 'center',
+    backgroundColor: '#fff',
   },
-  actionButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
+  paymentActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
+  paymentText: { fontSize: 14, fontWeight: '600', color: '#333' },
+  paymentTextActive: { color: '#fff' },
+  requestButton: {
+    backgroundColor: '#2563eb',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 10,
   },
+  buttonDisabled: { opacity: 0.6 },
+  requestButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  actionRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  switchButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    backgroundColor: '#E1F5EE',
+  },
+  switchButtonText: { color: '#1D9E75', fontWeight: '600', fontSize: 14 },
   logoutButton: {
-    backgroundColor: '#FFE8E8',
-    borderColor: '#FF6B6B',
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    backgroundColor: '#FFE5E5',
   },
-  logoutButtonText: {
-    color: '#FF6B6B',
-  },
+  logoutButtonText: { color: '#FF3B30', fontWeight: '600', fontSize: 14 },
 });
