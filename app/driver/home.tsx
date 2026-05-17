@@ -60,20 +60,17 @@ export default function DriverHomeScreen() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-
       const { data: driver } = await supabase
         .from('drivers')
         .select('*')
         .eq('profile_id', user.id)
         .single();
-
       if (driver) {
         setRating(driver.rating || 0);
         setTotalRides(driver.total_rides || 0);
         setIsOnline(driver.is_online || false);
         if (driver.is_online) await subscribeToRideRequests(driver.id);
       }
-
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const { data: payments } = await supabase
@@ -81,7 +78,6 @@ export default function DriverHomeScreen() {
         .select('amount_ghs')
         .eq('status', 'success')
         .gte('created_at', today.toISOString());
-
       if (payments) {
         const total = payments.reduce((sum, p) => sum + (p.amount_ghs || 0), 0);
         setDailyEarnings(total);
@@ -97,7 +93,6 @@ export default function DriverHomeScreen() {
         await supabase.removeChannel(rideSubscription.current);
         rideSubscription.current = null;
       }
-
       const channel = supabase
         .channel(`ride-requests-${driverId}-${Date.now()}`)
         .on('postgres_changes', {
@@ -112,10 +107,7 @@ export default function DriverHomeScreen() {
               '🛺 New Ride Request!',
               `Pickup: ${ride.pickup_address}\nTo: ${ride.dropoff_address}\nFare: GHS ${ride.fare_ghs}`,
               [
-                {
-                  text: 'Decline',
-                  style: 'cancel',
-                },
+                { text: 'Decline', style: 'cancel' },
                 {
                   text: 'Accept ✓',
                   onPress: async () => {
@@ -132,10 +124,7 @@ export default function DriverHomeScreen() {
                       .update({ driver_id: driver.id, status: 'accepted' })
                       .eq('id', ride.id)
                       .eq('status', 'requested');
-                    if (error) {
-                      Alert.alert('Error', error.message);
-                      return;
-                    }
+                    if (error) { Alert.alert('Error', error.message); return; }
                     setActiveRide(ride);
                     setRideStatus('accepted');
                     Alert.alert('Ride Accepted!', 'Head to the pickup location.');
@@ -145,7 +134,6 @@ export default function DriverHomeScreen() {
             );
           }
         });
-
       await channel.subscribe((status) => {
         console.log('Subscription status:', status);
       });
@@ -160,30 +148,21 @@ export default function DriverHomeScreen() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-
       const { data: driver } = await supabase
         .from('drivers')
         .select('id')
         .eq('profile_id', user.id)
         .single();
-
-      if (!driver) {
-        Alert.alert('Error', 'Driver profile not found.');
-        return;
-      }
-
+      if (!driver) { Alert.alert('Error', 'Driver profile not found.'); return; }
       const newStatus = !isOnline;
       setIsOnline(newStatus);
-
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
       setLocation(coords);
-
       await supabase
         .from('drivers')
         .update({ is_online: newStatus, current_lat: coords.latitude, current_lng: coords.longitude })
         .eq('id', driver.id);
-
       if (newStatus) {
         await subscribeToRideRequests(driver.id);
         locationInterval.current = setInterval(async () => {
@@ -217,7 +196,6 @@ export default function DriverHomeScreen() {
     };
     const nextStatus = statusFlow[rideStatus];
     if (!nextStatus) return;
-
     const { error } = await supabase
       .from('rides')
       .update({
@@ -225,9 +203,7 @@ export default function DriverHomeScreen() {
         ...(nextStatus === 'completed' ? { completed_at: new Date().toISOString() } : {}),
       })
       .eq('id', activeRide.id);
-
     if (error) { Alert.alert('Error', error.message); return; }
-
     setRideStatus(nextStatus);
     if (nextStatus === 'completed') {
       Alert.alert(
@@ -311,11 +287,7 @@ export default function DriverHomeScreen() {
               flipY={false}
             />
             {location && (
-              <Marker
-                coordinate={location}
-                title="You are here"
-                pinColor={isOnline ? '#1D9E75' : '#999'}
-              />
+              <Marker coordinate={location} title="You are here" pinColor={isOnline ? '#1D9E75' : '#999'} />
             )}
           </MapView>
         )}
@@ -333,6 +305,12 @@ export default function DriverHomeScreen() {
           </Text>
         </TouchableOpacity>
         <View style={styles.actionRow}>
+          <TouchableOpacity
+            style={styles.reportButton}
+            onPress={() => router.push('/driver/report')}
+          >
+            <Text style={styles.reportButtonText}>📊 Report</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.switchButton} onPress={() => router.replace('/rider')}>
             <Text style={styles.switchButtonText}>Switch to Rider</Text>
           </TouchableOpacity>
@@ -373,6 +351,8 @@ const styles = StyleSheet.create({
   onlineInactive: { backgroundColor: '#1D9E75' },
   onlineButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   actionRow: { flexDirection: 'row', gap: 10 },
+  reportButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FAEEDA' },
+  reportButtonText: { color: '#854F0B', fontWeight: '600', fontSize: 14 },
   switchButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E6F1FB' },
   switchButtonText: { color: '#185FA5', fontWeight: '600', fontSize: 14 },
   logoutButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FFE5E5' },
