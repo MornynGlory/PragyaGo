@@ -12,6 +12,24 @@ import {
 } from 'react-native';
 import MapView, { Marker, UrlTile } from 'react-native-maps';
 
+const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number) => {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng/2) * Math.sin(dLng/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+};
+
+const calculateFare = (distanceKm: number, stops: number) => {
+  const baseFare = 3;
+  const perKmRate = 1.5;
+  const stopFare = stops * 2;
+  return Math.round((baseFare + distanceKm * perKmRate + stopFare) * 10) / 10;
+};
+
 export default function DriverHomeScreen() {
   const router = useRouter();
   const mapRef = useRef<MapView>(null);
@@ -23,6 +41,10 @@ export default function DriverHomeScreen() {
   const [rating, setRating] = useState(0);
   const [activeRide, setActiveRide] = useState<any>(null);
   const [rideStatus, setRideStatus] = useState('');
+  const [driverConfirmedPayment, setDriverConfirmedPayment] = useState(false);
+  const [currentStopIndex, setCurrentStopIndex] = useState(0);
+  const [pickupLocation, setPickupLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [recalculatedFare, setRecalculatedFare] = useState<number | null>(null);
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const rideSubscription = useRef<any>(null);
 
@@ -37,10 +59,7 @@ export default function DriverHomeScreen() {
 
   const requestLocationPermission = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'Location permission is required.');
-      return;
-    }
+    if (status !== 'granted') { Alert.alert('Permission Denied', 'Location permission is required.'); return; }
     getCurrentLocation();
   };
 
@@ -51,189 +70,215 @@ export default function DriverHomeScreen() {
       setLocation(coords);
       setLoading(false);
       mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.01, longitudeDelta: 0.01 });
-    } catch {
-      setLoading(false);
-    }
+    } catch { setLoading(false); }
   };
 
   const fetchDriverStats = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data: driver } = await supabase
-        .from('drivers')
-        .select('*')
-        .eq('profile_id', user.id)
-        .single();
+      const { data: driver } = await supabase.from('drivers').select('*').eq('profile_id', user.id).single();
       if (driver) {
         setRating(driver.rating || 0);
         setTotalRides(driver.total_rides || 0);
         setIsOnline(driver.is_online || false);
         if (driver.is_online) await subscribeToRideRequests(driver.id);
       }
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const { data: payments } = await supabase
-        .from('payments')
-        .select('amount_ghs')
-        .eq('status', 'success')
-        .gte('created_at', today.toISOString());
-      if (payments) {
-        const total = payments.reduce((sum, p) => sum + (p.amount_ghs || 0), 0);
-        setDailyEarnings(total);
-      }
-    } catch (error) {
-      console.error('Error fetching stats:', error);
-    }
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const { data: payments } = await supabase.from('payments').select('amount_ghs').eq('status', 'success').gte('created_at', today.toISOString());
+      if (payments) setDailyEarnings(payments.reduce((sum, p) => sum + (p.amount_ghs || 0), 0));
+    } catch (error) { console.error('Error fetching stats:', error); }
   };
 
   const subscribeToRideRequests = async (driverId: string) => {
     try {
-      if (rideSubscription.current) {
-        await supabase.removeChannel(rideSubscription.current);
-        rideSubscription.current = null;
-      }
+      if (rideSubscription.current) { await supabase.removeChannel(rideSubscription.current); rideSubscription.current = null; }
       const channel = supabase
         .channel(`ride-requests-${driverId}-${Date.now()}`)
-        .on('postgres_changes', {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'rides',
-        }, async (payload) => {
-          console.log('New ride request received:', payload.new);
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rides' }, async (payload) => {
           const ride = payload.new;
           if (ride.status === 'requested') {
+            const stopsInfo = ride.stops?.length > 0 ? `\nStops: ${ride.stops.map((s: any) => s.address).join(' → ')}` : '';
             Alert.alert(
-              '🛺 New Ride Request!',
-              `Pickup: ${ride.pickup_address}\nTo: ${ride.dropoff_address}\nFare: GHS ${ride.fare_ghs}`,
+              'New Ride Request!',
+              `Pickup: ${ride.pickup_address}\nTo: ${ride.dropoff_address}${stopsInfo}\nEstimated Fare: GHS ${ride.fare_ghs}`,
               [
                 { text: 'Decline', style: 'cancel' },
-                {
-                  text: 'Accept ✓',
-                  onPress: async () => {
-                    const { data: { user } } = await supabase.auth.getUser();
-                    if (!user) return;
-                    const { data: driver } = await supabase
-                      .from('drivers')
-                      .select('id')
-                      .eq('profile_id', user.id)
-                      .single();
-                    if (!driver) return;
-                    const { error } = await supabase
-                      .from('rides')
-                      .update({ driver_id: driver.id, status: 'accepted' })
-                      .eq('id', ride.id)
-                      .eq('status', 'requested');
-                    if (error) { Alert.alert('Error', error.message); return; }
-                    setActiveRide(ride);
-                    setRideStatus('accepted');
-                    Alert.alert('Ride Accepted!', 'Head to the pickup location.');
-                  },
-                },
+                { text: 'Accept', onPress: async () => {
+                  const { data: { user } } = await supabase.auth.getUser();
+                  if (!user) return;
+                  const { data: driver } = await supabase.from('drivers').select('id').eq('profile_id', user.id).single();
+                  if (!driver) return;
+                  const { error } = await supabase.from('rides').update({ driver_id: driver.id, status: 'accepted' }).eq('id', ride.id).eq('status', 'requested');
+                  if (error) { Alert.alert('Error', error.message); return; }
+                  setActiveRide(ride);
+                  setRideStatus('accepted');
+                  setCurrentStopIndex(0);
+                  setRecalculatedFare(null);
+                  Alert.alert('Ride Accepted!', 'Head to the pickup location.');
+                }},
               ]
             );
           }
+        })
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides' }, async (payload) => {
+          const ride = payload.new;
+          if (activeRide && ride.id === activeRide.id) {
+            setActiveRide(ride);
+            setRideStatus(ride.status);
+            if (ride.status === 'in_progress') {
+              // Save pickup location for distance calculation
+              if (location) setPickupLocation(location);
+              Alert.alert('Rider Confirmed!', 'Ride has started.');
+            }
+            if (ride.status === 'completed') {
+              setDailyEarnings(prev => prev + (ride.final_fare_ghs || ride.fare_ghs));
+              setTotalRides(prev => prev + 1);
+              setActiveRide(null); setRideStatus('');
+              setDriverConfirmedPayment(false); setCurrentStopIndex(0);
+              setPickupLocation(null); setRecalculatedFare(null);
+              Alert.alert('Ride Complete!', `GHS ${ride.final_fare_ghs || ride.fare_ghs} earned!`);
+              await subscribeToRideRequests(driverId);
+            }
+          }
         });
-      await channel.subscribe((status) => {
-        console.log('Subscription status:', status);
-      });
+      await channel.subscribe((status) => console.log('Subscription status:', status));
       rideSubscription.current = channel;
-      console.log('Subscribed to ride requests for driver:', driverId);
-    } catch (error) {
-      console.error('Subscription error:', error);
-    }
+    } catch (error) { console.error('Subscription error:', error); }
   };
 
   const toggleOnlineStatus = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data: driver } = await supabase
-        .from('drivers')
-        .select('id')
-        .eq('profile_id', user.id)
-        .single();
+      const { data: driver } = await supabase.from('drivers').select('id').eq('profile_id', user.id).single();
       if (!driver) { Alert.alert('Error', 'Driver profile not found.'); return; }
       const newStatus = !isOnline;
       setIsOnline(newStatus);
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
       setLocation(coords);
-      await supabase
-        .from('drivers')
-        .update({ is_online: newStatus, current_lat: coords.latitude, current_lng: coords.longitude })
-        .eq('id', driver.id);
+      await supabase.from('drivers').update({ is_online: newStatus, current_lat: coords.latitude, current_lng: coords.longitude }).eq('id', driver.id);
       if (newStatus) {
         await subscribeToRideRequests(driver.id);
         locationInterval.current = setInterval(async () => {
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
           const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
           setLocation(coords);
-          await supabase
-            .from('drivers')
-            .update({ current_lat: coords.latitude, current_lng: coords.longitude })
-            .eq('id', driver.id);
+          await supabase.from('drivers').update({ current_lat: coords.latitude, current_lng: coords.longitude }).eq('id', driver.id);
         }, 5000);
         Alert.alert('You are Online!', 'You will now receive ride requests.');
       } else {
         if (locationInterval.current) clearInterval(locationInterval.current);
-        if (rideSubscription.current) {
-          await supabase.removeChannel(rideSubscription.current);
-          rideSubscription.current = null;
-        }
+        if (rideSubscription.current) { await supabase.removeChannel(rideSubscription.current); rideSubscription.current = null; }
         Alert.alert('You are Offline', 'You will not receive ride requests.');
       }
-    } catch (error) {
-      Alert.alert('Error', 'Could not update status.');
+    } catch (error) { Alert.alert('Error', 'Could not update status.'); }
+  };
+
+  const arrivedAtPickup = async () => {
+    if (!activeRide) return;
+    const { error } = await supabase.from('rides').update({ status: 'arrived_pickup' }).eq('id', activeRide.id);
+    if (error) { Alert.alert('Error', error.message); return; }
+    setRideStatus('arrived_pickup');
+    Alert.alert('Arrived at Pickup!', 'Waiting for rider to confirm...');
+  };
+
+  const arrivedAtStop = async () => {
+    if (!activeRide) return;
+    const stops = activeRide.stops || [];
+    const nextStopIndex = currentStopIndex + 1;
+    const updatedStops = stops.map((stop: any, index: number) =>
+      index === currentStopIndex ? { ...stop, completed: true } : stop
+    );
+    await supabase.from('rides').update({ stops: updatedStops, current_stop: nextStopIndex }).eq('id', activeRide.id);
+    setCurrentStopIndex(nextStopIndex);
+    setActiveRide({ ...activeRide, stops: updatedStops });
+    if (nextStopIndex < stops.length) {
+      Alert.alert('Stop Completed!', `Moving to next stop: ${stops[nextStopIndex].address}`);
+    } else {
+      Alert.alert('All Stops Done!', 'Now head to the final destination.');
     }
   };
 
-  const advanceRideStatus = async () => {
-    if (!activeRide) return;
-    const statusFlow: { [key: string]: string } = {
-      accepted: 'in_progress',
-      in_progress: 'completed',
-    };
-    const nextStatus = statusFlow[rideStatus];
-    if (!nextStatus) return;
-    const { error } = await supabase
-      .from('rides')
-      .update({
-        status: nextStatus,
-        ...(nextStatus === 'completed' ? { completed_at: new Date().toISOString() } : {}),
-      })
-      .eq('id', activeRide.id);
-    if (error) { Alert.alert('Error', error.message); return; }
-    setRideStatus(nextStatus);
-    if (nextStatus === 'completed') {
+  const reachedDestination = async () => {
+    if (!activeRide || !location) return;
+
+    // Calculate actual distance from pickup to current location
+    const startLat = activeRide.pickup_lat;
+    const startLng = activeRide.pickup_lng;
+    const actualDistanceKm = calculateDistance(startLat, startLng, location.latitude, location.longitude);
+    const stops = activeRide.stops || [];
+    const newFare = calculateFare(actualDistanceKm, stops.length);
+    const originalFare = activeRide.fare_ghs;
+    const fareDiff = Math.abs(newFare - originalFare);
+
+    setRecalculatedFare(newFare);
+
+    // Update ride with actual location and recalculated fare
+    await supabase.from('rides').update({
+      actual_dropoff_lat: location.latitude,
+      actual_dropoff_lng: location.longitude,
+      actual_distance_km: Math.round(actualDistanceKm * 100) / 100,
+      final_fare_ghs: newFare,
+      status: 'payment_pending',
+    }).eq('id', activeRide.id);
+
+    setRideStatus('payment_pending');
+
+    if (fareDiff > 0.5) {
+      const direction = newFare > originalFare ? 'increased' : 'decreased';
       Alert.alert(
-        'Ride Completed! 🎉',
-        `Fare: GHS ${activeRide.fare_ghs}\nPayment: ${activeRide.payment_method?.toUpperCase()}`,
-        [{ text: 'Done', onPress: () => { setActiveRide(null); setRideStatus(''); setDailyEarnings(prev => prev + activeRide.fare_ghs); setTotalRides(prev => prev + 1); } }]
+        'Fare Recalculated',
+        `Based on actual distance (${Math.round(actualDistanceKm * 10) / 10} km), fare has ${direction} from GHS ${originalFare} to GHS ${newFare}.\n\nWaiting for rider to accept new fare.`
       );
+    } else {
+      Alert.alert('Destination Reached!', `Fare: GHS ${newFare}. Confirm payment with rider.`);
+    }
+  };
+
+  const confirmPaymentReceived = async () => {
+    if (!activeRide) return;
+    setDriverConfirmedPayment(true);
+    const { data: ride } = await supabase.from('rides').select('rider_confirmed_payment, fare_accepted').eq('id', activeRide.id).single();
+
+    if (!ride?.fare_accepted && recalculatedFare !== activeRide.fare_ghs) {
+      Alert.alert('Waiting', 'Waiting for rider to accept the recalculated fare...');
+      await supabase.from('rides').update({ driver_confirmed_payment: true }).eq('id', activeRide.id);
+      return;
+    }
+
+    if (ride?.rider_confirmed_payment) {
+      await supabase.from('rides').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', activeRide.id);
+    } else {
+      await supabase.from('rides').update({ driver_confirmed_payment: true }).eq('id', activeRide.id);
+      Alert.alert('Payment Confirmed!', 'Waiting for rider to confirm...');
     }
   };
 
   const getStatusLabel = () => {
     if (rideStatus === 'accepted') return 'Heading to Pickup';
-    if (rideStatus === 'in_progress') return 'Rider On Board';
+    if (rideStatus === 'arrived_pickup') return 'Arrived — Waiting for Rider';
+    if (rideStatus === 'in_progress') {
+      const stops = activeRide?.stops || [];
+      if (stops.length > 0 && currentStopIndex < stops.length) return `Stop ${currentStopIndex + 1}: ${stops[currentStopIndex].address}`;
+      return 'Heading to Final Destination';
+    }
+    if (rideStatus === 'payment_pending') return 'Confirm Payment';
     return '';
   };
 
-  const getNextButtonLabel = () => {
-    if (rideStatus === 'accepted') return 'Picked Up Rider →';
-    if (rideStatus === 'in_progress') return 'Complete Ride ✓';
-    return '';
+  const hasMoreStops = () => {
+    const stops = activeRide?.stops || [];
+    return rideStatus === 'in_progress' && currentStopIndex < stops.length;
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.replace('/');
-  };
+  const handleLogout = async () => { await supabase.auth.signOut(); router.replace('/'); };
+
+  const displayFare = recalculatedFare || activeRide?.fare_ghs;
 
   return (
     <View style={styles.container}>
-      {/* Stats Bar */}
       <View style={styles.statsBar}>
         <View style={styles.statItem}>
           <Text style={styles.statValue}>GHS {dailyEarnings.toFixed(2)}</Text>
@@ -244,26 +289,74 @@ export default function DriverHomeScreen() {
           <Text style={styles.statLabel}>Total Rides</Text>
         </View>
         <View style={styles.statItem}>
-          <Text style={styles.statValue}>⭐ {rating.toFixed(1)}</Text>
+          <Text style={styles.statValue}>★ {rating.toFixed(1)}</Text>
           <Text style={styles.statLabel}>Rating</Text>
         </View>
       </View>
 
-      {/* Active Ride Banner */}
       {activeRide && (
         <View style={styles.activeBanner}>
-          <Text style={styles.activeBannerTitle}>🛺 {getStatusLabel()}</Text>
+          <Text style={styles.activeBannerTitle}>{getStatusLabel()}</Text>
           <Text style={styles.activeBannerText}>To: {activeRide.dropoff_address}</Text>
-          <Text style={styles.activeBannerFare}>
-            GHS {activeRide.fare_ghs} · {activeRide.payment_method?.toUpperCase()}
-          </Text>
-          <TouchableOpacity style={styles.advanceButton} onPress={advanceRideStatus}>
-            <Text style={styles.advanceButtonText}>{getNextButtonLabel()}</Text>
-          </TouchableOpacity>
+          {activeRide.stops?.length > 0 && (
+            <Text style={styles.activeBannerStops}>
+              {activeRide.stops.filter((s: any) => s.completed).length}/{activeRide.stops.length} stops completed
+            </Text>
+          )}
+          <View style={styles.fareRow}>
+            <Text style={styles.activeBannerFare}>
+              GHS {displayFare}
+              {recalculatedFare && recalculatedFare !== activeRide.fare_ghs && (
+                <Text style={styles.originalFare}> (was GHS {activeRide.fare_ghs})</Text>
+              )}
+            </Text>
+            <Text style={styles.activeBannerPayment}>{activeRide.payment_method?.toUpperCase()}</Text>
+          </View>
+
+          {rideStatus === 'accepted' && (
+            <TouchableOpacity style={styles.actionBtn} onPress={arrivedAtPickup}>
+              <Text style={styles.actionBtnText}>Arrived at Pickup</Text>
+            </TouchableOpacity>
+          )}
+          {rideStatus === 'arrived_pickup' && (
+            <View style={styles.waitingBadge}>
+              <Text style={styles.waitingText}>Waiting for rider to confirm pickup...</Text>
+            </View>
+          )}
+          {rideStatus === 'in_progress' && (
+            hasMoreStops() ? (
+              <TouchableOpacity style={styles.actionBtn} onPress={arrivedAtStop}>
+                <Text style={styles.actionBtnText}>Arrived at Stop {currentStopIndex + 1}</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#1D9E75' }]} onPress={reachedDestination}>
+                <Text style={styles.actionBtnText}>Reached Final Destination</Text>
+              </TouchableOpacity>
+            )
+          )}
+          {rideStatus === 'payment_pending' && (
+            <View>
+              <Text style={styles.paymentInstructions}>
+                {activeRide.payment_method === 'cash'
+                  ? `Collect GHS ${displayFare} cash from rider`
+                  : `Go Cash: GHS ${displayFare}`}
+              </Text>
+              {!driverConfirmedPayment ? (
+                <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#1D9E75' }]} onPress={confirmPaymentReceived}>
+                  <Text style={styles.actionBtnText}>
+                    {activeRide.payment_method === 'cash' ? 'Cash Received' : 'Confirm Payment'}
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.waitingBadge}>
+                  <Text style={styles.waitingText}>Waiting for rider to confirm payment...</Text>
+                </View>
+              )}
+            </View>
+          )}
         </View>
       )}
 
-      {/* Map */}
       <View style={styles.mapContainer}>
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -271,48 +364,31 @@ export default function DriverHomeScreen() {
             <Text style={styles.loadingText}>Getting your location...</Text>
           </View>
         ) : (
-          <MapView
-            ref={mapRef}
-            style={styles.map}
-            initialRegion={{
-              latitude: location?.latitude || 7.3349,
-              longitude: location?.longitude || -2.3123,
-              latitudeDelta: 0.01,
-              longitudeDelta: 0.01,
-            }}
-          >
-            <UrlTile
-              urlTemplate="https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
-              maximumZ={19}
-              flipY={false}
-            />
-            {location && (
-              <Marker coordinate={location} title="You are here" pinColor={isOnline ? '#1D9E75' : '#999'} />
-            )}
+          <MapView ref={mapRef} style={styles.map}
+            initialRegion={{ latitude: location?.latitude || 7.3349, longitude: location?.longitude || -2.3123, latitudeDelta: 0.01, longitudeDelta: 0.01 }}>
+            <UrlTile urlTemplate="https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png" maximumZ={19} flipY={false} />
+            {location && <Marker coordinate={location} title="You are here" pinColor={isOnline ? '#1D9E75' : '#999'} />}
           </MapView>
         )}
       </View>
 
-      {/* Bottom Panel */}
       <View style={styles.bottomPanel}>
         <TouchableOpacity
           style={[styles.onlineButton, isOnline ? styles.onlineActive : styles.onlineInactive]}
           onPress={toggleOnlineStatus}
           disabled={!!activeRide}
         >
-          <Text style={styles.onlineButtonText}>
-            {isOnline ? '🟢 Go Offline' : '⚫ Go Online'}
-          </Text>
+          <Text style={styles.onlineButtonText}>{isOnline ? 'Go Offline' : 'Go Online'}</Text>
         </TouchableOpacity>
         <View style={styles.actionRow}>
-          <TouchableOpacity
-            style={styles.reportButton}
-            onPress={() => router.push('/driver/report')}
-          >
-            <Text style={styles.reportButtonText}>📊 Report</Text>
+          <TouchableOpacity style={styles.profileButton} onPress={() => router.push('/driver/profile')}>
+            <Text style={styles.profileButtonText}>Profile</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.reportButton} onPress={() => router.push('/driver/report')}>
+            <Text style={styles.reportButtonText}>Report</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.switchButton} onPress={() => router.replace('/rider')}>
-            <Text style={styles.switchButtonText}>Switch to Rider</Text>
+            <Text style={styles.switchButtonText}>Rider Mode</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
             <Text style={styles.logoutButtonText}>Logout</Text>
@@ -325,22 +401,23 @@ export default function DriverHomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
-  statsBar: {
-    flexDirection: 'row',
-    backgroundColor: '#1D9E75',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    justifyContent: 'space-between',
-  },
+  statsBar: { flexDirection: 'row', backgroundColor: '#1D9E75', paddingVertical: 12, paddingHorizontal: 16, justifyContent: 'space-between' },
   statItem: { alignItems: 'center' },
   statValue: { fontSize: 16, fontWeight: 'bold', color: '#fff' },
   statLabel: { fontSize: 11, color: '#E1F5EE', marginTop: 2 },
   activeBanner: { backgroundColor: '#185FA5', padding: 14, margin: 10, borderRadius: 10 },
-  activeBannerTitle: { fontSize: 16, fontWeight: 'bold', color: '#fff', marginBottom: 4 },
+  activeBannerTitle: { fontSize: 15, fontWeight: 'bold', color: '#fff', marginBottom: 4 },
   activeBannerText: { fontSize: 13, color: '#E6F1FB', marginBottom: 2 },
-  activeBannerFare: { fontSize: 13, color: '#E6F1FB', marginBottom: 10 },
-  advanceButton: { backgroundColor: '#fff', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
-  advanceButtonText: { color: '#185FA5', fontWeight: 'bold', fontSize: 14 },
+  activeBannerStops: { fontSize: 12, color: '#E6F1FB', marginBottom: 2, fontStyle: 'italic' },
+  fareRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  activeBannerFare: { fontSize: 14, color: '#fff', fontWeight: 'bold' },
+  originalFare: { fontSize: 11, color: '#E6F1FB', fontWeight: 'normal' },
+  activeBannerPayment: { fontSize: 12, color: '#E6F1FB' },
+  actionBtn: { backgroundColor: '#fff', paddingVertical: 10, borderRadius: 8, alignItems: 'center', marginTop: 4 },
+  actionBtnText: { color: '#185FA5', fontWeight: 'bold', fontSize: 14 },
+  waitingBadge: { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 8, borderRadius: 8, alignItems: 'center', marginTop: 4 },
+  waitingText: { color: '#E6F1FB', fontSize: 13, fontStyle: 'italic' },
+  paymentInstructions: { color: '#fff', fontSize: 13, marginBottom: 8, textAlign: 'center' },
   mapContainer: { flex: 1 },
   map: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -350,11 +427,13 @@ const styles = StyleSheet.create({
   onlineActive: { backgroundColor: '#FF3B30' },
   onlineInactive: { backgroundColor: '#1D9E75' },
   onlineButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  actionRow: { flexDirection: 'row', gap: 10 },
+  actionRow: { flexDirection: 'row', gap: 8 },
+  profileButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#EEEDFE' },
+  profileButtonText: { color: '#534AB7', fontWeight: '600', fontSize: 12 },
   reportButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FAEEDA' },
-  reportButtonText: { color: '#854F0B', fontWeight: '600', fontSize: 14 },
+  reportButtonText: { color: '#854F0B', fontWeight: '600', fontSize: 12 },
   switchButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E6F1FB' },
-  switchButtonText: { color: '#185FA5', fontWeight: '600', fontSize: 14 },
+  switchButtonText: { color: '#185FA5', fontWeight: '600', fontSize: 12 },
   logoutButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FFE5E5' },
-  logoutButtonText: { color: '#FF3B30', fontWeight: '600', fontSize: 14 },
+  logoutButtonText: { color: '#FF3B30', fontWeight: '600', fontSize: 12 },
 });
