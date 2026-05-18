@@ -11,6 +11,7 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function GoCashScreen() {
   const router = useRouter();
@@ -87,15 +88,13 @@ export default function GoCashScreen() {
     return '#185FA5';
   };
 
-  if (loading) {
-    return (
+  return (
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+    {loading ? (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#1D9E75" />
       </View>
-    );
-  }
-
-  return (
+    ) : (
     <ScrollView style={styles.container}>
       <View style={styles.walletCard}>
         <Text style={styles.walletLabel}>Go Cash Balance</Text>
@@ -162,10 +161,13 @@ export default function GoCashScreen() {
         <Text style={styles.backButtonText}>Back to Home</Text>
       </TouchableOpacity>
     </ScrollView>
+    )}
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   walletCard: { backgroundColor: '#1D9E75', margin: 16, borderRadius: 16, padding: 24, alignItems: 'center' },

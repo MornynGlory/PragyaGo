@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { applyDiscount, DiscountResult, recordDiscountUse } from '@/lib/discounts';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -6,7 +7,9 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,6 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, UrlTile } from 'react-native-maps';
 
 const PRAGYA_COLOR_MAP: { [key: string]: string } = {
@@ -37,6 +41,7 @@ const calculateETA = (driverLat: number, driverLng: number, riderLat: number, ri
 
 export default function RiderHomeScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
   const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,6 +65,17 @@ export default function RiderHomeScreen() {
   const [finalFare, setFinalFare] = useState<number | null>(null);
   const [showFareAcceptModal, setShowFareAcceptModal] = useState(false);
   const rideSubscription = useRef<any>(null);
+  const driverLocationSubscription = useRef<any>(null);
+  const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const destDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [driverLocation, setDriverLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [discountResult, setDiscountResult] = useState<DiscountResult | null>(null);
+  const [originalFare, setOriginalFare] = useState<number | null>(null);
+  const [destinationSuggestions, setDestinationSuggestions] = useState<any[]>([]);
+  const [loadingDestSuggestions, setLoadingDestSuggestions] = useState(false);
+  const [stopSuggestions, setStopSuggestions] = useState<any[]>([]);
+  const [loadingStopSuggestions, setLoadingStopSuggestions] = useState(false);
 
   useEffect(() => {
     requestLocationPermission();
@@ -68,6 +84,9 @@ export default function RiderHomeScreen() {
     return () => {
       clearInterval(interval);
       if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
+      if (driverLocationSubscription.current) supabase.removeChannel(driverLocationSubscription.current);
+      if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
+      if (stopDebounceRef.current) clearTimeout(stopDebounceRef.current);
     };
   }, []);
 
@@ -82,6 +101,7 @@ export default function RiderHomeScreen() {
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
       setLocation(coords);
+      locationRef.current = coords;
       setLoading(false);
       mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.05, longitudeDelta: 0.05 });
     } catch { setLoading(false); }
@@ -107,25 +127,98 @@ export default function RiderHomeScreen() {
     } catch (error) { console.error('Error fetching driver info:', error); }
   };
 
+  const subscribeToDriverLocation = async (driverId: string) => {
+    if (driverLocationSubscription.current) await supabase.removeChannel(driverLocationSubscription.current);
+    const channel = supabase
+      .channel(`driver-location-${driverId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'drivers', filter: `id=eq.${driverId}` },
+        (payload) => {
+          const driver = payload.new;
+          if (driver.current_lat && driver.current_lng) {
+            const coords = { latitude: driver.current_lat, longitude: driver.current_lng };
+            setDriverLocation(coords);
+            if (locationRef.current) {
+              setEta(calculateETA(driver.current_lat, driver.current_lng, locationRef.current.latitude, locationRef.current.longitude));
+            }
+            mapRef.current?.animateCamera({ center: coords }, { duration: 500 });
+          }
+        });
+    channel.subscribe();
+    driverLocationSubscription.current = channel;
+  };
+
+  const fetchLocationSuggestions = async (query: string, onResults: (r: any[]) => void, setLoading: (v: boolean) => void) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}+Ghana&format=json&limit=5&countrycodes=gh`);
+      const data = await res.json();
+      onResults(Array.isArray(data) ? data : []);
+    } catch {
+      onResults([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDestinationChange = (text: string) => {
+    setDestination(text);
+    setFareEstimate(null);
+    if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
+    if (text.length >= 3) {
+      destDebounceRef.current = setTimeout(() => fetchLocationSuggestions(text, setDestinationSuggestions, setLoadingDestSuggestions), 500);
+    } else {
+      setDestinationSuggestions([]);
+    }
+  };
+
+  const handleStopChange = (text: string) => {
+    setNewStop(text);
+    if (stopDebounceRef.current) clearTimeout(stopDebounceRef.current);
+    if (text.length >= 3) {
+      stopDebounceRef.current = setTimeout(() => fetchLocationSuggestions(text, setStopSuggestions, setLoadingStopSuggestions), 500);
+    } else {
+      setStopSuggestions([]);
+    }
+  };
+
   const addStop = () => {
     if (!newStop.trim()) { Alert.alert('Enter a stop location'); return; }
     if (stops.length >= 3) { Alert.alert('Maximum 3 stops allowed'); return; }
     setStops([...stops, newStop.trim()]);
     setNewStop('');
-    if (fareEstimate) setFareEstimate(prev => prev ? prev + 2 : prev);
+    if (fareEstimate) {
+      setFareEstimate(prev => prev ? Math.round((prev + 2) * 10) / 10 : prev);
+      if (originalFare !== null) setOriginalFare(prev => prev !== null ? Math.round((prev + 2) * 10) / 10 : prev);
+    }
   };
 
   const removeStop = (index: number) => {
     setStops(stops.filter((_, i) => i !== index));
-    if (fareEstimate) setFareEstimate(prev => prev ? prev - 2 : prev);
+    if (fareEstimate) {
+      setFareEstimate(prev => prev ? Math.round((prev - 2) * 10) / 10 : prev);
+      if (originalFare !== null) setOriginalFare(prev => prev !== null ? Math.round((prev - 2) * 10) / 10 : prev);
+    }
   };
 
-  const estimateFare = () => {
+  const estimateFare = async () => {
     if (!destination.trim()) { Alert.alert('Enter Destination', 'Please enter your final destination.'); return; }
     const estimatedKm = Math.random() * 5 + 1;
-    const baseFare = 3 + estimatedKm * 1.5;
-    const stopsFare = stops.length * 2;
-    setFareEstimate(Math.round((baseFare + stopsFare) * 10) / 10);
+    const baseFare = Math.round((3 + estimatedKm * 1.5 + stops.length * 2) * 10) / 10;
+    setDiscountResult(null);
+    setOriginalFare(null);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const result = await applyDiscount(user.id, destination, baseFare);
+      if (result.discount) {
+        setDiscountResult(result);
+        setOriginalFare(baseFare);
+        setFareEstimate(result.finalFare);
+      } else {
+        setFareEstimate(baseFare);
+      }
+    } else {
+      setFareEstimate(baseFare);
+    }
   };
 
   const subscribeToRideUpdates = async (rideId: string) => {
@@ -140,6 +233,7 @@ export default function RiderHomeScreen() {
 
           if (ride.status === 'accepted' && ride.driver_id) {
             await fetchDriverInfo(ride.driver_id);
+            await subscribeToDriverLocation(ride.driver_id);
           } else if (ride.status === 'arrived_pickup') {
             setShowDriverCard(false);
             Alert.alert(
@@ -177,6 +271,8 @@ export default function RiderHomeScreen() {
             setRiderConfirmedPayment(false);
             setFinalFare(null);
             if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
+            if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
+            setDriverLocation(null);
           }
         });
     await channel.subscribe();
@@ -234,14 +330,20 @@ export default function RiderHomeScreen() {
           status: 'requested', fare_ghs: fareEstimate,
           payment_method: paymentMethod,
           created_at: new Date().toISOString(),
+          ...(discountResult?.discount ? {
+            discount_id: discountResult.discount.id,
+            discount_amount: discountResult.discountAmount,
+            discounted_fare: discountResult.finalFare,
+          } : {}),
         }])
         .select().single();
       if (error) { Alert.alert('Error', error.message); }
       else {
         setCurrentRide(ride); setRideStatus('requested');
         await subscribeToRideUpdates(ride.id);
+        if (discountResult?.discount) await recordDiscountUse(discountResult.discount.id);
         Alert.alert('Ride Requested 🛺', stops.length > 0 ? `Finding a driver... ${stops.length} stop(s) added.` : 'Finding a nearby driver...');
-        setDestination(''); setStops([]); setFareEstimate(null);
+        setDestination(''); setStops([]); setFareEstimate(null); setDiscountResult(null); setOriginalFare(null);
       }
     } catch (error) { Alert.alert('Error', 'Could not request ride.'); }
     finally { setRequesting(false); }
@@ -251,8 +353,9 @@ export default function RiderHomeScreen() {
     if (!currentRide) return;
     await supabase.from('rides').update({ status: 'cancelled' }).eq('id', currentRide.id);
     setCurrentRide(null); setRideStatus(''); setDriverInfo(null);
-    setShowDriverCard(false); setEta(null); setFinalFare(null);
+    setShowDriverCard(false); setEta(null); setFinalFare(null); setDriverLocation(null);
     if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
+    if (driverLocationSubscription.current) { await supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
     Alert.alert('Ride Cancelled', 'Your ride has been cancelled.');
   };
 
@@ -294,7 +397,8 @@ export default function RiderHomeScreen() {
   const displayFare = finalFare || currentRide?.fare_ghs;
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'height' : 'padding'}>
       <View style={styles.mapContainer}>
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -305,10 +409,27 @@ export default function RiderHomeScreen() {
           <MapView ref={mapRef} style={styles.map}
             initialRegion={{ latitude: location?.latitude || 7.3349, longitude: location?.longitude || -2.3123, latitudeDelta: 0.05, longitudeDelta: 0.05 }}>
             <UrlTile urlTemplate="https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png" maximumZ={19} flipY={false} />
-            {location && <Marker coordinate={location} title="You are here" pinColor="#2563eb" />}
+            {location && (
+              <Marker coordinate={location} title="You are here">
+                <View style={styles.riderMarker}>
+                  <View style={styles.riderMarkerInner} />
+                </View>
+              </Marker>
+            )}
             {nearbyDrivers.map((driver) => (
-              <Marker key={driver.id} coordinate={{ latitude: driver.current_lat, longitude: driver.current_lng }} pinColor="#1D9E75" />
+              <Marker key={driver.id} coordinate={{ latitude: driver.current_lat, longitude: driver.current_lng }}>
+                <View style={styles.tricycleMarker}>
+                  <Text style={styles.tricycleEmoji}>🛺</Text>
+                </View>
+              </Marker>
             ))}
+            {driverLocation && (
+              <Marker coordinate={driverLocation} title="Your Driver">
+                <View style={styles.tricycleMarker}>
+                  <Text style={styles.tricycleEmoji}>🛺</Text>
+                </View>
+              </Marker>
+            )}
           </MapView>
         )}
       </View>
@@ -355,7 +476,21 @@ export default function RiderHomeScreen() {
             {nearbyDrivers.length > 0 ? `🛺 ${nearbyDrivers.length} Pragya driver${nearbyDrivers.length > 1 ? 's' : ''} nearby` : '😔 No drivers nearby right now'}
           </Text>
           <Text style={styles.inputLabel}>Final Destination</Text>
-          <TextInput style={styles.input} placeholder="Enter final destination" value={destination} onChangeText={setDestination} placeholderTextColor="#999" />
+          <TextInput style={styles.input} placeholder="Enter final destination" value={destination} onChangeText={handleDestinationChange} placeholderTextColor="#999" />
+          {loadingDestSuggestions && <ActivityIndicator size="small" color="#2563eb" style={styles.suggestionsLoader} />}
+          {destinationSuggestions.length > 0 && (
+            <View style={styles.suggestionsCard}>
+              {destinationSuggestions.map((item, index) => (
+                <TouchableOpacity
+                  key={item.place_id ?? index}
+                  style={[styles.suggestionItem, index < destinationSuggestions.length - 1 && styles.suggestionItemBorder]}
+                  onPress={() => { setDestination(item.display_name); setDestinationSuggestions([]); }}
+                >
+                  <Text style={styles.suggestionText} numberOfLines={2}>{item.display_name}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
           {stops.length > 0 && (
             <View style={styles.stopsContainer}>
               <Text style={styles.stopsTitle}>Stops ({stops.length}/3)</Text>
@@ -371,11 +506,27 @@ export default function RiderHomeScreen() {
             </View>
           )}
           {stops.length < 3 && (
-            <View style={styles.addStopRow}>
-              <TextInput style={styles.stopInput} placeholder="Add a stop (optional)" value={newStop} onChangeText={setNewStop} placeholderTextColor="#999" />
-              <TouchableOpacity style={styles.addStopButton} onPress={addStop}>
-                <Text style={styles.addStopButtonText}>+ Add</Text>
-              </TouchableOpacity>
+            <View>
+              <View style={styles.addStopRow}>
+                <TextInput style={styles.stopInput} placeholder="Add a stop (optional)" value={newStop} onChangeText={handleStopChange} placeholderTextColor="#999" />
+                <TouchableOpacity style={styles.addStopButton} onPress={addStop}>
+                  <Text style={styles.addStopButtonText}>+ Add</Text>
+                </TouchableOpacity>
+              </View>
+              {loadingStopSuggestions && <ActivityIndicator size="small" color="#2563eb" style={styles.suggestionsLoader} />}
+              {stopSuggestions.length > 0 && (
+                <View style={styles.suggestionsCard}>
+                  {stopSuggestions.map((item, index) => (
+                    <TouchableOpacity
+                      key={item.place_id ?? index}
+                      style={[styles.suggestionItem, index < stopSuggestions.length - 1 && styles.suggestionItemBorder]}
+                      onPress={() => { setNewStop(item.display_name); setStopSuggestions([]); }}
+                    >
+                      <Text style={styles.suggestionText} numberOfLines={2}>{item.display_name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </View>
           )}
           {!fareEstimate && (
@@ -385,12 +536,20 @@ export default function RiderHomeScreen() {
           )}
           {fareEstimate && (
             <View style={styles.fareContainer}>
-              <View>
+              <View style={styles.fareInfo}>
                 <Text style={styles.fareLabel}>Estimated Fare</Text>
                 <Text style={styles.fareNote}>Final fare based on actual distance</Text>
                 {stops.length > 0 && <Text style={styles.fareBreakdown}>Includes {stops.length} stop{stops.length > 1 ? 's' : ''} (+GHS {stops.length * 2})</Text>}
+                {discountResult?.discount && (
+                  <Text style={styles.discountMessage}>{discountResult.message}</Text>
+                )}
               </View>
-              <Text style={styles.fareAmount}>GHS {fareEstimate}</Text>
+              <View style={styles.fareAmountContainer}>
+                {discountResult?.discount && originalFare !== null && (
+                  <Text style={styles.fareOriginal}>GHS {originalFare}</Text>
+                )}
+                <Text style={styles.fareAmount}>GHS {fareEstimate}</Text>
+              </View>
             </View>
           )}
           <View style={styles.paymentContainer}>
@@ -423,7 +582,7 @@ export default function RiderHomeScreen() {
 
       {/* Fare Accept Modal */}
       <Modal visible={showFareAcceptModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { paddingTop: insets.top }]}>
           <View style={styles.fareAcceptCard}>
             <Text style={styles.fareAcceptTitle}>Fare Updated</Text>
             <Text style={styles.fareAcceptSubtitle}>Based on your actual trip distance, the fare has been recalculated.</Text>
@@ -451,7 +610,7 @@ export default function RiderHomeScreen() {
 
       {/* Driver Card Modal */}
       <Modal visible={showDriverCard} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { paddingTop: insets.top }]}>
           <View style={styles.driverCard}>
             <Text style={styles.driverCardTitle}>Your Driver</Text>
             {eta && <View style={styles.etaBadge}><Text style={styles.etaText}>ETA: {eta}</Text></View>}
@@ -493,8 +652,8 @@ export default function RiderHomeScreen() {
 
       {/* Rating Modal */}
       <Modal visible={showRatingModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.ratingCard}>
+        <View style={[styles.modalOverlay, { paddingTop: insets.top }]}>
+          <View style={[styles.ratingCard, { paddingBottom: insets.bottom + 16 }]}>
             <Text style={styles.ratingTitle}>Rate Your Ride</Text>
             <Text style={styles.ratingSubtitle}>How was your experience?</Text>
             {driverInfo?.photo_url ? (
@@ -522,11 +681,13 @@ export default function RiderHomeScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   mapContainer: { flex: 1, minHeight: 300 },
   map: { flex: 1 },
@@ -564,9 +725,13 @@ const styles = StyleSheet.create({
   estimateButton: { backgroundColor: '#f0f0f0', paddingVertical: 10, borderRadius: 8, alignItems: 'center', marginBottom: 10 },
   estimateButtonText: { color: '#333', fontWeight: '600' },
   fareContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#E1F5EE', padding: 12, borderRadius: 8, marginBottom: 10 },
+  fareInfo: { flex: 1, marginRight: 8 },
   fareLabel: { fontSize: 14, color: '#085041', fontWeight: '600' },
   fareNote: { fontSize: 11, color: '#1D9E75', marginTop: 1 },
   fareBreakdown: { fontSize: 11, color: '#1D9E75', marginTop: 1 },
+  discountMessage: { fontSize: 12, color: '#085041', fontWeight: '600', marginTop: 4 },
+  fareAmountContainer: { alignItems: 'flex-end' },
+  fareOriginal: { fontSize: 13, color: '#999', textDecorationLine: 'line-through', marginBottom: 2 },
   fareAmount: { fontSize: 18, fontWeight: 'bold', color: '#1D9E75' },
   paymentContainer: { marginBottom: 12 },
   paymentLabel: { fontSize: 13, fontWeight: '600', color: '#333', marginBottom: 8 },
@@ -632,4 +797,13 @@ const styles = StyleSheet.create({
   submitRatingText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   skipRatingButton: { paddingVertical: 10 },
   skipRatingText: { color: '#999', fontSize: 14 },
+  suggestionsCard: { backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#e0e0e0', marginTop: -6, marginBottom: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 3, overflow: 'hidden' },
+  suggestionItem: { paddingHorizontal: 14, paddingVertical: 12 },
+  suggestionItemBorder: { borderBottomWidth: 0.5, borderBottomColor: '#eee' },
+  suggestionText: { fontSize: 13, color: '#333', lineHeight: 18 },
+  suggestionsLoader: { alignSelf: 'center', marginBottom: 6 },
+  riderMarker: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', borderWidth: 3, borderColor: '#2563eb', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.3, shadowRadius: 2, elevation: 3 },
+  riderMarkerInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#2563eb' },
+  tricycleMarker: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1D9E75', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 4 },
+  tricycleEmoji: { fontSize: 20 },
 });

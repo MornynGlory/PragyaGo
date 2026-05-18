@@ -11,6 +11,7 @@ import {
     TextInput,
     View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -108,6 +109,7 @@ export default function RegisterScreen() {
   };
 
   return (
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
     <ScrollView style={styles.container}>
       <View style={styles.content}>
         <Text style={styles.title}>Join PragyaGo</Text>
@@ -252,10 +254,12 @@ export default function RegisterScreen() {
         </Pressable>
       </View>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',

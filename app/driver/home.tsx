@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import MapView, { Marker, UrlTile } from 'react-native-maps';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number) => {
   const R = 6371;
@@ -32,6 +33,7 @@ const calculateFare = (distanceKm: number, stops: number) => {
 
 export default function DriverHomeScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
   const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [isOnline, setIsOnline] = useState(false);
@@ -47,6 +49,7 @@ export default function DriverHomeScreen() {
   const [recalculatedFare, setRecalculatedFare] = useState<number | null>(null);
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const rideSubscription = useRef<any>(null);
+  const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
 
   useEffect(() => {
     requestLocationPermission();
@@ -68,6 +71,7 @@ export default function DriverHomeScreen() {
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
       setLocation(coords);
+      locationRef.current = coords;
       setLoading(false);
       mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.01, longitudeDelta: 0.01 });
     } catch { setLoading(false); }
@@ -121,25 +125,22 @@ export default function DriverHomeScreen() {
             );
           }
         })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides' }, async (payload) => {
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides', filter: `driver_id=eq.${driverId}` }, async (payload) => {
           const ride = payload.new;
-          if (activeRide && ride.id === activeRide.id) {
-            setActiveRide(ride);
-            setRideStatus(ride.status);
-            if (ride.status === 'in_progress') {
-              // Save pickup location for distance calculation
-              if (location) setPickupLocation(location);
-              Alert.alert('Rider Confirmed!', 'Ride has started.');
-            }
-            if (ride.status === 'completed') {
-              setDailyEarnings(prev => prev + (ride.final_fare_ghs || ride.fare_ghs));
-              setTotalRides(prev => prev + 1);
-              setActiveRide(null); setRideStatus('');
-              setDriverConfirmedPayment(false); setCurrentStopIndex(0);
-              setPickupLocation(null); setRecalculatedFare(null);
-              Alert.alert('Ride Complete!', `GHS ${ride.final_fare_ghs || ride.fare_ghs} earned!`);
-              await subscribeToRideRequests(driverId);
-            }
+          setActiveRide(ride);
+          setRideStatus(ride.status);
+          if (ride.status === 'in_progress') {
+            if (locationRef.current) setPickupLocation(locationRef.current);
+            Alert.alert('Rider Confirmed!', 'Ride has started.');
+          }
+          if (ride.status === 'completed') {
+            setDailyEarnings(prev => prev + (ride.final_fare_ghs || ride.fare_ghs));
+            setTotalRides(prev => prev + 1);
+            setActiveRide(null); setRideStatus('');
+            setDriverConfirmedPayment(false); setCurrentStopIndex(0);
+            setPickupLocation(null); setRecalculatedFare(null);
+            Alert.alert('Ride Complete!', `GHS ${ride.final_fare_ghs || ride.fare_ghs} earned!`);
+            await subscribeToRideRequests(driverId);
           }
         });
       await channel.subscribe((status) => console.log('Subscription status:', status));
@@ -158,6 +159,7 @@ export default function DriverHomeScreen() {
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
       setLocation(coords);
+      locationRef.current = coords;
       await supabase.from('drivers').update({ is_online: newStatus, current_lat: coords.latitude, current_lng: coords.longitude }).eq('id', driver.id);
       if (newStatus) {
         await subscribeToRideRequests(driver.id);
@@ -165,6 +167,7 @@ export default function DriverHomeScreen() {
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
           const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
           setLocation(coords);
+          locationRef.current = coords;
           await supabase.from('drivers').update({ current_lat: coords.latitude, current_lng: coords.longitude }).eq('id', driver.id);
         }, 5000);
         Alert.alert('You are Online!', 'You will now receive ride requests.');
@@ -278,7 +281,7 @@ export default function DriverHomeScreen() {
   const displayFare = recalculatedFare || activeRide?.fare_ghs;
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <View style={styles.statsBar}>
         <View style={styles.statItem}>
           <Text style={styles.statValue}>GHS {dailyEarnings.toFixed(2)}</Text>
@@ -367,12 +370,18 @@ export default function DriverHomeScreen() {
           <MapView ref={mapRef} style={styles.map}
             initialRegion={{ latitude: location?.latitude || 7.3349, longitude: location?.longitude || -2.3123, latitudeDelta: 0.01, longitudeDelta: 0.01 }}>
             <UrlTile urlTemplate="https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png" maximumZ={19} flipY={false} />
-            {location && <Marker coordinate={location} title="You are here" pinColor={isOnline ? '#1D9E75' : '#999'} />}
+            {location && (
+              <Marker coordinate={location} title="You are here">
+                <View style={[styles.tricycleMarker, !isOnline && styles.tricycleMarkerOffline]}>
+                  <Text style={styles.tricycleEmoji}>🛺</Text>
+                </View>
+              </Marker>
+            )}
           </MapView>
         )}
       </View>
 
-      <View style={styles.bottomPanel}>
+      <View style={[styles.bottomPanel, { paddingBottom: insets.bottom + 16 }]}>
         <TouchableOpacity
           style={[styles.onlineButton, isOnline ? styles.onlineActive : styles.onlineInactive]}
           onPress={toggleOnlineStatus}
@@ -395,11 +404,12 @@ export default function DriverHomeScreen() {
           </TouchableOpacity>
         </View>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: '#1D9E75' },
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   statsBar: { flexDirection: 'row', backgroundColor: '#1D9E75', paddingVertical: 12, paddingHorizontal: 16, justifyContent: 'space-between' },
   statItem: { alignItems: 'center' },
@@ -436,4 +446,7 @@ const styles = StyleSheet.create({
   switchButtonText: { color: '#185FA5', fontWeight: '600', fontSize: 12 },
   logoutButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FFE5E5' },
   logoutButtonText: { color: '#FF3B30', fontWeight: '600', fontSize: 12 },
+  tricycleMarker: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1D9E75', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 4 },
+  tricycleMarkerOffline: { backgroundColor: '#999' },
+  tricycleEmoji: { fontSize: 20 },
 });

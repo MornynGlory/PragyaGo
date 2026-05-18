@@ -11,6 +11,7 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const COMMISSION_RATE = 15; // 15%
 
@@ -142,15 +143,13 @@ export default function DriverReportScreen() {
     }
   };
 
-  if (loading) {
-    return (
+  return (
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+    {loading ? (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#1D9E75" />
       </View>
-    );
-  }
-
-  return (
+    ) : (
     <ScrollView style={styles.container}>
       <Text style={styles.pageTitle}>Daily Report</Text>
       <Text style={styles.pageDate}>{new Date().toDateString()}</Text>
@@ -257,10 +256,13 @@ export default function DriverReportScreen() {
         <Text style={styles.backButtonText}>← Back to Home</Text>
       </TouchableOpacity>
     </ScrollView>
+    )}
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   pageTitle: { fontSize: 24, fontWeight: 'bold', color: '#333', margin: 16, marginBottom: 4 },
