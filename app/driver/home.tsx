@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { autoAssignDriverZone } from '@/lib/zones';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -50,6 +51,8 @@ export default function DriverHomeScreen() {
   const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const rideSubscription = useRef<any>(null);
   const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const [currentZoneId, setCurrentZoneId] = useState<string | null>(null);
+  const currentZoneIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     requestLocationPermission();
@@ -86,6 +89,8 @@ export default function DriverHomeScreen() {
         setRating(driver.rating || 0);
         setTotalRides(driver.total_rides || 0);
         setIsOnline(driver.is_online || false);
+        setCurrentZoneId(driver.zone_id || null);
+        currentZoneIdRef.current = driver.zone_id || null;
         if (driver.is_online) await subscribeToRideRequests(driver.id);
       }
       const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -161,6 +166,12 @@ export default function DriverHomeScreen() {
       setLocation(coords);
       locationRef.current = coords;
       await supabase.from('drivers').update({ is_online: newStatus, current_lat: coords.latitude, current_lng: coords.longitude }).eq('id', driver.id);
+      const zoneResult = await autoAssignDriverZone(driver.id, coords.latitude, coords.longitude, currentZoneIdRef.current);
+      if (zoneResult.changed && zoneResult.newZone) {
+        setCurrentZoneId(zoneResult.newZone.id);
+        currentZoneIdRef.current = zoneResult.newZone.id;
+        Alert.alert('Zone Updated', 'You are now in ' + zoneResult.newZone.name);
+      }
       if (newStatus) {
         await subscribeToRideRequests(driver.id);
         locationInterval.current = setInterval(async () => {
@@ -169,6 +180,12 @@ export default function DriverHomeScreen() {
           setLocation(coords);
           locationRef.current = coords;
           await supabase.from('drivers').update({ current_lat: coords.latitude, current_lng: coords.longitude }).eq('id', driver.id);
+          const zoneResult = await autoAssignDriverZone(driver.id, coords.latitude, coords.longitude, currentZoneIdRef.current);
+          if (zoneResult.changed && zoneResult.newZone) {
+            setCurrentZoneId(zoneResult.newZone.id);
+            currentZoneIdRef.current = zoneResult.newZone.id;
+            Alert.alert('Zone Updated', 'You are now in ' + zoneResult.newZone.name);
+          }
         }, 5000);
         Alert.alert('You are Online!', 'You will now receive ride requests.');
       } else {
