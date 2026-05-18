@@ -3,7 +3,6 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
     ActivityIndicator,
-    Alert,
     ScrollView,
     StyleSheet,
     Text,
@@ -18,7 +17,6 @@ const COMMISSION_RATE = 15; // 15%
 export default function DriverReportScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
   const [todayRides, setTodayRides] = useState<any[]>([]);
   const [cashRides, setCashRides] = useState(0);
   const [cashCollected, setCashCollected] = useState(0);
@@ -27,8 +25,6 @@ export default function DriverReportScreen() {
   const [commissionOwed, setCommissionOwed] = useState(0);
   const [notes, setNotes] = useState('');
   const [previousReports, setPreviousReports] = useState<any[]>([]);
-  const [driverId, setDriverId] = useState<string | null>(null);
-  const [alreadySubmitted, setAlreadySubmitted] = useState(false);
 
   useEffect(() => {
     fetchTodayData();
@@ -46,7 +42,6 @@ export default function DriverReportScreen() {
         .single();
 
       if (!driver) return;
-      setDriverId(driver.id);
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -73,16 +68,6 @@ export default function DriverReportScreen() {
         setCommissionOwed(total * COMMISSION_RATE / 100);
       }
 
-      // Check if already submitted today
-      const { data: existingReport } = await supabase
-        .from('driver_daily_reports')
-        .select('id')
-        .eq('driver_id', driver.id)
-        .eq('report_date', today.toISOString().split('T')[0])
-        .single();
-
-      if (existingReport) setAlreadySubmitted(true);
-
       // Fetch previous reports
       const { data: reports } = await supabase
         .from('driver_daily_reports')
@@ -96,50 +81,6 @@ export default function DriverReportScreen() {
       console.error('Error fetching report data:', error);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const submitReport = async () => {
-    if (!driverId) return;
-    if (alreadySubmitted) {
-      Alert.alert('Already Submitted', 'You have already submitted your report for today.');
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const { error } = await supabase
-        .from('driver_daily_reports')
-        .insert([{
-          driver_id: driverId,
-          report_date: today,
-          total_cash_rides: cashRides,
-          total_cash_collected: cashCollected,
-          total_go_cash_rides: goCashRides,
-          total_go_cash_earned: goCashEarned,
-          commission_rate: COMMISSION_RATE,
-          commission_owed: commissionOwed,
-          commission_paid: false,
-          notes: notes,
-          created_at: new Date().toISOString(),
-        }]);
-
-      if (error) {
-        Alert.alert('Error', error.message);
-        return;
-      }
-
-      setAlreadySubmitted(true);
-      Alert.alert(
-        'Report Submitted! ✅',
-        `Daily report submitted successfully.\nCommission owed: GHS ${commissionOwed.toFixed(2)}\nPlease pay your commission to PragyaGo.`
-      );
-      fetchTodayData();
-    } catch (error) {
-      Alert.alert('Error', 'Could not submit report.');
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -207,25 +148,6 @@ export default function DriverReportScreen() {
           placeholderTextColor="#999"
         />
       </View>
-
-      {/* Submit Button */}
-      {!alreadySubmitted ? (
-        <TouchableOpacity
-          style={[styles.submitButton, submitting && styles.buttonDisabled]}
-          onPress={submitReport}
-          disabled={submitting}
-        >
-          {submitting ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.submitButtonText}>Submit Daily Report</Text>
-          )}
-        </TouchableOpacity>
-      ) : (
-        <View style={styles.submittedBadge}>
-          <Text style={styles.submittedText}>✅ Report submitted for today</Text>
-        </View>
-      )}
 
       {/* Previous Reports */}
       {previousReports.length > 0 && (
@@ -308,25 +230,6 @@ const styles = StyleSheet.create({
     color: '#333',
     textAlignVertical: 'top',
   },
-  submitButton: {
-    backgroundColor: '#1D9E75',
-    margin: 16,
-    marginTop: 0,
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  buttonDisabled: { opacity: 0.6 },
-  submitButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  submittedBadge: {
-    backgroundColor: '#E1F5EE',
-    margin: 16,
-    marginTop: 0,
-    padding: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  submittedText: { color: '#085041', fontSize: 15, fontWeight: '600' },
   reportRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
