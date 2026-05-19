@@ -1,7 +1,12 @@
 {
   "expo": {
     "name": "PragyaGo",
-    "slug": "PragyaGo",
+    "slug": "pragyago",
+    "extra": {
+      "eas": {
+        "projectId": "37f04c7b-e897-46db-9d14-0afed27a55f4"
+      }
+    },
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -13,13 +18,12 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#1D9E75"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.mornynglory.pragyago"
     },
     "web": {
       "output": "static",
@@ -41,7 +45,7 @@
       ]
     ],
     "experiments": {
-      "typedRoutes": true,
+      "typedRoutes": false,
       "reactCompiler": true
     }
   }

@@ -1,5 +1,4 @@
 import { supabase } from '@/lib/supabase';
-import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -19,7 +18,6 @@ type TabName = 'wallet' | 'gocash' | 'history';
 type Network = 'MTN' | 'Telecel' | 'AirtelTigo';
 
 export default function DriverWalletScreen() {
-  const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabName>('wallet');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -230,14 +228,6 @@ export default function DriverWalletScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Text style={styles.backBtnText}>←</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Driver Wallet</Text>
-        <View style={{ width: 36 }} />
-      </View>
-
       <View style={styles.tabs}>
         {(['wallet', 'gocash', 'history'] as TabName[]).map((tab) => (
           <TouchableOpacity
@@ -405,10 +395,6 @@ export default function DriverWalletScreen() {
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1D9E75', paddingHorizontal: 16, paddingVertical: 14 },
-  backBtn: { width: 36, height: 36, justifyContent: 'center' },
-  backBtnText: { fontSize: 22, color: '#fff', fontWeight: 'bold' },
-  headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
   tabs: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' },
   tab: { flex: 1, paddingVertical: 12, alignItems: 'center' },
   tabActive: { borderBottomWidth: 2, borderBottomColor: '#1D9E75' },

@@ -77,10 +77,12 @@ export default function RiderHomeScreen() {
   const [loadingDestSuggestions, setLoadingDestSuggestions] = useState(false);
   const [stopSuggestions, setStopSuggestions] = useState<any[]>([]);
   const [loadingStopSuggestions, setLoadingStopSuggestions] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     requestLocationPermission();
     fetchNearbyDrivers();
+    fetchUnreadCount();
     const interval = setInterval(fetchNearbyDrivers, 10000);
     return () => {
       clearInterval(interval);
@@ -416,6 +418,19 @@ export default function RiderHomeScreen() {
     }
   };
 
+  const fetchUnreadCount = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { count } = await supabase
+        .from('user_notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('is_read', false);
+      setUnreadCount(count ?? 0);
+    } catch {}
+  };
+
   const handleLogout = async () => { await supabase.auth.signOut(); router.replace('/'); };
 
   const getRideStatusLabel = () => {
@@ -433,6 +448,14 @@ export default function RiderHomeScreen() {
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'height' : 'padding'}>
       <View style={styles.mapContainer}>
+        <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/notifications' as any)}>
+          <Text style={styles.bellIcon}>🔔</Text>
+          {unreadCount > 0 && (
+            <View style={styles.bellBadge}>
+              <Text style={styles.bellBadgeText}>{unreadCount}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
         {loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#2563eb" />
@@ -509,7 +532,14 @@ export default function RiderHomeScreen() {
             {nearbyDrivers.length > 0 ? `🛺 ${nearbyDrivers.length} Pragya driver${nearbyDrivers.length > 1 ? 's' : ''} nearby` : '😔 No drivers nearby right now'}
           </Text>
           <Text style={styles.inputLabel}>Final Destination</Text>
-          <TextInput style={styles.input} placeholder="Enter final destination" value={destination} onChangeText={handleDestinationChange} placeholderTextColor="#999" />
+          <View style={styles.inputWrapper}>
+            <TextInput style={styles.inputWithClear} placeholder="Enter final destination" value={destination} onChangeText={handleDestinationChange} placeholderTextColor="#999" />
+            {destination.length > 0 && (
+              <TouchableOpacity style={styles.clearBtn} onPress={() => { setDestination(''); setDestinationSuggestions([]); setFareEstimate(null); }}>
+                <Text style={styles.clearBtnText}>✕</Text>
+              </TouchableOpacity>
+            )}
+          </View>
           {loadingDestSuggestions && <ActivityIndicator size="small" color="#2563eb" style={styles.suggestionsLoader} />}
           {destinationSuggestions.length > 0 && (
             <View style={styles.suggestionsCard}>
@@ -745,6 +775,10 @@ const styles = StyleSheet.create({
   driversCount: { fontSize: 13, color: '#1D9E75', marginBottom: 12 },
   inputLabel: { fontSize: 13, fontWeight: '600', color: '#666', marginBottom: 6 },
   input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 12, fontSize: 14, backgroundColor: '#f9f9f9', color: '#333', marginBottom: 10 },
+  inputWrapper: { position: 'relative', marginBottom: 10 },
+  inputWithClear: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, paddingHorizontal: 16, paddingRight: 40, paddingVertical: 12, fontSize: 14, backgroundColor: '#f9f9f9', color: '#333' },
+  clearBtn: { position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center', paddingHorizontal: 4 },
+  clearBtnText: { fontSize: 14, color: '#999', fontWeight: '600' },
   stopsContainer: { backgroundColor: '#f9f9f9', borderRadius: 8, padding: 10, marginBottom: 10 },
   stopsTitle: { fontSize: 13, fontWeight: '600', color: '#333', marginBottom: 8 },
   stopRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderBottomWidth: 0.5, borderBottomColor: '#eee' },
@@ -839,4 +873,8 @@ const styles = StyleSheet.create({
   riderMarkerInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#2563eb' },
   tricycleMarker: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1D9E75', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 4 },
   tricycleEmoji: { fontSize: 20 },
+  bellBtn: { position: 'absolute', top: 12, right: 12, zIndex: 10, width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 },
+  bellIcon: { fontSize: 20 },
+  bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },
+  bellBadgeText: { color: '#fff', fontSize: 9, fontWeight: 'bold' },
 });

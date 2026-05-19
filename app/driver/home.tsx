@@ -54,10 +54,12 @@ export default function DriverHomeScreen() {
   const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
   const [currentZoneId, setCurrentZoneId] = useState<string | null>(null);
   const currentZoneIdRef = useRef<string | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     requestLocationPermission();
     fetchDriverStats();
+    fetchUnreadCount();
     return () => {
       if (locationInterval.current) clearInterval(locationInterval.current);
       if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
@@ -357,6 +359,19 @@ export default function DriverHomeScreen() {
     return rideStatus === 'in_progress' && currentStopIndex < stops.length;
   };
 
+  const fetchUnreadCount = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { count } = await supabase
+        .from('user_notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('is_read', false);
+      setUnreadCount(count ?? 0);
+    } catch {}
+  };
+
   const handleLogout = async () => { await supabase.auth.signOut(); router.replace('/'); };
 
   const displayFare = recalculatedFare || activeRide?.fare_ghs;
@@ -376,6 +391,14 @@ export default function DriverHomeScreen() {
           <Text style={styles.statValue}>★ {rating.toFixed(1)}</Text>
           <Text style={styles.statLabel}>Rating</Text>
         </View>
+        <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/notifications' as any)}>
+          <Text style={styles.bellIcon}>🔔</Text>
+          {unreadCount > 0 && (
+            <View style={styles.bellBadge}>
+              <Text style={styles.bellBadgeText}>{unreadCount}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
       </View>
 
       {activeRide && (
@@ -536,4 +559,8 @@ const styles = StyleSheet.create({
   tricycleMarker: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1D9E75', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 4 },
   tricycleMarkerOffline: { backgroundColor: '#999' },
   tricycleEmoji: { fontSize: 20 },
+  bellBtn: { justifyContent: 'center', alignItems: 'center', position: 'relative', width: 36, height: 36 },
+  bellIcon: { fontSize: 22 },
+  bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },
+  bellBadgeText: { color: '#fff', fontSize: 9, fontWeight: 'bold' },
 });
