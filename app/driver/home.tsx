@@ -462,29 +462,33 @@ export default function DriverHomeScreen() {
         )}
       </View>
 
-      <View style={[styles.bottomPanel, { paddingBottom: insets.bottom + 16 }]}>
-        <TouchableOpacity
-          style={[styles.onlineButton, isOnline ? styles.onlineActive : styles.onlineInactive]}
-          onPress={toggleOnlineStatus}
-          disabled={!!activeRide}
-        >
-          <Text style={styles.onlineButtonText}>{isOnline ? 'Go Offline' : 'Go Online'}</Text>
-        </TouchableOpacity>
-        <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.profileButton} onPress={() => router.push('/driver/profile')}>
-            <Text style={styles.profileButtonText}>Profile</Text>
+      {!activeRide && (
+        <View style={[styles.bottomPanel, { paddingBottom: insets.bottom + 16 }]}>
+          <TouchableOpacity
+            style={[styles.onlineButton, isOnline ? styles.onlineActive : styles.onlineInactive]}
+            onPress={toggleOnlineStatus}
+          >
+            <Text style={styles.onlineButtonText}>{isOnline ? 'Go Offline' : 'Go Online'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.reportButton} onPress={() => router.push('/driver/report')}>
-            <Text style={styles.reportButtonText}>Report</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.switchButton} onPress={() => router.replace('/rider')}>
-            <Text style={styles.switchButtonText}>Rider Mode</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-            <Text style={styles.logoutButtonText}>Logout</Text>
-          </TouchableOpacity>
+          <View style={styles.actionRow}>
+            <TouchableOpacity style={styles.walletButton} onPress={() => router.push('/driver/wallet' as any)}>
+              <Text style={styles.walletButtonText}>💰 Wallet</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.profileButton} onPress={() => router.push('/driver/profile')}>
+              <Text style={styles.profileButtonText}>Profile</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.reportButton} onPress={() => router.push('/driver/report')}>
+              <Text style={styles.reportButtonText}>Report</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.switchButton} onPress={() => router.replace('/rider' as any)}>
+              <Text style={styles.switchButtonText}>Rider Mode</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+              <Text style={styles.logoutButtonText}>Logout</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -523,6 +527,8 @@ const styles = StyleSheet.create({
   profileButtonText: { color: '#534AB7', fontWeight: '600', fontSize: 12 },
   reportButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FAEEDA' },
   reportButtonText: { color: '#854F0B', fontWeight: '600', fontSize: 12 },
+  walletButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E1F5EE' },
+  walletButtonText: { color: '#085041', fontWeight: '600', fontSize: 12 },
   switchButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E6F1FB' },
   switchButtonText: { color: '#185FA5', fontWeight: '600', fontSize: 12 },
   logoutButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FFE5E5' },

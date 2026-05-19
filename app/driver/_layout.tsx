@@ -10,6 +10,10 @@ export default function DriverLayout() {
         name="report"
         options={{ title: 'Daily Report' }}
       />
+      <Stack.Screen
+        name="wallet"
+        options={{ title: 'My Wallet' }}
+      />
     </Stack>
   );
 }
