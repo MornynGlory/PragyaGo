@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { getDriverToken, getRiderToken, sendPushNotification } from '@/lib/notifications';
 import { autoAssignDriverZone } from '@/lib/zones';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
@@ -108,6 +109,14 @@ export default function DriverHomeScreen() {
           const ride = payload.new;
           if (ride.status === 'requested') {
             const stopsInfo = ride.stops?.length > 0 ? `\nStops: ${ride.stops.map((s: any) => s.address).join(' → ')}` : '';
+            const driverToken = await getDriverToken(driverId);
+            if (driverToken) {
+              await sendPushNotification(
+                driverToken,
+                '🛺 New Ride Request!',
+                `Pickup: ${ride.pickup_address} → ${ride.dropoff_address} | GHS ${ride.fare_ghs}`
+              );
+            }
             Alert.alert(
               'New Ride Request!',
               `Pickup: ${ride.pickup_address}\nTo: ${ride.dropoff_address}${stopsInfo}\nEstimated Fare: GHS ${ride.fare_ghs}`,
@@ -124,6 +133,14 @@ export default function DriverHomeScreen() {
                   setRideStatus('accepted');
                   setCurrentStopIndex(0);
                   setRecalculatedFare(null);
+                  const riderToken = await getRiderToken(ride.rider_id);
+                  if (riderToken) {
+                    await sendPushNotification(
+                      riderToken,
+                      'Driver Found! 🛺',
+                      'Your Pragya driver is on the way. ETA ~5 mins.'
+                    );
+                  }
                   Alert.alert('Ride Accepted!', 'Head to the pickup location.');
                 }},
               ]
@@ -144,6 +161,45 @@ export default function DriverHomeScreen() {
             setActiveRide(null); setRideStatus('');
             setDriverConfirmedPayment(false); setCurrentStopIndex(0);
             setPickupLocation(null); setRecalculatedFare(null);
+            const riderToken = await getRiderToken(ride.rider_id);
+            if (riderToken) {
+              await sendPushNotification(
+                riderToken,
+                'Ride Complete! ✅',
+                `Your ride is complete. Total fare: GHS ${ride.final_fare_ghs || ride.fare_ghs}. Thank you for riding with PragyaGo!`
+              );
+            }
+            const fare = ride.final_fare_ghs || ride.fare_ghs;
+            const today = new Date().toISOString().split('T')[0];
+            const isCash = ride.payment_method === 'cash';
+            const { data: existingReport } = await supabase
+              .from('driver_daily_reports')
+              .select('*')
+              .eq('driver_id', driverId)
+              .eq('report_date', today)
+              .single();
+            if (existingReport) {
+              const newCashCollected = existingReport.total_cash_collected + (isCash ? fare : 0);
+              const newGoCashEarned = existingReport.total_go_cash_earned + (!isCash ? fare : 0);
+              await supabase.from('driver_daily_reports').update({
+                total_cash_rides: existingReport.total_cash_rides + (isCash ? 1 : 0),
+                total_cash_collected: newCashCollected,
+                total_go_cash_rides: existingReport.total_go_cash_rides + (!isCash ? 1 : 0),
+                total_go_cash_earned: newGoCashEarned,
+                commission_owed: Math.round((newCashCollected + newGoCashEarned) * 0.15 * 100) / 100,
+              }).eq('id', existingReport.id);
+            } else {
+              await supabase.from('driver_daily_reports').insert([{
+                driver_id: driverId,
+                report_date: today,
+                total_cash_rides: isCash ? 1 : 0,
+                total_cash_collected: isCash ? fare : 0,
+                total_go_cash_rides: !isCash ? 1 : 0,
+                total_go_cash_earned: !isCash ? fare : 0,
+                commission_owed: Math.round(fare * 0.15 * 100) / 100,
+                commission_paid: false,
+              }]);
+            }
             Alert.alert('Ride Complete!', `GHS ${ride.final_fare_ghs || ride.fare_ghs} earned!`);
             await subscribeToRideRequests(driverId);
           }
@@ -201,6 +257,14 @@ export default function DriverHomeScreen() {
     const { error } = await supabase.from('rides').update({ status: 'arrived_pickup' }).eq('id', activeRide.id);
     if (error) { Alert.alert('Error', error.message); return; }
     setRideStatus('arrived_pickup');
+    const riderToken = await getRiderToken(activeRide.rider_id);
+    if (riderToken) {
+      await sendPushNotification(
+        riderToken,
+        '🛺 Driver Arrived!',
+        'Your Pragya driver has arrived at your pickup location. Please confirm pickup.'
+      );
+    }
     Alert.alert('Arrived at Pickup!', 'Waiting for rider to confirm...');
   };
 

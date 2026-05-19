@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-Item \"c:\\\\Users\\\\USER\\\\PragyaGo\\\\lib\\\\notifications.ts\")",
+      "Bash(Select-Object Name, Length, LastWriteTime)"
+    ]
+  }
+}

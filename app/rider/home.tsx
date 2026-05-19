@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { applyDiscount, DiscountResult, recordDiscountUse } from '@/lib/discounts';
+import { getDriverToken, sendPushNotification } from '@/lib/notifications';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -281,7 +282,17 @@ export default function RiderHomeScreen() {
 
   const confirmPickup = async (rideId: string) => {
     const { error } = await supabase.from('rides').update({ status: 'in_progress' }).eq('id', rideId);
-    if (error) Alert.alert('Error', error.message);
+    if (error) { Alert.alert('Error', error.message); return; }
+    if (currentRide?.driver_id) {
+      const driverToken = await getDriverToken(currentRide.driver_id);
+      if (driverToken) {
+        await sendPushNotification(
+          driverToken,
+          '✅ Rider Confirmed Pickup!',
+          'The rider has confirmed pickup. Ride has started!'
+        );
+      }
+    }
   };
 
   const acceptNewFare = async () => {
@@ -306,6 +317,16 @@ export default function RiderHomeScreen() {
     } else {
       await supabase.from('rides').update({ rider_confirmed_payment: true }).eq('id', ride.id);
       Alert.alert('Payment Confirmed!', 'Waiting for driver to confirm...');
+    }
+    if (ride.driver_id) {
+      const driverToken = await getDriverToken(ride.driver_id);
+      if (driverToken) {
+        await sendPushNotification(
+          driverToken,
+          '💰 Payment Confirmed!',
+          `Payment of GHS ${fare} confirmed via ${ride.payment_method === 'cash' ? 'Cash' : 'Go Cash'}.`
+        );
+      }
     }
   };
 
@@ -341,6 +362,18 @@ export default function RiderHomeScreen() {
       else {
         setCurrentRide(ride); setRideStatus('requested');
         await subscribeToRideUpdates(ride.id);
+        await Promise.all(
+          nearbyDrivers.map(async (driver: any) => {
+            const driverToken = await getDriverToken(driver.id);
+            if (driverToken) {
+              await sendPushNotification(
+                driverToken,
+                '🛺 New Ride Request Near You!',
+                `Pickup: ${ride.pickup_address} → ${ride.dropoff_address} | GHS ${ride.fare_ghs}`
+              );
+            }
+          })
+        );
         if (discountResult?.discount) await recordDiscountUse(discountResult.discount.id);
         Alert.alert('Ride Requested 🛺', stops.length > 0 ? `Finding a driver... ${stops.length} stop(s) added.` : 'Finding a nearby driver...');
         setDestination(''); setStops([]); setFareEstimate(null); setDiscountResult(null); setOriginalFare(null);
