@@ -12,7 +12,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "pragyago",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
@@ -21,7 +20,6 @@
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#1D9E75"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.mornynglory.pragyago"
     },
@@ -49,7 +47,7 @@
     ],
     "experiments": {
       "typedRoutes": false,
-      "reactCompiler": true
+      "reactCompiler": false
     }
   }
 }
