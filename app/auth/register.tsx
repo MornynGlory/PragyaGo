@@ -73,6 +73,7 @@ export default function RegisterScreen() {
                 role: role || 'rider',
                 full_name: fullName || '',
                 phone: phone || '',
+                email: email?.trim() || '',
                 created_at: new Date().toISOString(),
               },
             ]);

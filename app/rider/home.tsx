@@ -19,7 +19,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, UrlTile } from 'react-native-maps';
+import MapView, { Marker } from 'react-native-maps';
 
 const PRAGYA_COLOR_MAP: { [key: string]: string } = {
   red: '#FF3B30', blue: '#2563eb', yellow: '#FFD60A',
@@ -462,9 +462,8 @@ export default function RiderHomeScreen() {
             <Text style={styles.loadingText}>Getting your location...</Text>
           </View>
         ) : (
-          <MapView ref={mapRef} style={styles.map}
+          <MapView ref={mapRef} style={styles.map} mapType="standard" zoomEnabled={true} scrollEnabled={true}
             initialRegion={{ latitude: location?.latitude || 7.3349, longitude: location?.longitude || -2.3123, latitudeDelta: 0.05, longitudeDelta: 0.05 }}>
-            <UrlTile urlTemplate="https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png" maximumZ={19} flipY={false} />
             {location && (
               <Marker coordinate={location} title="You are here">
                 <View style={styles.riderMarker}>
