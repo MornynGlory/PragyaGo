@@ -14,6 +14,10 @@ export default function DriverLayout() {
         name="wallet"
         options={{ title: 'My Wallet' }}
       />
+      <Stack.Screen
+        name="support"
+        options={{ title: 'Help & Support', headerShown: true }}
+      />
     </Stack>
   );
 }

@@ -635,6 +635,9 @@ export default function RiderHomeScreen() {
             <TouchableOpacity style={styles.switchButton} onPress={() => Alert.alert('Want to become a Driver?', 'To register as a Pragya driver, visit any PragyaGo office or station near you with your Ghana Card and vehicle details.\n\nOur offices are open Monday to Friday, 8am - 5pm.', [{ text: 'OK' }])}>
               <Text style={styles.switchButtonText}>Become a Driver</Text>
             </TouchableOpacity>
+            <TouchableOpacity style={styles.supportButton} onPress={() => router.push('/rider/support' as any)}>
+              <Text style={styles.supportButtonText}>🎧 Support</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
               <Text style={styles.logoutButtonText}>Logout</Text>
             </TouchableOpacity>
@@ -812,6 +815,8 @@ const styles = StyleSheet.create({
   actionRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
   walletButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E1F5EE' },
   walletButtonText: { color: '#1D9E75', fontWeight: '600', fontSize: 14 },
+  supportButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FBEAF0' },
+  supportButtonText: { color: '#993556', fontWeight: '600', fontSize: 14 },
   switchButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E6F1FB' },
   switchButtonText: { color: '#185FA5', fontWeight: '600', fontSize: 14 },
   logoutButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FFE5E5' },

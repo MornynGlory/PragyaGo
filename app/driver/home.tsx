@@ -505,6 +505,9 @@ export default function DriverHomeScreen() {
             <TouchableOpacity style={styles.switchButton} onPress={() => router.replace('/rider' as any)}>
               <Text style={styles.switchButtonText}>Rider Mode</Text>
             </TouchableOpacity>
+            <TouchableOpacity style={styles.supportButton} onPress={() => router.push('/driver/support' as any)}>
+              <Text style={styles.supportButtonText}>🎧 Support</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
               <Text style={styles.logoutButtonText}>Logout</Text>
             </TouchableOpacity>
@@ -551,6 +554,8 @@ const styles = StyleSheet.create({
   reportButtonText: { color: '#854F0B', fontWeight: '600', fontSize: 12 },
   walletButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E1F5EE' },
   walletButtonText: { color: '#085041', fontWeight: '600', fontSize: 12 },
+  supportButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FBEAF0' },
+  supportButtonText: { color: '#993556', fontWeight: '600', fontSize: 12 },
   switchButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E6F1FB' },
   switchButtonText: { color: '#185FA5', fontWeight: '600', fontSize: 12 },
   logoutButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FFE5E5' },

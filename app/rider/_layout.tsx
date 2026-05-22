@@ -10,6 +10,10 @@ export default function RiderLayout() {
         name="gocash"
         options={{ title: 'My Go Cash Wallet' }}
       />
+      <Stack.Screen
+        name="support"
+        options={{ title: 'Help & Support', headerShown: true }}
+      />
     </Stack>
   );
 }
