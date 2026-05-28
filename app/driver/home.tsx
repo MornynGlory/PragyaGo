@@ -110,18 +110,19 @@ export default function DriverHomeScreen() {
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rides' }, async (payload) => {
           const ride = payload.new;
           if (ride.status === 'requested') {
+            const requestFare = (ride.discounted_fare && ride.discounted_fare > 0 ? ride.discounted_fare : null) ?? ride.fare_ghs;
             const stopsInfo = ride.stops?.length > 0 ? `\nStops: ${ride.stops.map((s: any) => s.address).join(' → ')}` : '';
             const driverToken = await getDriverToken(driverId);
             if (driverToken) {
               await sendPushNotification(
                 driverToken,
                 '🛺 New Ride Request!',
-                `Pickup: ${ride.pickup_address} → ${ride.dropoff_address} | GHS ${ride.fare_ghs}`
+                `Pickup: ${ride.pickup_address} → ${ride.dropoff_address} | GHS ${requestFare}`
               );
             }
             Alert.alert(
               'New Ride Request!',
-              `Pickup: ${ride.pickup_address}\nTo: ${ride.dropoff_address}${stopsInfo}\nEstimated Fare: GHS ${ride.fare_ghs}`,
+              `Pickup: ${ride.pickup_address}\nTo: ${ride.dropoff_address}${stopsInfo}\nEstimated Fare: GHS ${requestFare}`,
               [
                 { text: 'Decline', style: 'cancel' },
                 { text: 'Accept', onPress: async () => {
@@ -158,7 +159,8 @@ export default function DriverHomeScreen() {
             Alert.alert('Rider Confirmed!', 'Ride has started.');
           }
           if (ride.status === 'completed') {
-            setDailyEarnings(prev => prev + (ride.final_fare_ghs || ride.fare_ghs));
+            const actualFare = (ride.discounted_fare && ride.discounted_fare > 0 ? ride.discounted_fare : null) ?? ride.final_fare_ghs ?? ride.fare_ghs;
+            setDailyEarnings(prev => prev + actualFare);
             setTotalRides(prev => prev + 1);
             setActiveRide(null); setRideStatus('');
             setDriverConfirmedPayment(false); setCurrentStopIndex(0);
@@ -168,10 +170,9 @@ export default function DriverHomeScreen() {
               await sendPushNotification(
                 riderToken,
                 'Ride Complete! ✅',
-                `Your ride is complete. Total fare: GHS ${ride.final_fare_ghs || ride.fare_ghs}. Thank you for riding with PragyaGo!`
+                `Your ride is complete. Total fare: GHS ${actualFare}. Thank you for riding with PragyaGo!`
               );
             }
-            const fare = ride.final_fare_ghs || ride.fare_ghs;
             const today = new Date().toISOString().split('T')[0];
             const isCash = ride.payment_method === 'cash';
             const { data: existingReport } = await supabase
@@ -181,8 +182,8 @@ export default function DriverHomeScreen() {
               .eq('report_date', today)
               .single();
             if (existingReport) {
-              const newCashCollected = existingReport.total_cash_collected + (isCash ? fare : 0);
-              const newGoCashEarned = existingReport.total_go_cash_earned + (!isCash ? fare : 0);
+              const newCashCollected = existingReport.total_cash_collected + (isCash ? actualFare : 0);
+              const newGoCashEarned = existingReport.total_go_cash_earned + (!isCash ? actualFare : 0);
               await supabase.from('driver_daily_reports').update({
                 total_cash_rides: existingReport.total_cash_rides + (isCash ? 1 : 0),
                 total_cash_collected: newCashCollected,
@@ -195,14 +196,14 @@ export default function DriverHomeScreen() {
                 driver_id: driverId,
                 report_date: today,
                 total_cash_rides: isCash ? 1 : 0,
-                total_cash_collected: isCash ? fare : 0,
+                total_cash_collected: isCash ? actualFare : 0,
                 total_go_cash_rides: !isCash ? 1 : 0,
-                total_go_cash_earned: !isCash ? fare : 0,
-                commission_owed: Math.round(fare * 0.15 * 100) / 100,
+                total_go_cash_earned: !isCash ? actualFare : 0,
+                commission_owed: Math.round(actualFare * 0.15 * 100) / 100,
                 commission_paid: false,
               }]);
             }
-            Alert.alert('Ride Complete!', `GHS ${ride.final_fare_ghs || ride.fare_ghs} earned!`);
+            Alert.alert('Ride Complete!', `GHS ${actualFare} earned!`);
             await subscribeToRideRequests(driverId);
           }
         });
@@ -374,7 +375,8 @@ export default function DriverHomeScreen() {
 
   const handleLogout = async () => { await supabase.auth.signOut(); router.replace('/'); };
 
-  const displayFare = recalculatedFare || activeRide?.fare_ghs;
+  const activeRideFare = (activeRide?.discounted_fare && activeRide?.discounted_fare > 0 ? activeRide?.discounted_fare : null) ?? activeRide?.fare_ghs;
+  const displayFare = recalculatedFare || activeRideFare;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -411,12 +413,7 @@ export default function DriverHomeScreen() {
             </Text>
           )}
           <View style={styles.fareRow}>
-            <Text style={styles.activeBannerFare}>
-              GHS {displayFare}
-              {recalculatedFare && recalculatedFare !== activeRide.fare_ghs && (
-                <Text style={styles.originalFare}> (was GHS {activeRide.fare_ghs})</Text>
-              )}
-            </Text>
+            <Text style={styles.activeBannerFare}>GHS {displayFare}</Text>
             <Text style={styles.activeBannerPayment}>{activeRide.payment_method?.toUpperCase()}</Text>
           </View>
 

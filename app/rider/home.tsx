@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { applyDiscount, DiscountResult, recordDiscountUse } from '@/lib/discounts';
+import { calculateZoneFare, FareResult } from '@/lib/fares';
 import { getDriverToken, sendPushNotification } from '@/lib/notifications';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
@@ -52,6 +53,7 @@ export default function RiderHomeScreen() {
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'momo'>('cash');
   const [nearbyDrivers, setNearbyDrivers] = useState<any[]>([]);
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
+  const [fareBreakdown, setFareBreakdown] = useState<FareResult | null>(null);
   const [requesting, setRequesting] = useState(false);
   const [currentRide, setCurrentRide] = useState<any>(null);
   const [rideStatus, setRideStatus] = useState('');
@@ -205,22 +207,35 @@ export default function RiderHomeScreen() {
 
   const estimateFare = async () => {
     if (!destination.trim()) { Alert.alert('Enter Destination', 'Please enter your final destination.'); return; }
-    const estimatedKm = Math.random() * 5 + 1;
-    const baseFare = Math.round((3 + estimatedKm * 1.5 + stops.length * 2) * 10) / 10;
     setDiscountResult(null);
     setOriginalFare(null);
+    setFareBreakdown(null);
+
     const { data: { user } } = await supabase.auth.getUser();
+    let zoneId: string | null = null;
     if (user) {
-      const result = await applyDiscount(user.id, destination, baseFare);
-      if (result.discount) {
-        setDiscountResult(result);
-        setOriginalFare(baseFare);
-        setFareEstimate(result.finalFare);
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('zone_id')
+        .eq('id', user.id)
+        .single();
+      zoneId = profile?.zone_id ?? null;
+    }
+
+    const fareResult = await calculateZoneFare(zoneId, destination, stops.length, 2);
+    setFareBreakdown(fareResult);
+
+    if (user) {
+      const discountResult = await applyDiscount(user.id, destination, fareResult.totalFare);
+      if (discountResult.discount) {
+        setDiscountResult(discountResult);
+        setOriginalFare(fareResult.totalFare);
+        setFareEstimate(discountResult.finalFare);
       } else {
-        setFareEstimate(baseFare);
+        setFareEstimate(fareResult.totalFare);
       }
     } else {
-      setFareEstimate(baseFare);
+      setFareEstimate(fareResult.totalFare);
     }
   };
 
@@ -350,7 +365,7 @@ export default function RiderHomeScreen() {
           dropoff_lat: location.latitude + 0.01, dropoff_lng: location.longitude + 0.01,
           dropoff_address: destination,
           stops: allStops, current_stop: 0,
-          status: 'requested', fare_ghs: fareEstimate,
+          status: 'requested', fare_ghs: originalFare ?? fareEstimate,
           payment_method: paymentMethod,
           created_at: new Date().toISOString(),
           ...(discountResult?.discount ? {
@@ -378,7 +393,7 @@ export default function RiderHomeScreen() {
         );
         if (discountResult?.discount) await recordDiscountUse(discountResult.discount.id);
         Alert.alert('Ride Requested 🛺', stops.length > 0 ? `Finding a driver... ${stops.length} stop(s) added.` : 'Finding a nearby driver...');
-        setDestination(''); setStops([]); setFareEstimate(null); setDiscountResult(null); setOriginalFare(null);
+        setDestination(''); setStops([]); setFareEstimate(null); setFareBreakdown(null); setDiscountResult(null); setOriginalFare(null);
       }
     } catch (error) { Alert.alert('Error', 'Could not request ride.'); }
     finally { setRequesting(false); }
@@ -442,7 +457,7 @@ export default function RiderHomeScreen() {
     return '';
   };
 
-  const displayFare = finalFare || currentRide?.fare_ghs;
+  const displayFare = finalFare || currentRide?.discounted_fare || currentRide?.fare_ghs;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -534,7 +549,7 @@ export default function RiderHomeScreen() {
           <View style={styles.inputWrapper}>
             <TextInput style={styles.inputWithClear} placeholder="Enter final destination" value={destination} onChangeText={handleDestinationChange} placeholderTextColor="#999" />
             {destination.length > 0 && (
-              <TouchableOpacity style={styles.clearBtn} onPress={() => { setDestination(''); setDestinationSuggestions([]); setFareEstimate(null); }}>
+              <TouchableOpacity style={styles.clearBtn} onPress={() => { setDestination(''); setDestinationSuggestions([]); setFareEstimate(null); setFareBreakdown(null); }}>
                 <Text style={styles.clearBtnText}>✕</Text>
               </TouchableOpacity>
             )}
@@ -600,8 +615,17 @@ export default function RiderHomeScreen() {
             <View style={styles.fareContainer}>
               <View style={styles.fareInfo}>
                 <Text style={styles.fareLabel}>Estimated Fare</Text>
-                <Text style={styles.fareNote}>Final fare based on actual distance</Text>
-                {stops.length > 0 && <Text style={styles.fareBreakdown}>Includes {stops.length} stop{stops.length > 1 ? 's' : ''} (+GHS {stops.length * 2})</Text>}
+                {fareBreakdown && (
+                  <Text style={styles.fareNote}>
+                    Base: GHS {fareBreakdown.baseFare} + Fee: GHS {fareBreakdown.platformFee} + Stops: GHS {fareBreakdown.stopFee} = GHS {fareBreakdown.totalFare}
+                  </Text>
+                )}
+                {fareBreakdown?.source === 'zone_table' && (
+                  <Text style={styles.fareSourceZone}>📍 Fixed zone fare</Text>
+                )}
+                {fareBreakdown?.source === 'distance' && (
+                  <Text style={styles.fareSourceDistance}>📏 Distance estimate</Text>
+                )}
                 {discountResult?.discount && (
                   <Text style={styles.discountMessage}>{discountResult.message}</Text>
                 )}
@@ -726,7 +750,15 @@ export default function RiderHomeScreen() {
             ) : (
               <View style={styles.ratingDriverPhotoPlaceholder}><Text style={{ fontSize: 40 }}>👤</Text></View>
             )}
-            <Text style={styles.ratingFare}>Fare paid: GHS {completedRide?.final_fare_ghs || completedRide?.fare_ghs}</Text>
+            {completedRide?.discount_amount > 0 ? (
+              <View style={styles.receiptBox}>
+                <Text style={styles.receiptRow}>Original fare: <Text style={styles.receiptValue}>GHS {completedRide.final_fare_ghs || completedRide.fare_ghs}</Text></Text>
+                <Text style={styles.receiptRow}>Discount: <Text style={styles.receiptDiscount}>-GHS {completedRide.discount_amount}</Text></Text>
+                <Text style={styles.receiptRowTotal}>You paid: <Text style={styles.receiptTotal}>GHS {completedRide.discounted_fare ?? (completedRide.fare_ghs - completedRide.discount_amount)}</Text></Text>
+              </View>
+            ) : (
+              <Text style={styles.ratingFare}>Fare paid: GHS {completedRide?.final_fare_ghs || completedRide?.fare_ghs}</Text>
+            )}
             <View style={styles.starsRow}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <TouchableOpacity key={star} onPress={() => setSelectedRating(star)}>
@@ -798,6 +830,8 @@ const styles = StyleSheet.create({
   fareLabel: { fontSize: 14, color: '#085041', fontWeight: '600' },
   fareNote: { fontSize: 11, color: '#1D9E75', marginTop: 1 },
   fareBreakdown: { fontSize: 11, color: '#1D9E75', marginTop: 1 },
+  fareSourceZone: { fontSize: 11, color: '#1D9E75', fontWeight: '600', marginTop: 2 },
+  fareSourceDistance: { fontSize: 11, color: '#2563eb', fontWeight: '600', marginTop: 2 },
   discountMessage: { fontSize: 12, color: '#085041', fontWeight: '600', marginTop: 4 },
   fareAmountContainer: { alignItems: 'flex-end' },
   fareOriginal: { fontSize: 13, color: '#999', textDecorationLine: 'line-through', marginBottom: 2 },
@@ -860,6 +894,12 @@ const styles = StyleSheet.create({
   ratingDriverPhoto: { width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: '#1D9E75', marginBottom: 8 },
   ratingDriverPhotoPlaceholder: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#E1F5EE', justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
   ratingFare: { fontSize: 14, color: '#1D9E75', fontWeight: '600', marginBottom: 16 },
+  receiptBox: { backgroundColor: '#F0FDF7', borderRadius: 8, padding: 12, marginBottom: 16, width: '100%' },
+  receiptRow: { fontSize: 13, color: '#333', marginBottom: 4 },
+  receiptValue: { fontWeight: '600', color: '#333' },
+  receiptDiscount: { fontWeight: '600', color: '#e53e3e' },
+  receiptRowTotal: { fontSize: 14, color: '#085041', fontWeight: '700', marginTop: 4, borderTopWidth: 1, borderTopColor: '#C6F6E4', paddingTop: 4 },
+  receiptTotal: { color: '#1D9E75' },
   starsRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
   star: { fontSize: 44, color: '#ddd' },
   starSelected: { color: '#FFD60A' },
