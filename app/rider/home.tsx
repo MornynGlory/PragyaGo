@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { applyDiscount, DiscountResult, recordDiscountUse } from '@/lib/discounts';
-import { calculateZoneFare, FareResult } from '@/lib/fares';
+import { calculateZoneFare, FareResult, getFareSuggestions } from '@/lib/fares';
 import { getDriverToken, sendPushNotification } from '@/lib/notifications';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
@@ -72,6 +72,10 @@ export default function RiderHomeScreen() {
   const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
   const destDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stopDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const zoneIdRef = useRef<string | null>(null);
+  const regionZoneIdsRef = useRef<string[]>([]);
+  const viewboxRef = useRef<string | null>(null);
+  const [regionViewbox, setRegionViewbox] = useState<string | null>(null);
   const [driverLocation, setDriverLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [discountResult, setDiscountResult] = useState<DiscountResult | null>(null);
   const [originalFare, setOriginalFare] = useState<number | null>(null);
@@ -85,6 +89,15 @@ export default function RiderHomeScreen() {
     requestLocationPermission();
     fetchNearbyDrivers();
     fetchUnreadCount();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return;
+      supabase.from('profiles').select('zone_id').eq('id', user.id).single()
+        .then(({ data }) => {
+          const zoneId = data?.zone_id ?? null;
+          zoneIdRef.current = zoneId;
+          if (zoneId) initZoneData(zoneId);
+        });
+    });
     const interval = setInterval(fetchNearbyDrivers, 10000);
     return () => {
       clearInterval(interval);
@@ -152,35 +165,82 @@ export default function RiderHomeScreen() {
     driverLocationSubscription.current = channel;
   };
 
-  const fetchLocationSuggestions = async (query: string, onResults: (r: any[]) => void, setLoading: (v: boolean) => void) => {
-    setLoading(true);
+  const initZoneData = async (riderZoneId: string) => {
     try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}+Ghana&format=json&limit=5&countrycodes=gh`);
-      const data = await res.json();
-      onResults(Array.isArray(data) ? data : []);
-    } catch {
-      onResults([]);
-    } finally {
-      setLoading(false);
+      const { data: riderZone } = await supabase
+        .from('zones')
+        .select('id, region_id, boundary_lat_min, boundary_lat_max, boundary_lng_min, boundary_lng_max')
+        .eq('id', riderZoneId)
+        .single();
+      if (!riderZone?.region_id) return;
+
+      const { data: regionZones } = await supabase
+        .from('zones')
+        .select('id, boundary_lat_min, boundary_lat_max, boundary_lng_min, boundary_lng_max')
+        .eq('region_id', riderZone.region_id);
+      if (!regionZones || regionZones.length === 0) return;
+
+      regionZoneIdsRef.current = regionZones.map((z: any) => z.id);
+
+      const latMin = Math.min(...regionZones.map((z: any) => z.boundary_lat_min));
+      const latMax = Math.max(...regionZones.map((z: any) => z.boundary_lat_max));
+      const lngMin = Math.min(...regionZones.map((z: any) => z.boundary_lng_min));
+      const lngMax = Math.max(...regionZones.map((z: any) => z.boundary_lng_max));
+      const viewbox = `${lngMin},${latMin},${lngMax},${latMax}`;
+      viewboxRef.current = viewbox;
+      setRegionViewbox(viewbox);
+    } catch (err) {
+      console.error('Error initializing zone data:', err);
     }
+  };
+
+  const fetchNominatimSuggestions = async (query: string): Promise<any[]> => {
+    try {
+      const viewbox = viewboxRef.current;
+      const url = viewbox
+        ? `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&countrycodes=gh&viewbox=${viewbox}&bounded=1`
+        : `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}+Ghana&format=json&limit=5&countrycodes=gh`;
+      const res = await fetch(url, { headers: { 'Accept-Language': 'en', 'User-Agent': 'PragyaGo/1.0' } });
+      const data = await res.json();
+      return Array.isArray(data) ? data.map((r: any) => ({ id: `place-${r.place_id}`, label: r.display_name, source: 'place' as const })) : [];
+    } catch { return []; }
   };
 
   const handleDestinationChange = (text: string) => {
     setDestination(text);
     setFareEstimate(null);
     if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
-    if (text.length >= 3) {
-      destDebounceRef.current = setTimeout(() => fetchLocationSuggestions(text, setDestinationSuggestions, setLoadingDestSuggestions), 500);
-    } else {
-      setDestinationSuggestions([]);
-    }
+    if (text.length < 2) { setDestinationSuggestions([]); return; }
+    destDebounceRef.current = setTimeout(async () => {
+      setLoadingDestSuggestions(true);
+      try {
+        const fareZoneIds = regionZoneIdsRef.current.length > 0 ? regionZoneIdsRef.current : zoneIdRef.current;
+        const [zoneSuggestions, placeSuggestions] = await Promise.all([
+          getFareSuggestions(fareZoneIds, text),
+          fetchNominatimSuggestions(text),
+        ]);
+        const zoneItems = zoneSuggestions.map((z, i) => ({
+          id: `zone-${i}`,
+          label: z.to_location,
+          fare: z.base_fare,
+          source: 'zone' as const,
+        }));
+        setDestinationSuggestions([...zoneItems, ...placeSuggestions]);
+      } catch { setDestinationSuggestions([]); }
+      finally { setLoadingDestSuggestions(false); }
+    }, 500);
   };
 
   const handleStopChange = (text: string) => {
     setNewStop(text);
     if (stopDebounceRef.current) clearTimeout(stopDebounceRef.current);
-    if (text.length >= 3) {
-      stopDebounceRef.current = setTimeout(() => fetchLocationSuggestions(text, setStopSuggestions, setLoadingStopSuggestions), 500);
+    if (text.length >= 2) {
+      stopDebounceRef.current = setTimeout(async () => {
+        setLoadingStopSuggestions(true);
+        const results = await fetchNominatimSuggestions(text);
+        setStopSuggestions(results);
+        setLoadingStopSuggestions(false);
+      }, 500);
     } else {
       setStopSuggestions([]);
     }
@@ -559,11 +619,22 @@ export default function RiderHomeScreen() {
             <View style={styles.suggestionsCard}>
               {destinationSuggestions.map((item, index) => (
                 <TouchableOpacity
-                  key={item.place_id ?? index}
-                  style={[styles.suggestionItem, index < destinationSuggestions.length - 1 && styles.suggestionItemBorder]}
-                  onPress={() => { setDestination(item.display_name); setDestinationSuggestions([]); }}
+                  key={item.id ?? index}
+                  style={[
+                    styles.suggestionItem,
+                    item.source === 'zone' && styles.suggestionItemZone,
+                    index < destinationSuggestions.length - 1 && styles.suggestionItemBorder,
+                  ]}
+                  onPress={() => { setDestination(item.label); setDestinationSuggestions([]); }}
                 >
-                  <Text style={styles.suggestionText} numberOfLines={2}>{item.display_name}</Text>
+                  {item.source === 'zone' ? (
+                    <View style={styles.suggestionRowZone}>
+                      <Text style={styles.suggestionTextZone} numberOfLines={1}>📍 {item.label}</Text>
+                      <Text style={styles.suggestionFare}>GHS {item.fare}</Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.suggestionText} numberOfLines={2}>📌 {item.label}</Text>
+                  )}
                 </TouchableOpacity>
               ))}
             </View>
@@ -595,11 +666,11 @@ export default function RiderHomeScreen() {
                 <View style={styles.suggestionsCard}>
                   {stopSuggestions.map((item, index) => (
                     <TouchableOpacity
-                      key={item.place_id ?? index}
+                      key={item.id ?? index}
                       style={[styles.suggestionItem, index < stopSuggestions.length - 1 && styles.suggestionItemBorder]}
-                      onPress={() => { setNewStop(item.display_name); setStopSuggestions([]); }}
+                      onPress={() => { setNewStop(item.label); setStopSuggestions([]); }}
                     >
-                      <Text style={styles.suggestionText} numberOfLines={2}>{item.display_name}</Text>
+                      <Text style={styles.suggestionText} numberOfLines={2}>📌 {item.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -659,7 +730,7 @@ export default function RiderHomeScreen() {
             <TouchableOpacity style={styles.switchButton} onPress={() => Alert.alert('Want to become a Driver?', 'To register as a Pragya driver, visit any PragyaGo office or station near you with your Ghana Card and vehicle details.\n\nOur offices are open Monday to Friday, 8am - 5pm.', [{ text: 'OK' }])}>
               <Text style={styles.switchButtonText}>Become a Driver</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.supportButton} onPress={() => router.push('/rider/support' as any)}>
+            <TouchableOpacity style={styles.supportButton} onPress={() => router.push('/support' as any)}>
               <Text style={styles.supportButtonText}>🎧 Support</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -910,8 +981,12 @@ const styles = StyleSheet.create({
   skipRatingText: { color: '#999', fontSize: 14 },
   suggestionsCard: { backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#e0e0e0', marginTop: -6, marginBottom: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 3, overflow: 'hidden' },
   suggestionItem: { paddingHorizontal: 14, paddingVertical: 12 },
+  suggestionItemZone: { backgroundColor: '#F0FDF7' },
   suggestionItemBorder: { borderBottomWidth: 0.5, borderBottomColor: '#eee' },
+  suggestionRowZone: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   suggestionText: { fontSize: 13, color: '#333', lineHeight: 18 },
+  suggestionTextZone: { fontSize: 13, color: '#085041', fontWeight: '600', flex: 1, marginRight: 8 },
+  suggestionFare: { fontSize: 13, color: '#1D9E75', fontWeight: '700' },
   suggestionsLoader: { alignSelf: 'center', marginBottom: 6 },
   riderMarker: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', borderWidth: 3, borderColor: '#2563eb', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.3, shadowRadius: 2, elevation: 3 },
   riderMarkerInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#2563eb' },

@@ -1,5 +1,4 @@
 import { supabase } from '@/lib/supabase';
-import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -19,7 +18,6 @@ const TYPE_ICON: Record<string, string> = {
 };
 
 export default function NotificationsScreen() {
-  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [markingAll, setMarkingAll] = useState(false);
@@ -83,9 +81,6 @@ export default function NotificationsScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Text style={styles.backBtnText}>←</Text>
-        </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Notifications</Text>
           {unreadCount > 0 && (
@@ -142,8 +137,6 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1D9E75', paddingHorizontal: 12, paddingVertical: 14 },
-  backBtn: { width: 36, height: 36, justifyContent: 'center' },
-  backBtnText: { fontSize: 22, color: '#fff', fontWeight: 'bold' },
   headerCenter: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
   unreadBadge: { backgroundColor: '#FF3B30', borderRadius: 10, minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 5 },

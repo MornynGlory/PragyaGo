@@ -58,14 +58,16 @@ export async function calculateZoneFare(
 }
 
 export async function getFareSuggestions(
-  zoneId: string | null,
+  zoneId: string | string[] | null,
   query: string
 ): Promise<{ to_location: string; base_fare: number }[]> {
   if (!zoneId || !query.trim()) return [];
+  const ids = Array.isArray(zoneId) ? zoneId : [zoneId];
+  if (ids.length === 0) return [];
   const { data } = await supabase
     .from('zone_fares')
     .select('to_location, base_fare')
-    .eq('zone_id', zoneId)
+    .in('zone_id', ids)
     .ilike('to_location', `%${query.trim()}%`)
     .limit(8);
   return data ?? [];

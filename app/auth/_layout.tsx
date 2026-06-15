@@ -11,6 +11,18 @@ export default function AuthLayout() {
         name="register"
         options={{ headerShown: false }}
       />
+      <Stack.Screen
+        name="verify-driver"
+        options={{ title: 'Identity Verification' }}
+      />
+      <Stack.Screen
+        name="pending"
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="rejected"
+        options={{ headerShown: false }}
+      />
     </Stack>
   );
 }

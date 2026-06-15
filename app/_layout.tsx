@@ -41,6 +41,8 @@ export default function RootLayout() {
           <Stack.Screen name="driver" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+          <Stack.Screen name="support" options={{ title: 'Help & Support' }} />
+          <Stack.Screen name="notifications" options={{ title: 'Notifications', headerBackVisible: false, headerLeft: () => null }} />
         </Stack>
         <StatusBar style="auto" />
       </ThemeProvider>

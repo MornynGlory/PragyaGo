@@ -1,7 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 export default function LandingScreen() {
   const router = useRouter();
@@ -68,7 +68,7 @@ export default function LandingScreen() {
     try {
       const { data, error } = await supabase
         .from('profiles')
-        .select('role')
+        .select('role, suspended, suspension_reason')
         .eq('id', userId)
         .single();
 
@@ -77,12 +77,34 @@ export default function LandingScreen() {
         setUserRole(null);
         setLoading(false);
       } else if (data?.role) {
+        if (data.suspended) {
+          const reason = data.suspension_reason ?? 'No reason provided.';
+          await supabase.auth.signOut();
+          setUserRole(null);
+          setLoading(false);
+          Alert.alert(
+            'Account Suspended',
+            `Your account has been suspended. Reason: ${reason}\n\nPlease contact PragyaGo support for assistance.`
+          );
+          return;
+        }
         setUserRole(data.role);
-        // Navigate to appropriate home screen
         if (data.role === 'driver') {
-          router.replace('/driver/home');
+          const { data: driver } = await supabase
+            .from('drivers')
+            .select('verification_status')
+            .eq('profile_id', userId)
+            .single();
+          const status = driver?.verification_status;
+          if (status === 'pending') {
+            router.replace('/auth/pending' as any);
+          } else if (status === 'rejected') {
+            router.replace('/auth/rejected' as any);
+          } else {
+            router.replace('/driver/home' as any);
+          }
         } else {
-          router.replace('/rider/home');
+          router.replace('/rider/home' as any);
         }
       } else {
         setUserRole(null);

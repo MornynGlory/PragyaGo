@@ -93,8 +93,12 @@ export default function RegisterScreen() {
         }
       }
 
-      Alert.alert('Success', 'Account created successfully! Please check your email to verify your account.');
-      router.push('/auth/login');
+      if (role === 'driver') {
+        router.replace('/auth/verify-driver' as any);
+      } else {
+        Alert.alert('Success', 'Account created successfully! Please check your email to verify your account.');
+        router.push('/auth/login');
+      }
     } catch (err) {
       console.error('Registration error:', err);
       Alert.alert('Error', 'An unexpected error occurred during registration');
