@@ -22,6 +22,8 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker } from 'react-native-maps';
 
+const GOOGLE_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
+
 const PRAGYA_COLOR_MAP: { [key: string]: string } = {
   red: '#FF3B30', blue: '#2563eb', yellow: '#FFD60A',
   green: '#1D9E75', white: '#F2F2F7', black: '#1C1C1E',
@@ -75,7 +77,9 @@ export default function RiderHomeScreen() {
   const zoneIdRef = useRef<string | null>(null);
   const regionZoneIdsRef = useRef<string[]>([]);
   const viewboxRef = useRef<string | null>(null);
+  const regionCenterRef = useRef<{ lat: number; lng: number } | null>(null);
   const [regionViewbox, setRegionViewbox] = useState<string | null>(null);
+  const [selectedDestCoords, setSelectedDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [driverLocation, setDriverLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [discountResult, setDiscountResult] = useState<DiscountResult | null>(null);
   const [originalFare, setOriginalFare] = useState<number | null>(null);
@@ -189,21 +193,40 @@ export default function RiderHomeScreen() {
       const viewbox = `${lngMin},${latMin},${lngMax},${latMax}`;
       viewboxRef.current = viewbox;
       setRegionViewbox(viewbox);
+      regionCenterRef.current = { lat: (latMin + latMax) / 2, lng: (lngMin + lngMax) / 2 };
     } catch (err) {
       console.error('Error initializing zone data:', err);
     }
   };
 
-  const fetchNominatimSuggestions = async (query: string): Promise<any[]> => {
+  const fetchGooglePlacesSuggestions = async (query: string): Promise<any[]> => {
+    if (!GOOGLE_API_KEY) return [];
     try {
-      const viewbox = viewboxRef.current;
-      const url = viewbox
-        ? `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&countrycodes=gh&viewbox=${viewbox}&bounded=1`
-        : `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}+Ghana&format=json&limit=5&countrycodes=gh`;
-      const res = await fetch(url, { headers: { 'Accept-Language': 'en', 'User-Agent': 'PragyaGo/1.0' } });
+      const center = regionCenterRef.current;
+      const locationParam = center ? `&location=${center.lat},${center.lng}&radius=50000` : '';
+      const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&key=${GOOGLE_API_KEY}&components=country:gh${locationParam}&language=en`;
+      const res = await fetch(url);
       const data = await res.json();
-      return Array.isArray(data) ? data.map((r: any) => ({ id: `place-${r.place_id}`, label: r.display_name, source: 'place' as const })) : [];
+      if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') return [];
+      return (data.predictions ?? []).map((p: any) => ({
+        id: `gplace-${p.place_id}`,
+        label: p.description,
+        placeId: p.place_id,
+        source: 'place' as const,
+      }));
     } catch { return []; }
+  };
+
+  const fetchPlaceDetails = async (placeId: string): Promise<{ lat: number; lng: number } | null> => {
+    if (!GOOGLE_API_KEY) return null;
+    try {
+      const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=geometry,name&key=${GOOGLE_API_KEY}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.status !== 'OK') return null;
+      const loc = data.result?.geometry?.location;
+      return loc ? { lat: loc.lat, lng: loc.lng } : null;
+    } catch { return null; }
   };
 
   const handleDestinationChange = (text: string) => {
@@ -217,9 +240,9 @@ export default function RiderHomeScreen() {
         const fareZoneIds = regionZoneIdsRef.current.length > 0 ? regionZoneIdsRef.current : zoneIdRef.current;
         const [zoneSuggestions, placeSuggestions] = await Promise.all([
           getFareSuggestions(fareZoneIds, text),
-          fetchNominatimSuggestions(text),
+          fetchGooglePlacesSuggestions(text),
         ]);
-        const zoneItems = zoneSuggestions.map((z, i) => ({
+        const zoneItems = zoneSuggestions.map((z: any, i: number) => ({
           id: `zone-${i}`,
           label: z.to_location,
           fare: z.base_fare,
@@ -237,7 +260,7 @@ export default function RiderHomeScreen() {
     if (text.length >= 2) {
       stopDebounceRef.current = setTimeout(async () => {
         setLoadingStopSuggestions(true);
-        const results = await fetchNominatimSuggestions(text);
+        const results = await fetchGooglePlacesSuggestions(text);
         setStopSuggestions(results);
         setLoadingStopSuggestions(false);
       }, 500);
@@ -422,7 +445,8 @@ export default function RiderHomeScreen() {
           rider_id: user.id,
           pickup_lat: location.latitude, pickup_lng: location.longitude,
           pickup_address: 'Current Location',
-          dropoff_lat: location.latitude + 0.01, dropoff_lng: location.longitude + 0.01,
+          dropoff_lat: selectedDestCoords?.lat ?? location.latitude + 0.01,
+          dropoff_lng: selectedDestCoords?.lng ?? location.longitude + 0.01,
           dropoff_address: destination,
           stops: allStops, current_stop: 0,
           status: 'requested', fare_ghs: originalFare ?? fareEstimate,
@@ -609,7 +633,7 @@ export default function RiderHomeScreen() {
           <View style={styles.inputWrapper}>
             <TextInput style={styles.inputWithClear} placeholder="Enter final destination" value={destination} onChangeText={handleDestinationChange} placeholderTextColor="#999" />
             {destination.length > 0 && (
-              <TouchableOpacity style={styles.clearBtn} onPress={() => { setDestination(''); setDestinationSuggestions([]); setFareEstimate(null); setFareBreakdown(null); }}>
+              <TouchableOpacity style={styles.clearBtn} onPress={() => { setDestination(''); setDestinationSuggestions([]); setFareEstimate(null); setFareBreakdown(null); setSelectedDestCoords(null); }}>
                 <Text style={styles.clearBtnText}>✕</Text>
               </TouchableOpacity>
             )}
@@ -617,26 +641,41 @@ export default function RiderHomeScreen() {
           {loadingDestSuggestions && <ActivityIndicator size="small" color="#2563eb" style={styles.suggestionsLoader} />}
           {destinationSuggestions.length > 0 && (
             <View style={styles.suggestionsCard}>
-              {destinationSuggestions.map((item, index) => (
-                <TouchableOpacity
-                  key={item.id ?? index}
-                  style={[
-                    styles.suggestionItem,
-                    item.source === 'zone' && styles.suggestionItemZone,
-                    index < destinationSuggestions.length - 1 && styles.suggestionItemBorder,
-                  ]}
-                  onPress={() => { setDestination(item.label); setDestinationSuggestions([]); }}
-                >
-                  {item.source === 'zone' ? (
-                    <View style={styles.suggestionRowZone}>
-                      <Text style={styles.suggestionTextZone} numberOfLines={1}>📍 {item.label}</Text>
-                      <Text style={styles.suggestionFare}>GHS {item.fare}</Text>
-                    </View>
-                  ) : (
-                    <Text style={styles.suggestionText} numberOfLines={2}>📌 {item.label}</Text>
-                  )}
-                </TouchableOpacity>
-              ))}
+              {destinationSuggestions.map((item, index) => {
+                const prev = index > 0 ? destinationSuggestions[index - 1] : null;
+                const showFaresHeader = item.source === 'zone' && prev?.source !== 'zone';
+                const showPlacesHeader = item.source === 'place' && prev?.source !== 'place';
+                return (
+                  <React.Fragment key={item.id ?? index}>
+                    {showFaresHeader && <Text style={styles.sectionLabel}>📍 Fixed Fares</Text>}
+                    {showPlacesHeader && <Text style={styles.sectionLabel}>🗺️ All Places</Text>}
+                    <TouchableOpacity
+                      style={[
+                        styles.suggestionItem,
+                        item.source === 'zone' && styles.suggestionItemZone,
+                        index < destinationSuggestions.length - 1 && styles.suggestionItemBorder,
+                      ]}
+                      onPress={async () => {
+                        setDestination(item.label);
+                        setDestinationSuggestions([]);
+                        if (item.source === 'place' && item.placeId) {
+                          const coords = await fetchPlaceDetails(item.placeId);
+                          if (coords) setSelectedDestCoords(coords);
+                        }
+                      }}
+                    >
+                      {item.source === 'zone' ? (
+                        <View style={styles.suggestionRowZone}>
+                          <Text style={styles.suggestionTextZone} numberOfLines={1}>📍 {item.label}</Text>
+                          <Text style={styles.suggestionFare}>GHS {item.fare}</Text>
+                        </View>
+                      ) : (
+                        <Text style={styles.suggestionText} numberOfLines={2}>🗺️ {item.label}</Text>
+                      )}
+                    </TouchableOpacity>
+                  </React.Fragment>
+                );
+              })}
             </View>
           )}
           {stops.length > 0 && (
@@ -987,6 +1026,7 @@ const styles = StyleSheet.create({
   suggestionText: { fontSize: 13, color: '#333', lineHeight: 18 },
   suggestionTextZone: { fontSize: 13, color: '#085041', fontWeight: '600', flex: 1, marginRight: 8 },
   suggestionFare: { fontSize: 13, color: '#1D9E75', fontWeight: '700' },
+  sectionLabel: { fontSize: 11, fontWeight: '700', color: '#888', paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4, backgroundColor: '#f9f9f9', textTransform: 'uppercase', letterSpacing: 0.5 },
   suggestionsLoader: { alignSelf: 'center', marginBottom: 6 },
   riderMarker: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', borderWidth: 3, borderColor: '#2563eb', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.3, shadowRadius: 2, elevation: 3 },
   riderMarkerInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#2563eb' },
