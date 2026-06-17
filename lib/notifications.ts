@@ -6,6 +6,8 @@ import * as Notifications from 'expo-notifications';
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
   }),
@@ -16,12 +18,27 @@ export const registerForPushNotifications = async (): Promise<string | null> => 
 
   if (!Device.isDevice) return null;
 
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  const existingPermissions = await Notifications.getPermissionsAsync();
+  const existingStatus =
+    typeof existingPermissions === 'object' && existingPermissions !== null
+      ? 'status' in existingPermissions
+        ? existingPermissions.status
+        : 'granted' in existingPermissions && existingPermissions.granted
+        ? 'granted'
+        : 'denied'
+      : existingPermissions;
   let finalStatus = existingStatus;
 
   if (existingStatus !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
+    const requestedPermissions = await Notifications.requestPermissionsAsync();
+    finalStatus =
+      typeof requestedPermissions === 'object' && requestedPermissions !== null
+        ? 'status' in requestedPermissions
+          ? requestedPermissions.status
+          : 'granted' in requestedPermissions && requestedPermissions.granted
+          ? 'granted'
+          : 'denied'
+        : requestedPermissions;
   }
 
   if (finalStatus !== 'granted') return null;

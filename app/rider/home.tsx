@@ -8,6 +8,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -20,9 +21,24 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker } from 'react-native-maps';
+import MapView, { AnimatedRegion, Marker, MarkerAnimated, Polyline } from 'react-native-maps';
 
 const GOOGLE_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
+
+function decodePolyline(encoded: string): { latitude: number; longitude: number }[] {
+  const points: { latitude: number; longitude: number }[] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let shift = 0, result = 0, byte: number;
+    do { byte = encoded.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : result >> 1;
+    shift = result = 0;
+    do { byte = encoded.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : result >> 1;
+    points.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
+  }
+  return points;
+}
 
 const PRAGYA_COLOR_MAP: { [key: string]: string } = {
   red: '#FF3B30', blue: '#2563eb', yellow: '#FFD60A',
@@ -72,6 +88,13 @@ export default function RiderHomeScreen() {
   const rideSubscription = useRef<any>(null);
   const driverLocationSubscription = useRef<any>(null);
   const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const currentRideRef = useRef<any>(null);
+  const rideStatusRef = useRef<string>('');
+  const pulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+  const driverLocationAnim = useRef(
+    new AnimatedRegion({ latitude: 0, longitude: 0, latitudeDelta: 0.01, longitudeDelta: 0.01 })
+  ).current;
   const destDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stopDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const zoneIdRef = useRef<string | null>(null);
@@ -81,6 +104,8 @@ export default function RiderHomeScreen() {
   const [regionViewbox, setRegionViewbox] = useState<string | null>(null);
   const [selectedDestCoords, setSelectedDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [driverLocation, setDriverLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [routePoints, setRoutePoints] = useState<{ latitude: number; longitude: number }[]>([]);
+  const [routeDistance, setRouteDistance] = useState<string | null>(null);
   const [discountResult, setDiscountResult] = useState<DiscountResult | null>(null);
   const [originalFare, setOriginalFare] = useState<number | null>(null);
   const [destinationSuggestions, setDestinationSuggestions] = useState<any[]>([]);
@@ -88,6 +113,9 @@ export default function RiderHomeScreen() {
   const [stopSuggestions, setStopSuggestions] = useState<any[]>([]);
   const [loadingStopSuggestions, setLoadingStopSuggestions] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => { currentRideRef.current = currentRide; }, [currentRide]);
+  useEffect(() => { rideStatusRef.current = rideStatus; }, [rideStatus]);
 
   useEffect(() => {
     requestLocationPermission();
@@ -107,6 +135,7 @@ export default function RiderHomeScreen() {
       clearInterval(interval);
       if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
       if (driverLocationSubscription.current) supabase.removeChannel(driverLocationSubscription.current);
+      if (pulseLoopRef.current) pulseLoopRef.current.stop();
       if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
       if (stopDebounceRef.current) clearTimeout(stopDebounceRef.current);
     };
@@ -149,8 +178,50 @@ export default function RiderHomeScreen() {
     } catch (error) { console.error('Error fetching driver info:', error); }
   };
 
+  const startPulseAnimation = () => {
+    if (pulseLoopRef.current) pulseLoopRef.current.stop();
+    pulseAnim.setValue(0);
+    pulseLoopRef.current = Animated.loop(
+      Animated.timing(pulseAnim, { toValue: 1, duration: 1500, useNativeDriver: true })
+    );
+    pulseLoopRef.current.start();
+  };
+
+  const stopDriverTracking = () => {
+    if (pulseLoopRef.current) { pulseLoopRef.current.stop(); pulseLoopRef.current = null; }
+    pulseAnim.setValue(0);
+    setDriverLocation(null);
+    setRoutePoints([]);
+    setRouteDistance(null);
+  };
+
+  const fetchRoute = async (originLat: number, originLng: number, destLat: number, destLng: number) => {
+    if (!GOOGLE_API_KEY) return;
+    try {
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}&destination=${destLat},${destLng}&key=${GOOGLE_API_KEY}&mode=driving`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.status !== 'OK' || !data.routes?.length) return;
+      const route = data.routes[0];
+      const leg = route.legs[0];
+      const points = decodePolyline(route.overview_polyline.points);
+      setRoutePoints(points);
+      if (leg?.distance?.text) setRouteDistance(leg.distance.text);
+      if (leg?.duration?.text) setEta(`~${leg.duration.text}`);
+      if (points.length > 1) {
+        mapRef.current?.fitToCoordinates(points, {
+          edgePadding: { top: 80, right: 40, bottom: 220, left: 40 },
+          animated: true,
+        });
+      }
+    } catch (err) {
+      console.error('Error fetching route:', err);
+    }
+  };
+
   const subscribeToDriverLocation = async (driverId: string) => {
     if (driverLocationSubscription.current) await supabase.removeChannel(driverLocationSubscription.current);
+    startPulseAnimation();
     const channel = supabase
       .channel(`driver-location-${driverId}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'drivers', filter: `id=eq.${driverId}` },
@@ -159,10 +230,26 @@ export default function RiderHomeScreen() {
           if (driver.current_lat && driver.current_lng) {
             const coords = { latitude: driver.current_lat, longitude: driver.current_lng };
             setDriverLocation(coords);
-            if (locationRef.current) {
-              setEta(calculateETA(driver.current_lat, driver.current_lng, locationRef.current.latitude, locationRef.current.longitude));
+            driverLocationAnim.timing({
+              latitude: coords.latitude,
+              longitude: coords.longitude,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+              duration: 1000,
+              useNativeDriver: false,
+            } as any).start();
+
+            const ride = currentRideRef.current;
+            const target = rideStatusRef.current === 'in_progress' && ride?.dropoff_lat
+              ? { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }
+              : ride?.pickup_lat
+                ? { latitude: ride.pickup_lat, longitude: ride.pickup_lng }
+                : locationRef.current;
+            if (target) {
+              fetchRoute(driver.current_lat, driver.current_lng, target.latitude, target.longitude);
+            } else {
+              mapRef.current?.animateCamera({ center: coords }, { duration: 500 });
             }
-            mapRef.current?.animateCamera({ center: coords }, { duration: 500 });
           }
         });
     channel.subscribe();
@@ -373,7 +460,18 @@ export default function RiderHomeScreen() {
             setFinalFare(null);
             if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
             if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
-            setDriverLocation(null);
+            stopDriverTracking();
+          } else if (ride.status === 'cancelled') {
+            setShowDriverCard(false);
+            setShowFareAcceptModal(false);
+            setCurrentRide(null);
+            setRideStatus('');
+            setDriverInfo(null);
+            setEta(null);
+            setFinalFare(null);
+            if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
+            if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
+            stopDriverTracking();
           }
         });
     await channel.subscribe();
@@ -487,9 +585,10 @@ export default function RiderHomeScreen() {
     if (!currentRide) return;
     await supabase.from('rides').update({ status: 'cancelled' }).eq('id', currentRide.id);
     setCurrentRide(null); setRideStatus(''); setDriverInfo(null);
-    setShowDriverCard(false); setEta(null); setFinalFare(null); setDriverLocation(null);
+    setShowDriverCard(false); setEta(null); setFinalFare(null);
     if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
     if (driverLocationSubscription.current) { await supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
+    stopDriverTracking();
     Alert.alert('Ride Cancelled', 'Your ride has been cancelled.');
   };
 
@@ -534,9 +633,14 @@ export default function RiderHomeScreen() {
 
   const getRideStatusLabel = () => {
     if (rideStatus === 'requested') return '🔍 Finding your Pragya...';
-    if (rideStatus === 'accepted') return `🛺 Driver on the way! ${eta ? `ETA: ${eta}` : ''}`;
+    if (rideStatus === 'accepted') {
+      const parts = [routeDistance, eta ? `ETA: ${eta}` : null].filter(Boolean).join('  ·  ');
+      return `🛺 Driver on the way!${parts ? `  ${parts}` : ''}`;
+    }
     if (rideStatus === 'arrived_pickup') return '🛺 Driver has arrived!';
-    if (rideStatus === 'in_progress') return '🎉 Ride in progress';
+    if (rideStatus === 'in_progress') {
+      return `🎉 Ride in progress${routeDistance ? `  ·  ${routeDistance} to go` : ''}${eta ? `  ·  ${eta}` : ''}`;
+    }
     if (rideStatus === 'payment_pending') return '💰 Confirm payment';
     return '';
   };
@@ -578,11 +682,25 @@ export default function RiderHomeScreen() {
               </Marker>
             ))}
             {driverLocation && (
-              <Marker coordinate={driverLocation} title="Your Driver">
-                <View style={styles.tricycleMarker}>
-                  <Text style={styles.tricycleEmoji}>🛺</Text>
+              <MarkerAnimated coordinate={driverLocationAnim} title="Your Driver">
+                <View style={styles.trackingMarkerWrap}>
+                  <Animated.View
+                    style={[
+                      styles.pulseCircle,
+                      {
+                        transform: [{ scale: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.8] }) }],
+                        opacity: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] }),
+                      },
+                    ]}
+                  />
+                  <View style={styles.tricycleMarker}>
+                    <Text style={styles.tricycleEmoji}>🛺</Text>
+                  </View>
                 </View>
-              </Marker>
+              </MarkerAnimated>
+            )}
+            {routePoints.length > 1 && (
+              <Polyline coordinates={routePoints} strokeColor="#1D9E75" strokeWidth={4} />
             )}
           </MapView>
         )}
@@ -812,7 +930,13 @@ export default function RiderHomeScreen() {
         <View style={[styles.modalOverlay, { paddingTop: insets.top }]}>
           <View style={styles.driverCard}>
             <Text style={styles.driverCardTitle}>Your Driver</Text>
-            {eta && <View style={styles.etaBadge}><Text style={styles.etaText}>ETA: {eta}</Text></View>}
+            {(eta || routeDistance) && (
+              <View style={styles.etaBadge}>
+                <Text style={styles.etaText}>
+                  {routeDistance ? `${routeDistance}` : ''}{routeDistance && eta ? '  ·  ' : ''}{eta ? `ETA: ${eta}` : ''}
+                </Text>
+              </View>
+            )}
             <View style={styles.driverPhotoSection}>
               {driverInfo?.photo_url ? (
                 <Image source={{ uri: driverInfo.photo_url }} style={styles.driverPhoto} />
@@ -1032,6 +1156,8 @@ const styles = StyleSheet.create({
   riderMarkerInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#2563eb' },
   tricycleMarker: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1D9E75', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 4 },
   tricycleEmoji: { fontSize: 20 },
+  trackingMarkerWrap: { width: 50, height: 50, justifyContent: 'center', alignItems: 'center' },
+  pulseCircle: { position: 'absolute', width: 50, height: 50, borderRadius: 25, backgroundColor: '#1D9E75' },
   bellBtn: { position: 'absolute', top: 12, right: 12, zIndex: 10, width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 },
   bellIcon: { fontSize: 20 },
   bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },
