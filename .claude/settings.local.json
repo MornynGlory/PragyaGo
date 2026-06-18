@@ -2,7 +2,18 @@
   "permissions": {
     "allow": [
       "Bash(Get-Item \"c:\\\\Users\\\\USER\\\\PragyaGo\\\\lib\\\\notifications.ts\")",
-      "Bash(Select-Object Name, Length, LastWriteTime)"
+      "Bash(Select-Object Name, Length, LastWriteTime)",
+      "Bash(node -e \"const p=require\\('c:/Users/USER/PragyaGo/package.json'\\); console.log\\(JSON.stringify\\(Object.keys\\({...p.dependencies,...\\(p.devDependencies||{}\\)}\\),null,0\\)\\)\")",
+      "Bash(mkdir -p \"c:/Users/USER/PragyaGo/supabase/functions/paystack-initialize\")",
+      "Bash(mkdir -p \"c:/Users/USER/PragyaGo/supabase/functions/paystack-verify\")",
+      "Bash(npx tsc *)",
+      "Bash(npm install *)",
+      "Bash(node -e \"const p=require\\('./node_modules/react-native-paystack-webview/package.json'\\); console.log\\(p.version\\); console.log\\(Object.keys\\(p.exports||{}\\).join\\(', '\\) || p.main\\)\")",
+      "Bash(node -e \"const t=require\\('c:/Users/USER/PragyaGo/node_modules/react-native-paystack-webview/production/lib/index.js'\\); console.log\\(Object.keys\\(t\\)\\)\")",
+      "Bash(npm view *)",
+      "Bash(node -e \"const v=JSON.parse\\(require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\)\\); console.log\\(v.filter\\(x=>x.startsWith\\('3'\\)||x.startsWith\\('4'\\)\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(findstr \"3\\\\. 4\\\\.\")",
+      "Bash(node -e \"const p=require\\('c:/Users/USER/PragyaGo/node_modules/react-native-paystack-webview/package.json'\\); console.log\\('version:', p.version, '\\\\nmain:', p.main\\)\")"
     ]
   }
 }

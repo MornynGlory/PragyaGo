@@ -499,8 +499,8 @@ export default function DriverHomeScreen() {
             <TouchableOpacity style={styles.reportButton} onPress={() => router.push('/driver/report')}>
               <Text style={styles.reportButtonText}>Report</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.switchButton} onPress={() => router.replace('/rider' as any)}>
-              <Text style={styles.switchButtonText}>Rider Mode</Text>
+            <TouchableOpacity style={styles.switchButton} onPress={() => router.replace('/rider/home' as any)}>
+              <Text style={styles.switchButtonText}>👤 Rider Mode</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.supportButton} onPress={() => router.push('/support' as any)}>
               <Text style={styles.supportButtonText}>🎧 Support</Text>

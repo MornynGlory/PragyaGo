@@ -79,24 +79,7 @@ export default function NotificationsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <View style={styles.header}>
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>Notifications</Text>
-          {unreadCount > 0 && (
-            <View style={styles.unreadBadge}>
-              <Text style={styles.unreadBadgeText}>{unreadCount}</Text>
-            </View>
-          )}
-        </View>
-        <TouchableOpacity onPress={markAllAsRead} disabled={markingAll || unreadCount === 0} style={styles.markAllBtn}>
-          {markingAll
-            ? <ActivityIndicator size="small" color="#fff" />
-            : <Text style={[styles.markAllText, unreadCount === 0 && styles.markAllTextDim]}>Mark all read</Text>
-          }
-        </TouchableOpacity>
-      </View>
-
+    <SafeAreaView style={styles.safeArea} edges={['bottom']}>
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#1D9E75" />
@@ -108,6 +91,18 @@ export default function NotificationsScreen() {
         </View>
       ) : (
         <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+          {unreadCount > 0 && (
+            <TouchableOpacity
+              onPress={markAllAsRead}
+              disabled={markingAll}
+              style={styles.markAllRow}
+            >
+              {markingAll
+                ? <ActivityIndicator size="small" color="#1D9E75" />
+                : <Text style={styles.markAllText}>Mark all as read</Text>
+              }
+            </TouchableOpacity>
+          )}
           {notifications.map((item) => {
             const broadcast = item.broadcasts;
             const type = broadcast?.type || 'announcement';
@@ -136,14 +131,8 @@ export default function NotificationsScreen() {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1D9E75', paddingHorizontal: 12, paddingVertical: 14 },
-  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
-  unreadBadge: { backgroundColor: '#FF3B30', borderRadius: 10, minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 5 },
-  unreadBadgeText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
-  markAllBtn: { paddingVertical: 6, paddingHorizontal: 10 },
-  markAllText: { color: '#fff', fontSize: 13, fontWeight: '600' },
-  markAllTextDim: { opacity: 0.5 },
+  markAllRow: { alignSelf: 'flex-end', paddingVertical: 6, paddingHorizontal: 4, marginBottom: 4 },
+  markAllText: { color: '#1D9E75', fontSize: 13, fontWeight: '600' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
   emptyIcon: { fontSize: 48 },

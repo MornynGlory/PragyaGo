@@ -1,7 +1,7 @@
-import { supabase } from '@/lib/supabase';
 import { applyDiscount, DiscountResult, recordDiscountUse } from '@/lib/discounts';
 import { calculateZoneFare, FareResult, getFareSuggestions } from '@/lib/fares';
 import { getDriverToken, sendPushNotification } from '@/lib/notifications';
+import { supabase } from '@/lib/supabase';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -20,8 +20,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { AnimatedRegion, Marker, MarkerAnimated, Polyline } from 'react-native-maps';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const GOOGLE_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
 
@@ -92,7 +92,7 @@ export default function RiderHomeScreen() {
   const rideStatusRef = useRef<string>('');
   const pulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
   const pulseAnim = useRef(new Animated.Value(0)).current;
-  const driverLocationAnim = useRef(
+  const driverLocationAnim = useRef<any>(
     new AnimatedRegion({ latitude: 0, longitude: 0, latitudeDelta: 0.01, longitudeDelta: 0.01 })
   ).current;
   const destDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -113,6 +113,7 @@ export default function RiderHomeScreen() {
   const [stopSuggestions, setStopSuggestions] = useState<any[]>([]);
   const [loadingStopSuggestions, setLoadingStopSuggestions] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [isDriver, setIsDriver] = useState(false);
 
   useEffect(() => { currentRideRef.current = currentRide; }, [currentRide]);
   useEffect(() => { rideStatusRef.current = rideStatus; }, [rideStatus]);
@@ -123,11 +124,12 @@ export default function RiderHomeScreen() {
     fetchUnreadCount();
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return;
-      supabase.from('profiles').select('zone_id').eq('id', user.id).single()
+      supabase.from('profiles').select('zone_id, role').eq('id', user.id).single()
         .then(({ data }) => {
           const zoneId = data?.zone_id ?? null;
           zoneIdRef.current = zoneId;
           if (zoneId) initZoneData(zoneId);
+          if (data?.role === 'driver') setIsDriver(true);
         });
     });
     const interval = setInterval(fetchNearbyDrivers, 10000);
@@ -884,9 +886,15 @@ export default function RiderHomeScreen() {
             <TouchableOpacity style={styles.walletButton} onPress={() => router.push('/rider/gocash')}>
               <Text style={styles.walletButtonText}>💰 My Wallet</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.switchButton} onPress={() => Alert.alert('Want to become a Driver?', 'To register as a Pragya driver, visit any PragyaGo office or station near you with your Ghana Card and vehicle details.\n\nOur offices are open Monday to Friday, 8am - 5pm.', [{ text: 'OK' }])}>
-              <Text style={styles.switchButtonText}>Become a Driver</Text>
-            </TouchableOpacity>
+            {isDriver ? (
+              <TouchableOpacity style={styles.switchButton} onPress={() => router.replace('/driver/home' as any)}>
+                <Text style={styles.switchButtonText}>🛺 Driver Mode</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={styles.switchButton} onPress={() => Alert.alert('Want to become a Driver?', 'To register as a Pragya driver, visit any PragyaGo office or station near you with your Ghana Card and vehicle details.\n\nOur offices are open Monday to Friday, 8am - 5pm.', [{ text: 'OK' }])}>
+                <Text style={styles.switchButtonText}>Become a Driver</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={styles.supportButton} onPress={() => router.push('/support' as any)}>
               <Text style={styles.supportButtonText}>🎧 Support</Text>
             </TouchableOpacity>
