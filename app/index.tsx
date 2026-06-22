@@ -68,7 +68,7 @@ export default function LandingScreen() {
     try {
       const { data, error } = await supabase
         .from('profiles')
-        .select('role, suspended, suspension_reason')
+        .select('role, suspended, suspension_reason, phone_verified, phone')
         .eq('id', userId)
         .single();
 
@@ -104,7 +104,14 @@ export default function LandingScreen() {
             router.replace('/driver/home' as any);
           }
         } else {
-          router.replace('/rider/home' as any);
+          if (data.phone_verified) {
+            router.replace('/rider/home' as any);
+          } else {
+            router.replace({
+              pathname: '/auth/verify-phone',
+              params: { phone: data.phone ?? '' },
+            } as any);
+          }
         }
       } else {
         setUserRole(null);

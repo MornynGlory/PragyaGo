@@ -92,10 +92,19 @@ export default function DriverWalletScreen() {
 
       setDriverId(driver.id);
       setWalletBalance(driver.wallet_balance || 0);
-      setCommissionOwed(driver.commission_owed || 0);
-      setIsLocked(driver.is_locked || false);
       setGoCashEarnings(driver.go_cash_earnings || 0);
       setGoCashLocked(driver.go_cash_locked || false);
+
+      const dbCommission = driver.commission_owed ?? 0;
+      const dbLocked = driver.is_locked || false;
+      setCommissionOwed(dbCommission);
+      // Repair stale is_locked: lock is only valid when commission_owed > 0
+      if (dbLocked && dbCommission === 0) {
+        await supabase.from('drivers').update({ is_locked: false }).eq('id', driver.id);
+        setIsLocked(false);
+      } else {
+        setIsLocked(dbLocked);
+      }
 
       await checkMidnightLock(driver);
 
@@ -348,7 +357,7 @@ export default function DriverWalletScreen() {
           <View style={styles.balanceCard}>
             <Text style={styles.balanceLabel}>Wallet Balance</Text>
             <Text style={styles.balanceAmount}>GHS {walletBalance.toFixed(2)}</Text>
-            {isLocked && (
+            {isLocked && commissionOwed > 0 && (
               <View style={styles.lockedBadge}>
                 <Text style={styles.lockedText}>🔒 App locked — pay commission to unlock</Text>
               </View>

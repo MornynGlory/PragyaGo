@@ -55,6 +55,8 @@ export default function DriverHomeScreen() {
   const [currentZoneId, setCurrentZoneId] = useState<string | null>(null);
   const currentZoneIdRef = useRef<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [isLocked, setIsLocked] = useState(false);
+  const [commissionOwed, setCommissionOwed] = useState(0);
 
   useEffect(() => {
     requestLocationPermission();
@@ -94,6 +96,18 @@ export default function DriverHomeScreen() {
         setIsOnline(driver.is_online || false);
         setCurrentZoneId(driver.zone_id || null);
         currentZoneIdRef.current = driver.zone_id || null;
+
+        const dbCommission = driver.commission_owed ?? 0;
+        const dbLocked = driver.is_locked || false;
+        setCommissionOwed(dbCommission);
+        // Lock is only effective when commission_owed > 0; repair stale flag if needed
+        if (dbLocked && dbCommission === 0) {
+          await supabase.from('drivers').update({ is_locked: false }).eq('id', driver.id);
+          setIsLocked(false);
+        } else {
+          setIsLocked(dbLocked);
+        }
+
         if (driver.is_online) await subscribeToRideRequests(driver.id);
       }
       const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -204,6 +218,24 @@ export default function DriverHomeScreen() {
               }]);
             }
             Alert.alert('Ride Complete!', `GHS ${actualFare} earned!`);
+
+            // Re-check commission_owed; auto-unlock if it has been cleared
+            const { data: freshDriver } = await supabase
+              .from('drivers')
+              .select('commission_owed, is_locked')
+              .eq('id', driverId)
+              .single();
+            if (freshDriver) {
+              const owedNow = freshDriver.commission_owed ?? 0;
+              setCommissionOwed(owedNow);
+              if (owedNow === 0 && freshDriver.is_locked) {
+                await supabase.from('drivers').update({ is_locked: false }).eq('id', driverId);
+                setIsLocked(false);
+              } else {
+                setIsLocked(freshDriver.is_locked || false);
+              }
+            }
+
             await subscribeToRideRequests(driverId);
           }
         });
@@ -213,6 +245,15 @@ export default function DriverHomeScreen() {
   };
 
   const toggleOnlineStatus = async () => {
+    // Dual-condition lock: only block when BOTH is_locked=true AND commission_owed > 0
+    if (isLocked && commissionOwed > 0) {
+      Alert.alert(
+        '🔒 Account Locked',
+        `You have GHS ${commissionOwed.toFixed(2)} in unpaid commission. Please top up your wallet to settle it and unlock your account.`,
+        [{ text: 'Go to Wallet', onPress: () => router.push('/driver/wallet' as any) }, { text: 'Cancel', style: 'cancel' }]
+      );
+      return;
+    }
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -260,15 +301,36 @@ export default function DriverHomeScreen() {
     const { error } = await supabase.from('rides').update({ status: 'arrived_pickup' }).eq('id', activeRide.id);
     if (error) { Alert.alert('Error', error.message); return; }
     setRideStatus('arrived_pickup');
+
+    // Fetch driver's own name for the notification message
+    let driverName = 'Your driver';
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', user.id).single();
+      if (profile?.full_name) driverName = profile.full_name;
+    }
+
+    // Push notification to rider
     const riderToken = await getRiderToken(activeRide.rider_id);
     if (riderToken) {
       await sendPushNotification(
         riderToken,
-        '🛺 Driver Arrived!',
-        'Your Pragya driver has arrived at your pickup location. Please confirm pickup.'
+        '🛺 Your Driver Has Arrived!',
+        `Your Pragya driver ${driverName} has arrived at your pickup location. Please come out!`
       );
     }
-    Alert.alert('Arrived at Pickup!', 'Waiting for rider to confirm...');
+
+    // In-app notification record for rider's notification feed
+    await supabase.from('user_notifications').insert({
+      user_id: activeRide.rider_id,
+      title: 'Driver Has Arrived!',
+      message: `Your driver ${driverName} is waiting for you at ${activeRide.pickup_address}`,
+      type: 'ride_update',
+      is_read: false,
+      created_at: new Date().toISOString(),
+    });
+
+    Alert.alert('Arrived at Pickup!', "Rider has been notified that you've arrived.");
   };
 
   const arrivedAtStop = async () => {
@@ -483,8 +545,23 @@ export default function DriverHomeScreen() {
 
       {!activeRide && (
         <View style={[styles.bottomPanel, { paddingBottom: insets.bottom + 16 }]}>
+          {isLocked && commissionOwed > 0 && (
+            <TouchableOpacity
+              style={styles.lockBanner}
+              onPress={() => router.push('/driver/wallet' as any)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.lockBannerText}>
+                🔒 Account locked — GHS {commissionOwed.toFixed(2)} commission owed. Tap to pay.
+              </Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
-            style={[styles.onlineButton, isOnline ? styles.onlineActive : styles.onlineInactive]}
+            style={[
+              styles.onlineButton,
+              isOnline ? styles.onlineActive : styles.onlineInactive,
+              isLocked && commissionOwed > 0 && styles.onlineDisabled,
+            ]}
             onPress={toggleOnlineStatus}
           >
             <Text style={styles.onlineButtonText}>{isOnline ? 'Go Offline' : 'Go Online'}</Text>
@@ -560,6 +637,9 @@ const styles = StyleSheet.create({
   tricycleMarker: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1D9E75', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 4 },
   tricycleMarkerOffline: { backgroundColor: '#999' },
   tricycleEmoji: { fontSize: 20 },
+  lockBanner: { backgroundColor: '#FF3B30', borderRadius: 8, padding: 10, marginBottom: 8, alignItems: 'center' },
+  lockBannerText: { color: '#fff', fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  onlineDisabled: { opacity: 0.5 },
   bellBtn: { justifyContent: 'center', alignItems: 'center', position: 'relative', width: 36, height: 36 },
   bellIcon: { fontSize: 22 },
   bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },

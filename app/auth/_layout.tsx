@@ -12,6 +12,10 @@ export default function AuthLayout() {
         options={{ headerShown: false }}
       />
       <Stack.Screen
+        name="verify-phone"
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
         name="verify-driver"
         options={{ title: 'Identity Verification' }}
       />

@@ -93,11 +93,12 @@ export default function RegisterScreen() {
         }
       }
 
+      // Brief delay lets Supabase session propagate before navigating
+      await new Promise(resolve => setTimeout(resolve, 500));
       if (role === 'driver') {
         router.replace('/auth/verify-driver' as any);
       } else {
-        Alert.alert('Success', 'Account created successfully! Please check your email to verify your account.');
-        router.push('/auth/login');
+        router.replace({ pathname: '/auth/verify-phone', params: { phone: phone.trim() } } as any);
       }
     } catch (err) {
       console.error('Registration error:', err);

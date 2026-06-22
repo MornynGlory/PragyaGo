@@ -18,6 +18,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Vibration,
   View,
 } from 'react-native';
 import MapView, { AnimatedRegion, Marker, MarkerAnimated, Polyline } from 'react-native-maps';
@@ -114,6 +115,8 @@ export default function RiderHomeScreen() {
   const [loadingStopSuggestions, setLoadingStopSuggestions] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isDriver, setIsDriver] = useState(false);
+  const [showArrivedBanner, setShowArrivedBanner] = useState(false);
+  const [arrivedBannerDriverName, setArrivedBannerDriverName] = useState('');
 
   useEffect(() => { currentRideRef.current = currentRide; }, [currentRide]);
   useEffect(() => { rideStatusRef.current = rideStatus; }, [rideStatus]);
@@ -426,12 +429,21 @@ export default function RiderHomeScreen() {
             await subscribeToDriverLocation(ride.driver_id);
           } else if (ride.status === 'arrived_pickup') {
             setShowDriverCard(false);
-            Alert.alert(
-              'Driver Arrived! 🛺',
-              'Your Pragya driver has arrived. Please confirm pickup.',
-              [{ text: 'Confirm Pickup', onPress: () => confirmPickup(ride.id) }]
-            );
+            // Fetch driver name fresh — avoids stale closure from driverInfo state
+            let bannerName = 'Your driver';
+            if (ride.driver_id) {
+              const { data: driverData } = await supabase
+                .from('drivers')
+                .select('profiles(full_name)')
+                .eq('id', ride.driver_id)
+                .single();
+              bannerName = (driverData?.profiles as any)?.full_name ?? 'Your driver';
+            }
+            setArrivedBannerDriverName(bannerName);
+            setShowArrivedBanner(true);
+            Vibration.vibrate([0, 400, 150, 400]);
           } else if (ride.status === 'in_progress') {
+            setShowArrivedBanner(false);
             setShowDriverCard(false);
             Alert.alert('Ride Started! 🎉', 'You are now on your way.');
           } else if (ride.status === 'payment_pending') {
@@ -452,6 +464,7 @@ export default function RiderHomeScreen() {
               );
             }
           } else if (ride.status === 'completed') {
+            setShowArrivedBanner(false);
             setShowDriverCard(false);
             setShowFareAcceptModal(false);
             setCompletedRide(ride);
@@ -464,6 +477,7 @@ export default function RiderHomeScreen() {
             if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
             stopDriverTracking();
           } else if (ride.status === 'cancelled') {
+            setShowArrivedBanner(false);
             setShowDriverCard(false);
             setShowFareAcceptModal(false);
             setCurrentRide(null);
@@ -707,6 +721,30 @@ export default function RiderHomeScreen() {
           </MapView>
         )}
       </View>
+
+      {/* Driver arrived banner — overlays the map, dismissible */}
+      {showArrivedBanner && (
+        <View style={styles.arrivedBanner}>
+          <Text style={styles.arrivedBannerTitle}>🛺 Your driver has arrived!</Text>
+          <Text style={styles.arrivedBannerSub}>
+            {arrivedBannerDriverName} is waiting at your pickup location. Please head out now!
+          </Text>
+          <View style={styles.arrivedBannerActions}>
+            <TouchableOpacity
+              style={styles.arrivedConfirmBtn}
+              onPress={() => {
+                setShowArrivedBanner(false);
+                if (currentRide) confirmPickup(currentRide.id);
+              }}
+            >
+              <Text style={styles.arrivedConfirmText}>Confirm Pickup</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.arrivedDismissBtn} onPress={() => setShowArrivedBanner(false)}>
+              <Text style={styles.arrivedDismissText}>✕ Dismiss</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {currentRide && (
         <View style={styles.rideStatusBanner}>
@@ -1166,6 +1204,28 @@ const styles = StyleSheet.create({
   tricycleEmoji: { fontSize: 20 },
   trackingMarkerWrap: { width: 50, height: 50, justifyContent: 'center', alignItems: 'center' },
   pulseCircle: { position: 'absolute', width: 50, height: 50, borderRadius: 25, backgroundColor: '#1D9E75' },
+  arrivedBanner: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 20,
+    backgroundColor: '#1D9E75',
+    padding: 16,
+    paddingTop: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 12,
+  },
+  arrivedBannerTitle: { fontSize: 17, fontWeight: 'bold', color: '#fff', marginBottom: 4 },
+  arrivedBannerSub: { fontSize: 13, color: '#E1F5EE', lineHeight: 19, marginBottom: 12 },
+  arrivedBannerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  arrivedConfirmBtn: { flex: 1, backgroundColor: '#fff', paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
+  arrivedConfirmText: { color: '#1D9E75', fontWeight: 'bold', fontSize: 14 },
+  arrivedDismissBtn: { paddingVertical: 10, paddingHorizontal: 4 },
+  arrivedDismissText: { color: 'rgba(255,255,255,0.75)', fontSize: 13, fontWeight: '600' },
   bellBtn: { position: 'absolute', top: 12, right: 12, zIndex: 10, width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 },
   bellIcon: { fontSize: 20 },
   bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },
