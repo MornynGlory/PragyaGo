@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { MoMoProvider, PROVIDER_COLORS, PROVIDER_LABELS } from '@/lib/paystack';
+import { useTheme } from '@/lib/useTheme';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -34,6 +35,8 @@ function PaystackAutoCheckout({ params }: { params: any }) {
 }
 
 export default function DriverWalletScreen() {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   const [activeTab, setActiveTab] = useState<TabName>('wallet');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -400,7 +403,7 @@ export default function DriverWalletScreen() {
               keyboardType="phone-pad"
               value={topUpPhone}
               onChangeText={setTopUpPhone}
-              placeholderTextColor="#999"
+              placeholderTextColor={colors.subtext}
             />
 
             <Text style={styles.fieldLabel}>Amount (GHS)</Text>
@@ -410,7 +413,7 @@ export default function DriverWalletScreen() {
               keyboardType="numeric"
               value={topUpAmount}
               onChangeText={setTopUpAmount}
-              placeholderTextColor="#999"
+              placeholderTextColor={colors.subtext}
             />
             {[[1, 2, 5], [10, 20, 50, 100]].map((row, ri) => (
               <View key={ri} style={[styles.quickAmounts, ri === 0 && { marginBottom: 8 }]}>
@@ -483,7 +486,7 @@ export default function DriverWalletScreen() {
                 keyboardType="phone-pad"
                 value={withdrawPhone}
                 onChangeText={setWithdrawPhone}
-                placeholderTextColor="#999"
+                placeholderTextColor={colors.subtext}
               />
               <TextInput
                 style={styles.input}
@@ -491,7 +494,7 @@ export default function DriverWalletScreen() {
                 keyboardType="numeric"
                 value={withdrawAmount}
                 onChangeText={setWithdrawAmount}
-                placeholderTextColor="#999"
+                placeholderTextColor={colors.subtext}
               />
               <View style={styles.quickAmounts}>
                 {[20, 50, 100, 200].map((amt) => (
@@ -563,13 +566,14 @@ export default function DriverWalletScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
+function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: c.background },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  tabs: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' },
+  tabs: { flexDirection: 'row', backgroundColor: c.card, borderBottomWidth: 1, borderBottomColor: c.border },
   tab: { flex: 1, paddingVertical: 12, alignItems: 'center' },
   tabActive: { borderBottomWidth: 2, borderBottomColor: '#1D9E75' },
-  tabText: { fontSize: 14, fontWeight: '600', color: '#999' },
+  tabText: { fontSize: 14, fontWeight: '600', color: c.subtext },
   tabTextActive: { color: '#1D9E75' },
   content: { flex: 1 },
   balanceCard: { backgroundColor: '#1D9E75', margin: 16, borderRadius: 16, padding: 24, alignItems: 'center' },
@@ -581,9 +585,9 @@ const styles = StyleSheet.create({
   commissionLabel: { fontSize: 13, color: '#FF3B30', fontWeight: '600', marginBottom: 4 },
   commissionAmount: { fontSize: 24, fontWeight: 'bold', color: '#FF3B30', marginBottom: 6 },
   commissionNote: { fontSize: 12, color: '#CC2200', lineHeight: 18 },
-  section: { backgroundColor: '#fff', margin: 16, marginTop: 0, borderRadius: 12, padding: 16 },
-  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#333', marginBottom: 14 },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#333', backgroundColor: '#f9f9f9', marginBottom: 12 },
+  section: { backgroundColor: c.card, margin: 16, marginTop: 0, borderRadius: 12, padding: 16 },
+  sectionTitle: { fontSize: 16, fontWeight: '600', color: c.text, marginBottom: 14 },
+  input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: c.text, backgroundColor: c.inputBg, marginBottom: 12 },
   quickAmounts: { flexDirection: 'row', gap: 8, marginBottom: 14 },
   quickBtn: { flex: 1, borderWidth: 1, borderColor: '#1D9E75', borderRadius: 8, paddingVertical: 8, alignItems: 'center' },
   quickBtnText: { fontSize: 13, fontWeight: '600', color: '#1D9E75' },
@@ -593,19 +597,20 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.6 },
   actionButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   networkRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: '#555', marginBottom: 8 },
-  networkBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1.5, borderColor: '#ddd', alignItems: 'center', backgroundColor: '#fff' },
-  networkBtnText: { fontSize: 13, fontWeight: '600', color: '#666' },
+  fieldLabel: { fontSize: 13, fontWeight: '600', color: c.subtext, marginBottom: 8 },
+  networkBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1.5, borderColor: c.border, alignItems: 'center', backgroundColor: c.card },
+  networkBtnText: { fontSize: 13, fontWeight: '600', color: c.subtext },
   networkBtnTextActive: { color: '#fff' },
-  paystackNote: { textAlign: 'center', color: '#aaa', fontSize: 11, marginTop: 10 },
-  warningText: { fontSize: 14, color: '#666', lineHeight: 22, textAlign: 'center', padding: 8 },
-  emptyText: { textAlign: 'center', color: '#999', fontSize: 14, marginTop: 40 },
-  txnRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', marginHorizontal: 16, marginTop: 8, borderRadius: 10, padding: 14 },
+  paystackNote: { textAlign: 'center', color: c.subtext, fontSize: 11, marginTop: 10 },
+  warningText: { fontSize: 14, color: c.subtext, lineHeight: 22, textAlign: 'center', padding: 8 },
+  emptyText: { textAlign: 'center', color: c.subtext, fontSize: 14, marginTop: 40 },
+  txnRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.card, marginHorizontal: 16, marginTop: 8, borderRadius: 10, padding: 14 },
   txnIcon: { fontSize: 22, marginRight: 12 },
   txnDetails: { flex: 1 },
-  txnDescription: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 3 },
-  txnDate: { fontSize: 12, color: '#999' },
+  txnDescription: { fontSize: 14, fontWeight: '600', color: c.text, marginBottom: 3 },
+  txnDate: { fontSize: 12, color: c.subtext },
   txnAmount: { fontSize: 15, fontWeight: 'bold' },
-  modalClose: { padding: 16, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  modalCloseText: { fontSize: 16, color: '#333', fontWeight: '600' },
-});
+  modalClose: { padding: 16, borderBottomWidth: 1, borderBottomColor: c.border },
+  modalCloseText: { fontSize: 16, color: c.text, fontWeight: '600' },
+  });
+}

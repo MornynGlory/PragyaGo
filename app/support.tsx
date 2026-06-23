@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import { useRouter } from 'expo-router';
+import { useTheme } from '@/lib/useTheme';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -25,7 +25,8 @@ const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
 };
 
 export default function SupportScreen() {
-  const router = useRouter();
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   const [tickets, setTickets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -116,13 +117,13 @@ export default function SupportScreen() {
       ) : (
         <ScrollView contentContainerStyle={styles.list}>
           {tickets.map((ticket) => {
-            const colors = STATUS_COLORS[ticket.status] ?? STATUS_COLORS.closed;
+            const ticketColors = STATUS_COLORS[ticket.status] ?? STATUS_COLORS.closed;
             return (
               <View key={ticket.id} style={styles.ticketCard}>
                 <View style={styles.ticketTop}>
                   <Text style={styles.ticketSubject} numberOfLines={1}>{ticket.subject}</Text>
-                  <View style={[styles.statusBadge, { backgroundColor: colors.bg }]}>
-                    <Text style={[styles.statusText, { color: colors.text }]}>{statusLabel(ticket.status)}</Text>
+                  <View style={[styles.statusBadge, { backgroundColor: ticketColors.bg }]}>
+                    <Text style={[styles.statusText, { color: ticketColors.text }]}>{statusLabel(ticket.status)}</Text>
                   </View>
                 </View>
                 <Text style={styles.ticketCategory}>{ticket.category}</Text>
@@ -172,7 +173,7 @@ export default function SupportScreen() {
                 placeholder="Brief description of your issue"
                 value={subject}
                 onChangeText={setSubject}
-                placeholderTextColor="#999"
+                placeholderTextColor={colors.subtext}
                 editable={!submitting}
               />
 
@@ -185,7 +186,7 @@ export default function SupportScreen() {
                 multiline
                 numberOfLines={5}
                 textAlignVertical="top"
-                placeholderTextColor="#999"
+                placeholderTextColor={colors.subtext}
                 editable={!submitting}
               />
 
@@ -204,42 +205,44 @@ export default function SupportScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1D9E75' },
-  newButton: { backgroundColor: '#1D9E75', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
-  newButtonText: { color: '#fff', fontWeight: '600', fontSize: 14 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 60 },
-  emptyIcon: { fontSize: 48, marginBottom: 12 },
-  emptyTitle: { fontSize: 18, fontWeight: '600', color: '#333', marginBottom: 6 },
-  emptySubtitle: { fontSize: 14, color: '#888', textAlign: 'center' },
-  list: { padding: 16, gap: 12 },
-  ticketCard: { backgroundColor: '#fff', borderRadius: 12, padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
-  ticketTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  ticketSubject: { fontSize: 15, fontWeight: '600', color: '#222', flex: 1, marginRight: 8 },
-  statusBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
-  statusText: { fontSize: 11, fontWeight: '700' },
-  ticketCategory: { fontSize: 12, color: '#1D9E75', fontWeight: '600', marginBottom: 6 },
-  ticketMessage: { fontSize: 13, color: '#555', lineHeight: 18, marginBottom: 8 },
-  ticketDate: { fontSize: 11, color: '#999' },
-  replyBox: { marginTop: 10, backgroundColor: '#F0FDF7', borderRadius: 8, padding: 10, borderLeftWidth: 3, borderLeftColor: '#1D9E75' },
-  replyLabel: { fontSize: 11, fontWeight: '700', color: '#1D9E75', marginBottom: 4 },
-  replyText: { fontSize: 13, color: '#333', lineHeight: 18 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalCard: { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '90%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  modalTitle: { fontSize: 18, fontWeight: '700', color: '#333' },
-  modalClose: { fontSize: 18, color: '#999', paddingHorizontal: 4 },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: '#333', marginBottom: 8, marginTop: 4 },
-  categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
-  categoryChip: { borderWidth: 1.5, borderColor: '#ddd', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#fff' },
-  categoryChipActive: { borderColor: '#1D9E75', backgroundColor: '#F0FDF7' },
-  categoryChipText: { fontSize: 12, color: '#555' },
-  categoryChipTextActive: { color: '#1D9E75', fontWeight: '700' },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, color: '#333', backgroundColor: '#fafafa', marginBottom: 14 },
-  messageInput: { height: 110, paddingTop: 11 },
-  submitButton: { backgroundColor: '#1D9E75', paddingVertical: 14, borderRadius: 8, alignItems: 'center', marginTop: 4, marginBottom: 8 },
-  buttonDisabled: { opacity: 0.6 },
-  submitButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-});
+function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    safeArea: { flex: 1, backgroundColor: c.background },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: c.card, borderBottomWidth: 1, borderBottomColor: c.border },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: '#1D9E75' },
+    newButton: { backgroundColor: '#1D9E75', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
+    newButtonText: { color: '#fff', fontWeight: '600', fontSize: 14 },
+    center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 60 },
+    emptyIcon: { fontSize: 48, marginBottom: 12 },
+    emptyTitle: { fontSize: 18, fontWeight: '600', color: c.text, marginBottom: 6 },
+    emptySubtitle: { fontSize: 14, color: c.subtext, textAlign: 'center' },
+    list: { padding: 16, gap: 12 },
+    ticketCard: { backgroundColor: c.card, borderRadius: 12, padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
+    ticketTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+    ticketSubject: { fontSize: 15, fontWeight: '600', color: c.text, flex: 1, marginRight: 8 },
+    statusBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
+    statusText: { fontSize: 11, fontWeight: '700' },
+    ticketCategory: { fontSize: 12, color: '#1D9E75', fontWeight: '600', marginBottom: 6 },
+    ticketMessage: { fontSize: 13, color: c.subtext, lineHeight: 18, marginBottom: 8 },
+    ticketDate: { fontSize: 11, color: c.subtext },
+    replyBox: { marginTop: 10, backgroundColor: '#F0FDF7', borderRadius: 8, padding: 10, borderLeftWidth: 3, borderLeftColor: '#1D9E75' },
+    replyLabel: { fontSize: 11, fontWeight: '700', color: '#1D9E75', marginBottom: 4 },
+    replyText: { fontSize: 13, color: c.text, lineHeight: 18 },
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+    modalCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '90%' },
+    modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+    modalTitle: { fontSize: 18, fontWeight: '700', color: c.text },
+    modalClose: { fontSize: 18, color: c.subtext, paddingHorizontal: 4 },
+    fieldLabel: { fontSize: 13, fontWeight: '600', color: c.text, marginBottom: 8, marginTop: 4 },
+    categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+    categoryChip: { borderWidth: 1.5, borderColor: c.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: c.card },
+    categoryChipActive: { borderColor: '#1D9E75', backgroundColor: '#F0FDF7' },
+    categoryChipText: { fontSize: 12, color: c.subtext },
+    categoryChipTextActive: { color: '#1D9E75', fontWeight: '700' },
+    input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, color: c.text, backgroundColor: c.inputBg, marginBottom: 14 },
+    messageInput: { height: 110, paddingTop: 11 },
+    submitButton: { backgroundColor: '#1D9E75', paddingVertical: 14, borderRadius: 8, alignItems: 'center', marginTop: 4, marginBottom: 8 },
+    buttonDisabled: { opacity: 0.6 },
+    submitButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  });
+}

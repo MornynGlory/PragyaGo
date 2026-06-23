@@ -1,5 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { getDriverToken, getRiderToken, sendPushNotification } from '@/lib/notifications';
+import { calculateFinalFare } from '@/lib/fares';
+import { useTheme } from '@/lib/useTheme';
 import { autoAssignDriverZone } from '@/lib/zones';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
@@ -26,14 +28,10 @@ const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: numbe
   return R * c;
 };
 
-const calculateFare = (distanceKm: number, stops: number) => {
-  const baseFare = 3;
-  const perKmRate = 1.5;
-  const stopFare = stops * 2;
-  return Math.round((baseFare + distanceKm * perKmRate + stopFare) * 10) / 10;
-};
 
 export default function DriverHomeScreen() {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
@@ -353,36 +351,39 @@ export default function DriverHomeScreen() {
   const reachedDestination = async () => {
     if (!activeRide || !location) return;
 
-    // Calculate actual distance from pickup to current location
     const startLat = activeRide.pickup_lat;
     const startLng = activeRide.pickup_lng;
     const actualDistanceKm = calculateDistance(startLat, startLng, location.latitude, location.longitude);
-    const stops = activeRide.stops || [];
-    const newFare = calculateFare(actualDistanceKm, stops.length);
+    const actualDistanceRounded = Math.round(actualDistanceKm * 100) / 100;
+
     const originalFare = activeRide.fare_ghs;
+    const expectedDistanceKm = activeRide.expected_distance_km ?? actualDistanceKm;
+    const { finalFare: newFare, increased } = calculateFinalFare(originalFare, expectedDistanceKm, actualDistanceKm);
     const fareDiff = Math.abs(newFare - originalFare);
 
     setRecalculatedFare(newFare);
 
-    // Update ride with actual location and recalculated fare
     await supabase.from('rides').update({
       actual_dropoff_lat: location.latitude,
       actual_dropoff_lng: location.longitude,
-      actual_distance_km: Math.round(actualDistanceKm * 100) / 100,
+      actual_distance_km: actualDistanceRounded,
       final_fare_ghs: newFare,
       status: 'payment_pending',
     }).eq('id', activeRide.id);
 
     setRideStatus('payment_pending');
 
+    const expRounded = Math.round(expectedDistanceKm * 10) / 10;
+    const actRounded = Math.round(actualDistanceKm * 10) / 10;
+
     if (fareDiff > 0.5) {
-      const direction = newFare > originalFare ? 'increased' : 'decreased';
+      const direction = increased ? 'increased' : 'decreased';
       Alert.alert(
         'Fare Recalculated',
-        `Based on actual distance (${Math.round(actualDistanceKm * 10) / 10} km), fare has ${direction} from GHS ${originalFare} to GHS ${newFare}.\n\nWaiting for rider to accept new fare.`
+        `Actual distance: ${actRounded} km vs expected ${expRounded} km.\nFare has ${direction} from GHS ${originalFare} to GHS ${newFare}.\n\nWaiting for rider to accept.`
       );
     } else {
-      Alert.alert('Destination Reached!', `Fare: GHS ${newFare}. Confirm payment with rider.`);
+      Alert.alert('Destination Reached!', `Distance: ${actRounded} km. Fare: GHS ${newFare}. Confirm payment with rider.`);
     }
   };
 
@@ -592,9 +593,10 @@ export default function DriverHomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#1D9E75' },
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  container: { flex: 1, backgroundColor: c.background },
   statsBar: { flexDirection: 'row', backgroundColor: '#1D9E75', paddingVertical: 12, paddingHorizontal: 16, justifyContent: 'space-between' },
   statItem: { alignItems: 'center' },
   statValue: { fontSize: 16, fontWeight: 'bold', color: '#fff' },
@@ -615,8 +617,8 @@ const styles = StyleSheet.create({
   mapContainer: { flex: 1 },
   map: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { marginTop: 12, fontSize: 14, color: '#666' },
-  bottomPanel: { backgroundColor: '#fff', padding: 16, borderTopWidth: 1, borderTopColor: '#eee' },
+  loadingText: { marginTop: 12, fontSize: 14, color: c.subtext },
+  bottomPanel: { backgroundColor: c.card, padding: 16, borderTopWidth: 1, borderTopColor: c.border },
   onlineButton: { paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
   onlineActive: { backgroundColor: '#FF3B30' },
   onlineInactive: { backgroundColor: '#1D9E75' },
@@ -644,4 +646,5 @@ const styles = StyleSheet.create({
   bellIcon: { fontSize: 22 },
   bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },
   bellBadgeText: { color: '#fff', fontSize: 9, fontWeight: 'bold' },
-});
+  });
+}

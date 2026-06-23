@@ -1,9 +1,12 @@
 import { supabase } from '@/lib/supabase';
+import { useTheme } from '@/lib/useTheme';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 export default function LandingScreen() {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -170,84 +173,86 @@ export default function LandingScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-    justifyContent: 'space-between',
-  },
-  centerContent: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingTop: 40,
-  },
-  welcomeTitle: {
-    fontSize: 36,
-    fontWeight: 'bold',
-    color: '#333',
-    textAlign: 'center',
-    marginBottom: 12,
-  },
-  welcomeSubtitle: {
-    fontSize: 18,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 48,
-  },
-  featureContainer: {
-    backgroundColor: '#F5F5F5',
-    borderRadius: 12,
-    padding: 24,
-    gap: 16,
-  },
-  featureItem: {
-    fontSize: 16,
-    color: '#333',
-    fontWeight: '500',
-    textAlign: 'center',
-  },
-  buttonContainer: {
-    paddingBottom: 20,
-  },
-  loginButton: {
-    width: '100%',
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    backgroundColor: '#007AFF',
-    borderRadius: 8,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  loginButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  registerButton: {
-    width: '100%',
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    backgroundColor: '#E8E8E8',
-    borderRadius: 8,
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  registerButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-  },
-  termsText: {
-    fontSize: 12,
-    color: '#999',
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-});
+function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: c.background,
+      paddingHorizontal: 20,
+      paddingVertical: 20,
+      justifyContent: 'space-between',
+    },
+    centerContent: {
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    content: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingTop: 40,
+    },
+    welcomeTitle: {
+      fontSize: 36,
+      fontWeight: 'bold',
+      color: c.text,
+      textAlign: 'center',
+      marginBottom: 12,
+    },
+    welcomeSubtitle: {
+      fontSize: 18,
+      color: c.subtext,
+      textAlign: 'center',
+      marginBottom: 48,
+    },
+    featureContainer: {
+      backgroundColor: c.card,
+      borderRadius: 12,
+      padding: 24,
+      gap: 16,
+    },
+    featureItem: {
+      fontSize: 16,
+      color: c.text,
+      fontWeight: '500',
+      textAlign: 'center',
+    },
+    buttonContainer: {
+      paddingBottom: 20,
+    },
+    loginButton: {
+      width: '100%',
+      paddingVertical: 14,
+      paddingHorizontal: 20,
+      backgroundColor: '#007AFF',
+      borderRadius: 8,
+      alignItems: 'center',
+      marginBottom: 12,
+    },
+    loginButtonText: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: '#fff',
+    },
+    registerButton: {
+      width: '100%',
+      paddingVertical: 14,
+      paddingHorizontal: 20,
+      backgroundColor: c.card,
+      borderRadius: 8,
+      alignItems: 'center',
+      marginBottom: 20,
+    },
+    registerButtonText: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: c.text,
+    },
+    termsText: {
+      fontSize: 12,
+      color: c.subtext,
+      textAlign: 'center',
+      lineHeight: 18,
+    },
+  });
+}

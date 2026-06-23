@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { useTheme } from '@/lib/useTheme';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -22,6 +23,8 @@ const COLOR_HEX: Record<string, string> = {
 };
 
 export default function RegisterScreen() {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -118,17 +121,17 @@ export default function RegisterScreen() {
           <View style={styles.form}>
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Full Name</Text>
-              <TextInput style={styles.input} placeholder="Enter your full name" value={fullName} onChangeText={setFullName} editable={!loading} placeholderTextColor="#999" />
+              <TextInput style={styles.input} placeholder="Enter your full name" value={fullName} onChangeText={setFullName} editable={!loading} placeholderTextColor={colors.subtext} />
             </View>
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Email</Text>
-              <TextInput style={styles.input} placeholder="Enter your email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" editable={!loading} placeholderTextColor="#999" />
+              <TextInput style={styles.input} placeholder="Enter your email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" editable={!loading} placeholderTextColor={colors.subtext} />
             </View>
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Phone Number *</Text>
-              <TextInput style={styles.input} placeholder="024XXXXXXX" value={phone} onChangeText={setPhone} keyboardType="phone-pad" editable={!loading} placeholderTextColor="#999" />
+              <TextInput style={styles.input} placeholder="024XXXXXXX" value={phone} onChangeText={setPhone} keyboardType="phone-pad" editable={!loading} placeholderTextColor={colors.subtext} />
             </View>
 
             <View style={styles.inputGroup}>
@@ -164,7 +167,7 @@ export default function RegisterScreen() {
 
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>Ghana Card ID *</Text>
-                  <TextInput style={styles.input} placeholder="GHA-XXXXXXXXX-X" value={ghanaCardId} onChangeText={setGhanaCardId} autoCapitalize="characters" editable={!loading} placeholderTextColor="#999" />
+                  <TextInput style={styles.input} placeholder="GHA-XXXXXXXXX-X" value={ghanaCardId} onChangeText={setGhanaCardId} autoCapitalize="characters" editable={!loading} placeholderTextColor={colors.subtext} />
                 </View>
 
                 <View style={styles.inputGroup}>
@@ -176,7 +179,7 @@ export default function RegisterScreen() {
                     onChangeText={(t) => setPlateNumber(t.toUpperCase())}
                     autoCapitalize="characters"
                     editable={!loading}
-                    placeholderTextColor="#999"
+                    placeholderTextColor={colors.subtext}
                   />
                 </View>
 
@@ -215,12 +218,12 @@ export default function RegisterScreen() {
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Password</Text>
-              <TextInput style={styles.input} placeholder="Minimum 6 characters" value={password} onChangeText={setPassword} secureTextEntry editable={!loading} placeholderTextColor="#999" />
+              <TextInput style={styles.input} placeholder="Minimum 6 characters" value={password} onChangeText={setPassword} secureTextEntry editable={!loading} placeholderTextColor={colors.subtext} />
             </View>
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Confirm Password</Text>
-              <TextInput style={styles.input} placeholder="Confirm your password" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry editable={!loading} placeholderTextColor="#999" />
+              <TextInput style={styles.input} placeholder="Confirm your password" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry editable={!loading} placeholderTextColor={colors.subtext} />
             </View>
 
             <Pressable
@@ -248,58 +251,60 @@ export default function RegisterScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  content: { padding: 20, paddingTop: 60, paddingBottom: 40 },
-  title: { fontSize: 32, fontWeight: 'bold', color: '#333', marginBottom: 8 },
-  subtitle: { fontSize: 16, color: '#666', marginBottom: 32 },
-  form: { marginBottom: 24 },
-  inputGroup: { marginBottom: 16 },
-  label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 8 },
-  input: {
-    borderWidth: 1, borderColor: '#ddd', borderRadius: 8,
-    paddingHorizontal: 16, paddingVertical: 12,
-    fontSize: 14, backgroundColor: '#fff', color: '#333',
-  },
-  roleContainer: { flexDirection: 'row', gap: 12 },
-  roleCard: {
-    flex: 1, borderWidth: 2, borderColor: '#ddd', borderRadius: 12,
-    paddingVertical: 18, paddingHorizontal: 12, alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  roleCardRiderActive: { borderColor: '#1D9E75', backgroundColor: '#F0FDF7' },
-  roleCardDriverActive: { borderColor: '#2563eb', backgroundColor: '#EFF6FF' },
-  roleCardEmoji: { fontSize: 30, marginBottom: 6 },
-  roleCardTitle: { fontSize: 15, fontWeight: '700', color: '#444', marginBottom: 2 },
-  roleCardTitleGreen: { color: '#1D9E75' },
-  roleCardTitleBlue: { color: '#2563eb' },
-  roleCardDesc: { fontSize: 11, color: '#888', textAlign: 'center' },
-  driverSection: {
-    borderWidth: 2, borderColor: '#2563eb', borderRadius: 12,
-    padding: 16, marginBottom: 16, backgroundColor: '#F8FAFF',
-  },
-  driverSectionTitle: { fontSize: 14, fontWeight: '700', color: '#2563eb', marginBottom: 16 },
-  colorGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  colorChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    borderWidth: 1.5, borderColor: '#ddd', borderRadius: 20,
-    paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#fff',
-  },
-  colorDot: { width: 14, height: 14, borderRadius: 7 },
-  colorDotWhite: { borderWidth: 1, borderColor: '#ccc' },
-  colorChipText: { fontSize: 12, color: '#555' },
-  driverNote: { backgroundColor: '#EFF6FF', borderRadius: 8, padding: 10, marginTop: 4 },
-  driverNoteText: { fontSize: 12, color: '#2563eb', lineHeight: 18 },
-  registerButton: {
-    backgroundColor: '#1D9E75', paddingVertical: 14,
-    borderRadius: 8, alignItems: 'center', marginTop: 8,
-  },
-  registerButtonDriver: { backgroundColor: '#2563eb' },
-  buttonDisabled: { opacity: 0.6 },
-  registerButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  loginSection: { flexDirection: 'row', justifyContent: 'center', marginBottom: 16 },
-  loginText: { fontSize: 14, color: '#666' },
-  loginLink: { fontSize: 14, color: '#1D9E75', fontWeight: '600' },
-  backButton: { fontSize: 14, color: '#999', textAlign: 'center', marginTop: 8 },
-});
+function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    safeArea: { flex: 1, backgroundColor: c.background },
+    container: { flex: 1, backgroundColor: c.background },
+    content: { padding: 20, paddingTop: 60, paddingBottom: 40 },
+    title: { fontSize: 32, fontWeight: 'bold', color: c.text, marginBottom: 8 },
+    subtitle: { fontSize: 16, color: c.subtext, marginBottom: 32 },
+    form: { marginBottom: 24 },
+    inputGroup: { marginBottom: 16 },
+    label: { fontSize: 14, fontWeight: '600', color: c.text, marginBottom: 8 },
+    input: {
+      borderWidth: 1, borderColor: c.border, borderRadius: 8,
+      paddingHorizontal: 16, paddingVertical: 12,
+      fontSize: 14, backgroundColor: c.inputBg, color: c.text,
+    },
+    roleContainer: { flexDirection: 'row', gap: 12 },
+    roleCard: {
+      flex: 1, borderWidth: 2, borderColor: c.border, borderRadius: 12,
+      paddingVertical: 18, paddingHorizontal: 12, alignItems: 'center',
+      backgroundColor: c.card,
+    },
+    roleCardRiderActive: { borderColor: '#1D9E75', backgroundColor: '#F0FDF7' },
+    roleCardDriverActive: { borderColor: '#2563eb', backgroundColor: '#EFF6FF' },
+    roleCardEmoji: { fontSize: 30, marginBottom: 6 },
+    roleCardTitle: { fontSize: 15, fontWeight: '700', color: c.text, marginBottom: 2 },
+    roleCardTitleGreen: { color: '#1D9E75' },
+    roleCardTitleBlue: { color: '#2563eb' },
+    roleCardDesc: { fontSize: 11, color: c.subtext, textAlign: 'center' },
+    driverSection: {
+      borderWidth: 2, borderColor: '#2563eb', borderRadius: 12,
+      padding: 16, marginBottom: 16, backgroundColor: '#F8FAFF',
+    },
+    driverSectionTitle: { fontSize: 14, fontWeight: '700', color: '#2563eb', marginBottom: 16 },
+    colorGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    colorChip: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      borderWidth: 1.5, borderColor: c.border, borderRadius: 20,
+      paddingVertical: 6, paddingHorizontal: 10, backgroundColor: c.card,
+    },
+    colorDot: { width: 14, height: 14, borderRadius: 7 },
+    colorDotWhite: { borderWidth: 1, borderColor: '#ccc' },
+    colorChipText: { fontSize: 12, color: c.subtext },
+    driverNote: { backgroundColor: '#EFF6FF', borderRadius: 8, padding: 10, marginTop: 4 },
+    driverNoteText: { fontSize: 12, color: '#2563eb', lineHeight: 18 },
+    registerButton: {
+      backgroundColor: '#1D9E75', paddingVertical: 14,
+      borderRadius: 8, alignItems: 'center', marginTop: 8,
+    },
+    registerButtonDriver: { backgroundColor: '#2563eb' },
+    buttonDisabled: { opacity: 0.6 },
+    registerButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+    loginSection: { flexDirection: 'row', justifyContent: 'center', marginBottom: 16 },
+    loginText: { fontSize: 14, color: c.subtext },
+    loginLink: { fontSize: 14, color: '#1D9E75', fontWeight: '600' },
+    backButton: { fontSize: 14, color: c.subtext, textAlign: 'center', marginTop: 8 },
+  });
+}

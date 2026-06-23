@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { useTheme } from '@/lib/useTheme';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
@@ -27,6 +28,8 @@ const PRAGYA_COLORS = [
 ];
 
 export default function DriverProfileScreen() {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -256,7 +259,7 @@ export default function DriverProfileScreen() {
               onChangeText={setNewPlateNumber}
               placeholder="e.g. GR-1234-23"
               autoCapitalize="characters"
-              placeholderTextColor="#999"
+              placeholderTextColor={colors.subtext}
             />
             <Text style={styles.warningText}>⚠️ Cannot be changed after saving without visiting an office.</Text>
           </>
@@ -300,7 +303,7 @@ export default function DriverProfileScreen() {
           onChangeText={setPhone}
           placeholder="024XXXXXXX"
           keyboardType="phone-pad"
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.subtext}
         />
       </View>
 
@@ -337,49 +340,52 @@ export default function DriverProfileScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  photoSection: { alignItems: 'center', padding: 24, backgroundColor: '#1D9E75' },
-  photo: { width: 100, height: 100, borderRadius: 50, borderWidth: 3, borderColor: '#fff' },
-  photoPlaceholder: { width: 100, height: 100, borderRadius: 50, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff', borderStyle: 'dashed' },
-  photoPlaceholderText: { fontSize: 28 },
-  photoPlaceholderLabel: { fontSize: 11, color: '#fff', marginTop: 2 },
-  photoLockBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#fff', borderRadius: 12, padding: 2 },
-  photoLockIcon: { fontSize: 14 },
-  uploadingOverlay: { position: 'absolute', width: 100, height: 100, borderRadius: 50, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  photoHint: { color: '#E1F5EE', fontSize: 12, marginTop: 8, textAlign: 'center' },
-  statsRow: { flexDirection: 'row', marginTop: 16, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 12, padding: 12 },
-  statItem: { flex: 1, alignItems: 'center' },
-  statValue: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
-  statLabel: { fontSize: 12, color: '#E1F5EE', marginTop: 2 },
-  statDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.3)', marginHorizontal: 10 },
-  lockedBanner: { backgroundColor: '#FAEEDA', margin: 16, marginBottom: 0, borderRadius: 10, padding: 12 },
-  lockedBannerText: { fontSize: 13, color: '#854F0B', textAlign: 'center' },
-  section: { backgroundColor: '#fff', margin: 16, marginTop: 12, borderRadius: 12, padding: 16 },
-  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#333', marginBottom: 4 },
-  editableNote: { fontSize: 12, color: '#1D9E75', marginBottom: 12 },
-  label: { fontSize: 13, fontWeight: '600', color: '#666', marginBottom: 6, marginTop: 10 },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: '#333' },
-  lockedField: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f5f5f5', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: '#eee' },
-  lockedFieldText: { flex: 1, fontSize: 14, color: '#666' },
-  lockIcon: { fontSize: 14 },
-  colorDot: { width: 20, height: 20, borderRadius: 10, marginRight: 10, borderWidth: 1, borderColor: '#ddd' },
-  warningText: { fontSize: 11, color: '#FF9500', marginTop: 6 },
-  colorsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8 },
-  colorOption: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: 'transparent' },
-  colorSelected: { borderColor: '#333', borderWidth: 3 },
-  colorCheck: { color: '#fff', fontWeight: 'bold', fontSize: 18, textShadowColor: '#000', textShadowRadius: 2 },
-  colorLabel: { fontSize: 13, color: '#666', marginTop: 8 },
-  saveButton: { backgroundColor: '#1D9E75', margin: 16, paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
-  buttonDisabled: { opacity: 0.6 },
-  saveButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  officeCard: { backgroundColor: '#E1F5EE', margin: 16, marginTop: 0, borderRadius: 12, padding: 16 },
-  officeTitle: { fontSize: 15, fontWeight: '600', color: '#085041', marginBottom: 8 },
-  officeText: { fontSize: 13, color: '#085041', lineHeight: 20, marginBottom: 12 },
-  officeHoursBox: { backgroundColor: '#fff', borderRadius: 8, padding: 10 },
-  officeHoursText: { fontSize: 13, color: '#1D9E75', fontWeight: '500' },
-  backButton: { margin: 16, marginTop: 0, alignItems: 'center', paddingBottom: 20 },
-  backButtonText: { color: '#999', fontSize: 14 },
-});
+function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    safeArea: { flex: 1, backgroundColor: c.background },
+    container: { flex: 1, backgroundColor: c.background },
+    loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    // photoSection intentionally keeps the green header — do not theme
+    photoSection: { alignItems: 'center', padding: 24, backgroundColor: '#1D9E75' },
+    photo: { width: 100, height: 100, borderRadius: 50, borderWidth: 3, borderColor: '#fff' },
+    photoPlaceholder: { width: 100, height: 100, borderRadius: 50, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff', borderStyle: 'dashed' },
+    photoPlaceholderText: { fontSize: 28 },
+    photoPlaceholderLabel: { fontSize: 11, color: '#fff', marginTop: 2 },
+    photoLockBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#fff', borderRadius: 12, padding: 2 },
+    photoLockIcon: { fontSize: 14 },
+    uploadingOverlay: { position: 'absolute', width: 100, height: 100, borderRadius: 50, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+    photoHint: { color: '#E1F5EE', fontSize: 12, marginTop: 8, textAlign: 'center' },
+    statsRow: { flexDirection: 'row', marginTop: 16, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 12, padding: 12 },
+    statItem: { flex: 1, alignItems: 'center' },
+    statValue: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
+    statLabel: { fontSize: 12, color: '#E1F5EE', marginTop: 2 },
+    statDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.3)', marginHorizontal: 10 },
+    lockedBanner: { backgroundColor: '#FAEEDA', margin: 16, marginBottom: 0, borderRadius: 10, padding: 12 },
+    lockedBannerText: { fontSize: 13, color: '#854F0B', textAlign: 'center' },
+    section: { backgroundColor: c.card, margin: 16, marginTop: 12, borderRadius: 12, padding: 16 },
+    sectionTitle: { fontSize: 16, fontWeight: '600', color: c.text, marginBottom: 4 },
+    editableNote: { fontSize: 12, color: '#1D9E75', marginBottom: 12 },
+    label: { fontSize: 13, fontWeight: '600', color: c.subtext, marginBottom: 6, marginTop: 10 },
+    input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: c.text },
+    lockedField: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.background, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: c.border },
+    lockedFieldText: { flex: 1, fontSize: 14, color: c.subtext },
+    lockIcon: { fontSize: 14 },
+    colorDot: { width: 20, height: 20, borderRadius: 10, marginRight: 10, borderWidth: 1, borderColor: c.border },
+    warningText: { fontSize: 11, color: '#FF9500', marginTop: 6 },
+    colorsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8 },
+    colorOption: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: 'transparent' },
+    colorSelected: { borderColor: '#333', borderWidth: 3 },
+    colorCheck: { color: '#fff', fontWeight: 'bold', fontSize: 18, textShadowColor: '#000', textShadowRadius: 2 },
+    colorLabel: { fontSize: 13, color: c.subtext, marginTop: 8 },
+    saveButton: { backgroundColor: '#1D9E75', margin: 16, paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
+    buttonDisabled: { opacity: 0.6 },
+    saveButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+    officeCard: { backgroundColor: '#E1F5EE', margin: 16, marginTop: 0, borderRadius: 12, padding: 16 },
+    officeTitle: { fontSize: 15, fontWeight: '600', color: '#085041', marginBottom: 8 },
+    officeText: { fontSize: 13, color: '#085041', lineHeight: 20, marginBottom: 12 },
+    officeHoursBox: { backgroundColor: '#fff', borderRadius: 8, padding: 10 },
+    officeHoursText: { fontSize: 13, color: '#1D9E75', fontWeight: '500' },
+    backButton: { margin: 16, marginTop: 0, alignItems: 'center', paddingBottom: 20 },
+    backButtonText: { color: c.subtext, fontSize: 14 },
+  });
+}

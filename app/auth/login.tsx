@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { useTheme } from '@/lib/useTheme';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
@@ -14,6 +15,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function LoginScreen() {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   const router = useRouter();
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -89,7 +92,7 @@ export default function LoginScreen() {
                 onChangeText={setPhone}
                 keyboardType="phone-pad"
                 editable={!loading}
-                placeholderTextColor="#999"
+                placeholderTextColor={colors.subtext}
               />
             </View>
 
@@ -102,7 +105,7 @@ export default function LoginScreen() {
                 onChangeText={setPassword}
                 secureTextEntry
                 editable={!loading}
-                placeholderTextColor="#999"
+                placeholderTextColor={colors.subtext}
               />
             </View>
 
@@ -134,28 +137,30 @@ export default function LoginScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#f5f5f5' },
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  content: { padding: 20, paddingTop: 60, paddingBottom: 40 },
-  title: { fontSize: 32, fontWeight: 'bold', color: '#1D9E75', marginBottom: 8 },
-  subtitle: { fontSize: 16, color: '#666', marginBottom: 32 },
-  form: { marginBottom: 24 },
-  inputGroup: { marginBottom: 16 },
-  label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 8 },
-  input: {
-    borderWidth: 1, borderColor: '#ddd', borderRadius: 8,
-    paddingHorizontal: 16, paddingVertical: 12,
-    fontSize: 14, backgroundColor: '#fff', color: '#333',
-  },
-  loginButton: {
-    backgroundColor: '#1D9E75', paddingVertical: 14,
-    borderRadius: 8, alignItems: 'center', marginTop: 8,
-  },
-  buttonDisabled: { opacity: 0.6 },
-  loginButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  registerSection: { flexDirection: 'row', justifyContent: 'center', marginBottom: 16 },
-  registerText: { fontSize: 14, color: '#666' },
-  registerLink: { fontSize: 14, color: '#1D9E75', fontWeight: '600' },
-  backButton: { fontSize: 14, color: '#999', textAlign: 'center', marginTop: 8 },
-});
+function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    safeArea: { flex: 1, backgroundColor: c.background },
+    container: { flex: 1, backgroundColor: c.background },
+    content: { padding: 20, paddingTop: 60, paddingBottom: 40 },
+    title: { fontSize: 32, fontWeight: 'bold', color: '#1D9E75', marginBottom: 8 },
+    subtitle: { fontSize: 16, color: c.subtext, marginBottom: 32 },
+    form: { marginBottom: 24 },
+    inputGroup: { marginBottom: 16 },
+    label: { fontSize: 14, fontWeight: '600', color: c.text, marginBottom: 8 },
+    input: {
+      borderWidth: 1, borderColor: c.border, borderRadius: 8,
+      paddingHorizontal: 16, paddingVertical: 12,
+      fontSize: 14, backgroundColor: c.inputBg, color: c.text,
+    },
+    loginButton: {
+      backgroundColor: '#1D9E75', paddingVertical: 14,
+      borderRadius: 8, alignItems: 'center', marginTop: 8,
+    },
+    buttonDisabled: { opacity: 0.6 },
+    loginButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+    registerSection: { flexDirection: 'row', justifyContent: 'center', marginBottom: 16 },
+    registerText: { fontSize: 14, color: c.subtext },
+    registerLink: { fontSize: 14, color: '#1D9E75', fontWeight: '600' },
+    backButton: { fontSize: 14, color: c.subtext, textAlign: 'center', marginTop: 8 },
+  });
+}
