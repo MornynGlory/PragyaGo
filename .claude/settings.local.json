@@ -13,7 +13,8 @@
       "Bash(npm view *)",
       "Bash(node -e \"const v=JSON.parse\\(require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\)\\); console.log\\(v.filter\\(x=>x.startsWith\\('3'\\)||x.startsWith\\('4'\\)\\).join\\('\\\\n'\\)\\)\")",
       "Bash(findstr \"3\\\\. 4\\\\.\")",
-      "Bash(node -e \"const p=require\\('c:/Users/USER/PragyaGo/node_modules/react-native-paystack-webview/package.json'\\); console.log\\('version:', p.version, '\\\\nmain:', p.main\\)\")"
+      "Bash(node -e \"const p=require\\('c:/Users/USER/PragyaGo/node_modules/react-native-paystack-webview/package.json'\\); console.log\\('version:', p.version, '\\\\nmain:', p.main\\)\")",
+      "Bash(npm ls *)"
     ]
   }
 }
