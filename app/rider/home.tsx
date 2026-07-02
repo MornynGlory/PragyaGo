@@ -25,7 +25,7 @@ import {
 import MapView, { AnimatedRegion, Marker, MarkerAnimated, Polyline } from 'react-native-maps';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const GOOGLE_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
+const GOOGLE_API_KEY = (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k') ?? '';
 
 function decodePolyline(encoded: string): { latitude: number; longitude: number }[] {
   const points: { latitude: number; longitude: number }[] = [];
@@ -76,6 +76,7 @@ export default function RiderHomeScreen() {
   const [nearbyDrivers, setNearbyDrivers] = useState<any[]>([]);
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
   const [fareBreakdown, setFareBreakdown] = useState<FareResult | null>(null);
+  const [calculatingFare, setCalculatingFare] = useState(false);
   const [requesting, setRequesting] = useState(false);
   const [currentRide, setCurrentRide] = useState<any>(null);
   const [rideStatus, setRideStatus] = useState('');
@@ -102,10 +103,10 @@ export default function RiderHomeScreen() {
   const destDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stopDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const zoneIdRef = useRef<string | null>(null);
+  const userIdRef = useRef<string | null>(null);
   const regionZoneIdsRef = useRef<string[]>([]);
   const viewboxRef = useRef<string | null>(null);
   const regionCenterRef = useRef<{ lat: number; lng: number } | null>(null);
-  const [regionViewbox, setRegionViewbox] = useState<string | null>(null);
   const [selectedDestCoords, setSelectedDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [driverLocation, setDriverLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [routePoints, setRoutePoints] = useState<{ latitude: number; longitude: number }[]>([]);
@@ -130,8 +131,9 @@ export default function RiderHomeScreen() {
     fetchUnreadCount();
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return;
+      userIdRef.current = user.id;
       supabase.from('profiles').select('zone_id, role').eq('id', user.id).single()
-        .then(({ data }) => {
+        .then(({ data }: { data: { zone_id: string | null; role: string } | null }) => {
           const zoneId = data?.zone_id ?? null;
           zoneIdRef.current = zoneId;
           if (zoneId) initZoneData(zoneId);
@@ -287,7 +289,6 @@ export default function RiderHomeScreen() {
       const lngMax = Math.max(...regionZones.map((z: any) => z.boundary_lng_max));
       const viewbox = `${lngMin},${latMin},${lngMax},${latMax}`;
       viewboxRef.current = viewbox;
-      setRegionViewbox(viewbox);
       regionCenterRef.current = { lat: (latMin + latMax) / 2, lng: (lngMin + lngMax) / 2 };
     } catch (err) {
       console.error('Error initializing zone data:', err);
@@ -295,13 +296,13 @@ export default function RiderHomeScreen() {
   };
 
   const fetchGooglePlacesSuggestions = async (query: string): Promise<any[]> => {
-    if (!GOOGLE_API_KEY) return [];
+    console.log('EXPO_PUBLIC_GOOGLE_MAPS_API_KEY:', (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k'));
+    if (!(process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k')) return [];
     try {
-      const center = regionCenterRef.current;
-      const locationParam = center ? `&location=${center.lat},${center.lng}&radius=50000` : '';
-      const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&key=${GOOGLE_API_KEY}&components=country:gh${locationParam}&language=en`;
-      const res = await fetch(url);
-      const data = await res.json();
+      const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&key=${(process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k')}&components=country:gh&language=en`;
+      const response = await fetch(url);
+      const data = await response.json();
+      console.log('Places API response:', JSON.stringify(data));
       if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') return [];
       return (data.predictions ?? []).map((p: any) => ({
         id: `gplace-${p.place_id}`,
@@ -309,7 +310,10 @@ export default function RiderHomeScreen() {
         placeId: p.place_id,
         source: 'place' as const,
       }));
-    } catch { return []; }
+    } catch (e) {
+      console.log('Places fetch error:', e);
+      return [];
+    }
   };
 
   const fetchPlaceDetails = async (placeId: string): Promise<{ lat: number; lng: number } | null> => {
@@ -330,6 +334,7 @@ export default function RiderHomeScreen() {
     if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
     if (text.length < 2) { setDestinationSuggestions([]); return; }
     destDebounceRef.current = setTimeout(async () => {
+      console.log('Debounce fired, fetching suggestions for:', text);
       setLoadingDestSuggestions(true);
       try {
         const fareZoneIds = regionZoneIdsRef.current.length > 0 ? regionZoneIdsRef.current : zoneIdRef.current;
@@ -337,14 +342,20 @@ export default function RiderHomeScreen() {
           getFareSuggestions(fareZoneIds, text),
           fetchGooglePlacesSuggestions(text),
         ]);
+        console.log('Zone suggestions:', zoneSuggestions.length, 'Place suggestions:', placeSuggestions.length);
         const zoneItems = zoneSuggestions.map((z: any, i: number) => ({
           id: `zone-${i}`,
           label: z.to_location,
           fare: z.rider_fare,
           source: 'zone' as const,
         }));
-        setDestinationSuggestions([...zoneItems, ...placeSuggestions]);
-      } catch { setDestinationSuggestions([]); }
+        const combined = [...zoneItems, ...placeSuggestions];
+        console.log('Total suggestions set:', combined.length);
+        setDestinationSuggestions(combined);
+      } catch (e) {
+        console.log('Suggestion fetch error:', e);
+        setDestinationSuggestions([]);
+      }
       finally { setLoadingDestSuggestions(false); }
     }, 500);
   };
@@ -383,43 +394,55 @@ export default function RiderHomeScreen() {
     }
   };
 
-  const estimateFare = async () => {
-    if (!destination.trim()) { Alert.alert('Enter Destination', 'Please enter your final destination.'); return; }
+  const calculateFareAuto = async () => {
+    if (!destination.trim()) {
+      setFareEstimate(null);
+      setFareBreakdown(null);
+      setDiscountResult(null);
+      setOriginalFare(null);
+      return;
+    }
+    setCalculatingFare(true);
     setDiscountResult(null);
     setOriginalFare(null);
     setFareBreakdown(null);
-
-    const { data: { user } } = await supabase.auth.getUser();
-    let zoneId: string | null = null;
-    if (user) {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('zone_id')
-        .eq('id', user.id)
-        .single();
-      zoneId = profile?.zone_id ?? null;
-    }
-
-    const fareResult = await calculateZoneFare(
-      zoneId, destination, stops.length,
-      location?.latitude ?? 0, location?.longitude ?? 0,
-      selectedDestCoords?.lat, selectedDestCoords?.lng
-    );
-    setFareBreakdown(fareResult);
-
-    if (user) {
-      const discountResult = await applyDiscount(user.id, destination, fareResult.riderFare);
-      if (discountResult.discount) {
-        setDiscountResult(discountResult);
-        setOriginalFare(fareResult.riderFare);
-        setFareEstimate(discountResult.finalFare);
+    try {
+      const fareResult = await calculateZoneFare(
+        zoneIdRef.current, destination, stops.length,
+        location?.latitude ?? 0, location?.longitude ?? 0,
+        selectedDestCoords?.lat, selectedDestCoords?.lng
+      );
+      setFareBreakdown(fareResult);
+      const userId = userIdRef.current;
+      if (userId) {
+        const disc = await applyDiscount(userId, destination, fareResult.riderFare);
+        if (disc.discount) {
+          setDiscountResult(disc);
+          setOriginalFare(fareResult.riderFare);
+          setFareEstimate(disc.finalFare);
+        } else {
+          setFareEstimate(fareResult.riderFare);
+        }
       } else {
         setFareEstimate(fareResult.riderFare);
       }
-    } else {
-      setFareEstimate(fareResult.riderFare);
+    } catch (_) {
+      // silent failure — user can try again by reselecting destination
+    } finally {
+      setCalculatingFare(false);
     }
   };
+
+  useEffect(() => {
+    if (destination.trim().length > 0) {
+      calculateFareAuto();
+    } else {
+      setFareEstimate(0);
+      setFareBreakdown(null);
+      setDiscountResult(null);
+      setOriginalFare(null);
+    }
+  }, [destination, stops, selectedDestCoords]);
 
   const subscribeToRideUpdates = async (rideId: string) => {
     if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
@@ -505,7 +528,7 @@ export default function RiderHomeScreen() {
             stopDriverTracking();
           }
         });
-    await channel.subscribe();
+    channel.subscribe();
     rideSubscription.current = channel;
   };
 
@@ -637,7 +660,7 @@ export default function RiderHomeScreen() {
       }]);
       const { data: ratings } = await supabase.from('ratings').select('score').eq('rated_user', driverInfo.profile_id);
       if (ratings && ratings.length > 0) {
-        const avgRating = ratings.reduce((sum, r) => sum + r.score, 0) / ratings.length;
+        const avgRating = ratings.reduce((sum: number, r: { score: number }) => sum + r.score, 0) / ratings.length;
         await supabase.from('drivers').update({ rating: Math.round(avgRating * 10) / 10 }).eq('id', driverInfo.id);
       }
       Alert.alert('Thank you!', `You rated your driver ${selectedRating} star${selectedRating > 1 ? 's' : ''}!`);
@@ -804,16 +827,17 @@ export default function RiderHomeScreen() {
             {nearbyDrivers.length > 0 ? `🛺 ${nearbyDrivers.length} Pragya driver${nearbyDrivers.length > 1 ? 's' : ''} nearby` : '😔 No drivers nearby right now'}
           </Text>
           <Text style={styles.inputLabel}>Final Destination</Text>
-          <View style={styles.inputWrapper}>
-            <TextInput style={styles.inputWithClear} placeholder="Enter final destination" value={destination} onChangeText={handleDestinationChange} placeholderTextColor={colors.subtext} />
-            {destination.length > 0 && (
-              <TouchableOpacity style={styles.clearBtn} onPress={() => { setDestination(''); setDestinationSuggestions([]); setFareEstimate(null); setFareBreakdown(null); setSelectedDestCoords(null); }}>
-                <Text style={styles.clearBtnText}>✕</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          {loadingDestSuggestions && <ActivityIndicator size="small" color="#2563eb" style={styles.suggestionsLoader} />}
-          {destinationSuggestions.length > 0 && (
+          <View style={styles.destInputContainer}>
+            <View style={styles.inputWrapper}>
+              <TextInput style={styles.inputWithClear} placeholder="Enter final destination" value={destination} onChangeText={handleDestinationChange} placeholderTextColor={colors.subtext} />
+              {destination.length > 0 && (
+                <TouchableOpacity style={styles.clearBtn} onPress={() => { setDestination(''); setDestinationSuggestions([]); setFareEstimate(0); setFareBreakdown(null); setDiscountResult(null); setOriginalFare(null); setSelectedDestCoords(null); }}>
+                  <Text style={styles.clearBtnText}>✕</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            {loadingDestSuggestions && <ActivityIndicator size="small" color="#2563eb" style={styles.suggestionsLoader} />}
+            {destinationSuggestions.length > 0 && (
             <View style={styles.suggestionsCard}>
               {destinationSuggestions.map((item, index) => {
                 const prev = index > 0 ? destinationSuggestions[index - 1] : null;
@@ -830,11 +854,14 @@ export default function RiderHomeScreen() {
                         index < destinationSuggestions.length - 1 && styles.suggestionItemBorder,
                       ]}
                       onPress={async () => {
+                        // Cancel pending debounce so typing suggestions don't reopen the dropdown
+                        if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
                         setDestination(item.label);
                         setDestinationSuggestions([]);
                         if (item.source === 'place' && item.placeId) {
                           const coords = await fetchPlaceDetails(item.placeId);
                           if (coords) setSelectedDestCoords(coords);
+                          // useEffect watching selectedDestCoords will retrigger calculateFareAuto with the exact coords
                         }
                       }}
                     >
@@ -851,7 +878,8 @@ export default function RiderHomeScreen() {
                 );
               })}
             </View>
-          )}
+            )}
+          </View>
           {stops.length > 0 && (
             <View style={styles.stopsContainer}>
               <Text style={styles.stopsTitle}>Stops ({stops.length}/3)</Text>
@@ -890,36 +918,14 @@ export default function RiderHomeScreen() {
               )}
             </View>
           )}
-          {!fareEstimate && (
-            <TouchableOpacity onPress={estimateFare} style={styles.estimateButton}>
-              <Text style={styles.estimateButtonText}>Estimate Fare</Text>
-            </TouchableOpacity>
+          {calculatingFare && (
+            <ActivityIndicator color="#1D9E75" style={{ marginVertical: 12 }} />
           )}
           {fareEstimate && (
-            <View style={styles.fareContainer}>
-              <View style={styles.fareInfo}>
-                <Text style={styles.fareLabel}>Estimated Fare</Text>
-                {fareBreakdown && (
-                  <Text style={styles.fareNote}>{fareBreakdown.breakdown}</Text>
-                )}
-                {fareBreakdown?.expectedDistanceKm ? (
-                  <Text style={styles.fareBreakdown}>Expected distance: ~{fareBreakdown.expectedDistanceKm.toFixed(1)} km</Text>
-                ) : null}
-                {fareBreakdown?.source === 'zone_table' && (
-                  <Text style={styles.fareSourceZone}>📍 Fixed zone fare</Text>
-                )}
-                {fareBreakdown?.source === 'distance' && (
-                  <Text style={styles.fareSourceDistance}>📏 Distance estimate</Text>
-                )}
-                {discountResult?.discount && (
-                  <Text style={styles.discountMessage}>{discountResult.message}</Text>
-                )}
-              </View>
-              <View style={styles.fareAmountContainer}>
-                {discountResult?.discount && originalFare !== null && (
-                  <Text style={styles.fareOriginal}>GHS {originalFare}</Text>
-                )}
-                <Text style={styles.fareAmount}>GHS {fareEstimate}</Text>
+            <View style={styles.fareBadgeWrapper}>
+              <View style={styles.fareBadge}>
+                <Text style={styles.fareBadgeAmount}>GHS {fareEstimate.toFixed(2)}</Text>
+                <Text style={styles.fareBadgeLabel}>Estimated Fare</Text>
               </View>
             </View>
           )}
@@ -1111,7 +1117,8 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
   driversCount: { fontSize: 13, color: '#1D9E75', marginBottom: 12 },
   inputLabel: { fontSize: 13, fontWeight: '600', color: c.subtext, marginBottom: 6 },
   input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 12, fontSize: 14, backgroundColor: c.inputBg, color: c.text, marginBottom: 10 },
-  inputWrapper: { position: 'relative', marginBottom: 10 },
+  destInputContainer: { position: 'relative', zIndex: 9999, marginBottom: 10 },
+  inputWrapper: { position: 'relative' },
   inputWithClear: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 16, paddingRight: 40, paddingVertical: 12, fontSize: 14, backgroundColor: c.inputBg, color: c.text },
   clearBtn: { position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center', paddingHorizontal: 4 },
   clearBtnText: { fontSize: 14, color: c.subtext, fontWeight: '600' },
@@ -1131,6 +1138,13 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
   fareInfo: { flex: 1, marginRight: 8 },
   fareLabel: { fontSize: 14, color: '#085041', fontWeight: '600' },
   fareNote: { fontSize: 11, color: '#1D9E75', marginTop: 1 },
+  fareBadgeWrapper: { marginBottom: 12, alignItems: 'center' },
+  fareBadge: { backgroundColor: '#1D9E75', borderRadius: 12, paddingVertical: 16, paddingHorizontal: 24, alignItems: 'center', width: '100%', shadowColor: '#1D9E75', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 6, marginBottom: 8 },
+  fareBadgeOriginal: { fontSize: 14, color: 'rgba(255,255,255,0.6)', textDecorationLine: 'line-through', marginBottom: 2 },
+  fareBadgeAmount: { fontSize: 28, fontWeight: 'bold', color: '#fff', marginBottom: 2 },
+  fareBadgeLabel: { fontSize: 13, color: 'rgba(255,255,255,0.8)' },
+  fareBreakdownText: { fontSize: 12, color: c.subtext, textAlign: 'center', marginBottom: 2 },
+  fareDistanceText: { fontSize: 11, color: c.subtext, textAlign: 'center', marginBottom: 2 },
   fareBreakdown: { fontSize: 11, color: '#1D9E75', marginTop: 1 },
   fareSourceZone: { fontSize: 11, color: '#1D9E75', fontWeight: '600', marginTop: 2 },
   fareSourceDistance: { fontSize: 11, color: '#2563eb', fontWeight: '600', marginTop: 2 },
@@ -1210,7 +1224,7 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
   submitRatingText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   skipRatingButton: { paddingVertical: 10 },
   skipRatingText: { color: c.subtext, fontSize: 14 },
-  suggestionsCard: { backgroundColor: c.card, borderRadius: 8, borderWidth: 1, borderColor: c.border, marginTop: -6, marginBottom: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 3, overflow: 'hidden' },
+  suggestionsCard: { position: 'absolute', top: 46, left: 0, right: 0, zIndex: 9999, backgroundColor: 'white', borderRadius: 12, elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, maxHeight: 300, overflow: 'hidden' },
   suggestionItem: { paddingHorizontal: 14, paddingVertical: 12 },
   suggestionItemZone: { backgroundColor: '#F0FDF7' },
   suggestionItemBorder: { borderBottomWidth: 0.5, borderBottomColor: c.border },

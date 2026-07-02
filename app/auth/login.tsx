@@ -30,11 +30,14 @@ export default function LoginScreen() {
 
     setLoading(true);
     try {
+      console.log('Looking up phone:', phone.trim());
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('id, role, email')
         .eq('phone', phone.trim())
         .single();
+
+      console.log('Profile result:', JSON.stringify(profile), 'Error:', JSON.stringify(profileError));
 
       if (profileError) {
         const notFound = profileError.code === 'PGRST116' || profileError.details?.includes('0 rows');
@@ -47,6 +50,7 @@ export default function LoginScreen() {
         return;
       }
 
+      console.log('Email found:', profile?.email);
       const email = profile.email ?? null;
       if (!email) {
         Alert.alert('Error', 'Account details incomplete. Please contact support.');
@@ -56,6 +60,7 @@ export default function LoginScreen() {
       const role = profile.role ?? 'rider';
 
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      console.log('Sign in error:', JSON.stringify(signInError));
 
       if (signInError) {
         Alert.alert('Login Failed', signInError.message ?? 'Incorrect password.');
