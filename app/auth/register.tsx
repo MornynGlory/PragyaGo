@@ -101,7 +101,7 @@ export default function RegisterScreen() {
       if (role === 'driver') {
         router.replace('/auth/verify-driver' as any);
       } else {
-        router.replace({ pathname: '/auth/verify-phone', params: { phone: phone.trim() } } as any);
+        router.replace('/rider/home' as any);
       }
     } catch (err) {
       console.error('Registration error:', err);

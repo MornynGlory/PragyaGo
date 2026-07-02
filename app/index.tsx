@@ -107,14 +107,7 @@ export default function LandingScreen() {
             router.replace('/driver/home' as any);
           }
         } else {
-          if (data.phone_verified) {
-            router.replace('/rider/home' as any);
-          } else {
-            router.replace({
-              pathname: '/auth/verify-phone',
-              params: { phone: data.phone ?? '' },
-            } as any);
-          }
+          router.replace('/rider/home' as any);
         }
       } else {
         setUserRole(null);
