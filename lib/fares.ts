@@ -39,7 +39,7 @@ async function getGoogleDistance(
 export async function calculateZoneFare(
   zoneId: string | null,
   destination: string,
-  stops: number,
+  _stops: number,
   pickupLat: number,
   pickupLng: number,
   destLat?: number,
@@ -113,7 +113,7 @@ export function calculateFinalFare(
   if (expectedDistanceKm <= 0) {
     return { finalFare: originalFare, difference: 0, increased: false };
   }
-  const ratio = actualDistanceKm / expectedDistanceKm;
+  const ratio = Math.max(0.5, Math.min(2.0, actualDistanceKm / expectedDistanceKm));
   const finalFare = Math.round(originalFare * ratio * 100) / 100;
   return {
     finalFare,
@@ -135,7 +135,7 @@ export async function getFareSuggestions(
     .in('zone_id', ids)
     .ilike('to_location', `%${query.trim()}%`)
     .limit(8);
-  return (data ?? []).map(row => ({
+  return (data ?? []).map((row: { to_location: string; base_fare: number }) => ({
     to_location: row.to_location,
     base_fare: row.base_fare,
     rider_fare: Math.round(row.base_fare * 4 * 1.85 * 100) / 100,

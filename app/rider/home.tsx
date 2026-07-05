@@ -482,15 +482,15 @@ export default function RiderHomeScreen() {
             if (ride.final_fare_ghs && Math.abs(ride.final_fare_ghs - ride.fare_ghs) > 0.5) {
               setShowFareAcceptModal(true);
             } else {
-              const exp = ride.expected_distance_km ? Math.round(ride.expected_distance_km * 10) / 10 : null;
-              const act = ride.actual_distance_km ? Math.round(ride.actual_distance_km * 10) / 10 : null;
+              const baseFare = ride.estimated_fare || ride.fare_ghs;
+              const diff = Math.round(Math.abs(newFare - baseFare) * 100) / 100;
               let fareMsg: string;
-              if (exp && act && Math.abs(act - exp) > 0.1) {
-                fareMsg = act > exp
-                  ? `Fare adjusted: You travelled ${act}km instead of ${exp}km expected. Final fare: GHS ${newFare}`
-                  : `Fare reduced: You travelled ${act}km instead of ${exp}km expected. Final fare: GHS ${newFare}`;
+              if (diff > 0.5 && newFare > baseFare) {
+                fareMsg = `Fare adjusted: +GHS ${diff.toFixed(2)} (longer route)\nFinal fare: GHS ${newFare.toFixed(2)}`;
+              } else if (diff > 0.5 && newFare < baseFare) {
+                fareMsg = `Fare reduced: -GHS ${diff.toFixed(2)} (shorter route)\nFinal fare: GHS ${newFare.toFixed(2)}`;
               } else {
-                fareMsg = `Fare unchanged: GHS ${newFare}`;
+                fareMsg = `Fare unchanged: GHS ${newFare.toFixed(2)}`;
               }
               Alert.alert(
                 'Reached Destination!',
@@ -602,6 +602,7 @@ export default function RiderHomeScreen() {
           dropoff_address: destination,
           stops: allStops, current_stop: 0,
           status: 'requested', fare_ghs: originalFare ?? fareEstimate,
+          estimated_fare: fareEstimate,
           expected_distance_km: fareBreakdown?.expectedDistanceKm ?? null,
           payment_method: paymentMethod,
           created_at: new Date().toISOString(),

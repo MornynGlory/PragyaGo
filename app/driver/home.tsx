@@ -356,10 +356,10 @@ export default function DriverHomeScreen() {
     const actualDistanceKm = calculateDistance(startLat, startLng, location.latitude, location.longitude);
     const actualDistanceRounded = Math.round(actualDistanceKm * 100) / 100;
 
-    const originalFare = activeRide.fare_ghs;
+    const originalFare = activeRide.estimated_fare || activeRide.fare_ghs;
     const expectedDistanceKm = activeRide.expected_distance_km ?? actualDistanceKm;
     const { finalFare: newFare, increased } = calculateFinalFare(originalFare, expectedDistanceKm, actualDistanceKm);
-    const fareDiff = Math.abs(newFare - originalFare);
+    const fareDiff = Math.round(Math.abs(newFare - originalFare) * 100) / 100;
 
     setRecalculatedFare(newFare);
 
@@ -373,17 +373,18 @@ export default function DriverHomeScreen() {
 
     setRideStatus('payment_pending');
 
-    const expRounded = Math.round(expectedDistanceKm * 10) / 10;
-    const actRounded = Math.round(actualDistanceKm * 10) / 10;
-
-    if (fareDiff > 0.5) {
-      const direction = increased ? 'increased' : 'decreased';
+    if (fareDiff > 0.5 && increased) {
       Alert.alert(
         'Fare Recalculated',
-        `Actual distance: ${actRounded} km vs expected ${expRounded} km.\nFare has ${direction} from GHS ${originalFare} to GHS ${newFare}.\n\nWaiting for rider to accept.`
+        `Fare adjusted: +GHS ${fareDiff.toFixed(2)} (longer route)\nFinal fare: GHS ${newFare.toFixed(2)}\n\nWaiting for rider to accept.`
+      );
+    } else if (fareDiff > 0.5 && !increased) {
+      Alert.alert(
+        'Fare Recalculated',
+        `Fare reduced: -GHS ${fareDiff.toFixed(2)} (shorter route)\nFinal fare: GHS ${newFare.toFixed(2)}\n\nWaiting for rider to accept.`
       );
     } else {
-      Alert.alert('Destination Reached!', `Distance: ${actRounded} km. Fare: GHS ${newFare}. Confirm payment with rider.`);
+      Alert.alert('Destination Reached!', `Fare unchanged: GHS ${newFare.toFixed(2)}\nConfirm payment with rider.`);
     }
   };
 
