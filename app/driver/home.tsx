@@ -407,6 +407,82 @@ export default function DriverHomeScreen() {
     }
   };
 
+  const reportBreakdown = () => {
+    Alert.alert(
+      'Report Vehicle Breakdown?',
+      'By reporting a breakdown you confirm your Pragya has broken down and cannot complete this ride. Important: The rider will NOT be charged. You will still owe PragyaGo the commission for this ride. This will be deducted from your wallet.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Report Breakdown',
+          style: 'destructive',
+          onPress: async () => {
+            if (!activeRide) return;
+            try {
+              const { data: { user } } = await supabase.auth.getUser();
+              if (!user) return;
+
+              const [{ data: driverProfile }, { data: driverRecord }, { data: riderProfile }] = await Promise.all([
+                supabase.from('profiles').select('full_name').eq('id', user.id).single(),
+                supabase.from('drivers').select('id, commission_owed').eq('profile_id', user.id).single(),
+                supabase.from('profiles').select('full_name').eq('id', activeRide.rider_id).single(),
+              ]);
+
+              const driverName = driverProfile?.full_name ?? 'Unknown Driver';
+              const riderName = riderProfile?.full_name ?? 'Unknown Rider';
+              const commission = Math.round(activeRide.fare_ghs * 0.15 * 100) / 100;
+
+              await supabase.from('rides').update({
+                status: 'cancelled',
+                cancellation_reason: 'driver_breakdown',
+              }).eq('id', activeRide.id);
+
+              await supabase.from('user_notifications').insert({
+                user_id: activeRide.rider_id,
+                title: 'Driver Breakdown',
+                message: "Your driver's vehicle has broken down. You will not be charged for this ride. We apologize for the inconvenience.",
+                type: 'ride_update',
+                is_read: false,
+                created_at: new Date().toISOString(),
+              });
+
+              const { data: admins } = await supabase.from('profiles').select('id').eq('role', 'admin');
+              if (admins && admins.length > 0) {
+                await supabase.from('user_notifications').insert(
+                  admins.map((admin: { id: string }) => ({
+                    user_id: admin.id,
+                    title: 'Driver Breakdown Reported',
+                    message: `Driver breakdown reported on ride ${activeRide.id}. Driver: ${driverName}. Rider: ${riderName}. Commission: GHS ${commission.toFixed(2)}`,
+                    type: 'admin_alert',
+                    is_read: false,
+                    created_at: new Date().toISOString(),
+                  }))
+                );
+              }
+
+              if (driverRecord) {
+                await supabase.from('drivers').update({
+                  commission_owed: (driverRecord.commission_owed ?? 0) + commission,
+                }).eq('id', driverRecord.id);
+              }
+
+              setActiveRide(null);
+              setRideStatus('');
+
+              Alert.alert(
+                'Breakdown Reported',
+                `The rider has been notified. Commission of GHS ${commission.toFixed(2)} has been added to your account.`
+              );
+            } catch (error) {
+              console.error('Breakdown report error:', error);
+              Alert.alert('Error', 'Failed to report breakdown. Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const getStatusLabel = () => {
     if (rideStatus === 'accepted') return 'Heading to Pickup';
     if (rideStatus === 'arrived_pickup') return 'Arrived — Waiting for Rider';
@@ -492,15 +568,20 @@ export default function DriverHomeScreen() {
             </View>
           )}
           {rideStatus === 'in_progress' && (
-            hasMoreStops() ? (
-              <TouchableOpacity style={styles.actionBtn} onPress={arrivedAtStop}>
-                <Text style={styles.actionBtnText}>Arrived at Stop {currentStopIndex + 1}</Text>
+            <>
+              {hasMoreStops() ? (
+                <TouchableOpacity style={styles.actionBtn} onPress={arrivedAtStop}>
+                  <Text style={styles.actionBtnText}>Arrived at Stop {currentStopIndex + 1}</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#1D9E75' }]} onPress={reachedDestination}>
+                  <Text style={styles.actionBtnText}>Reached Final Destination</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={styles.breakdownBtn} onPress={reportBreakdown}>
+                <Text style={styles.breakdownBtnText}>⚠️ Report Breakdown</Text>
               </TouchableOpacity>
-            ) : (
-              <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#1D9E75' }]} onPress={reachedDestination}>
-                <Text style={styles.actionBtnText}>Reached Final Destination</Text>
-              </TouchableOpacity>
-            )
+            </>
           )}
           {rideStatus === 'payment_pending' && (
             <View>
@@ -612,6 +693,8 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
   activeBannerPayment: { fontSize: 12, color: '#E6F1FB' },
   actionBtn: { backgroundColor: '#fff', paddingVertical: 10, borderRadius: 8, alignItems: 'center', marginTop: 4 },
   actionBtnText: { color: '#185FA5', fontWeight: 'bold', fontSize: 14 },
+  breakdownBtn: { backgroundColor: 'rgba(255,255,255,0.15)', borderWidth: 1, borderColor: '#FF6B35', borderRadius: 8, paddingVertical: 10, alignItems: 'center', marginTop: 8 },
+  breakdownBtnText: { color: '#FF6B35', fontWeight: '700', fontSize: 14 },
   waitingBadge: { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 8, borderRadius: 8, alignItems: 'center', marginTop: 4 },
   waitingText: { color: '#E6F1FB', fontSize: 13, fontStyle: 'italic' },
   paymentInstructions: { color: '#fff', fontSize: 13, marginBottom: 8, textAlign: 'center' },
