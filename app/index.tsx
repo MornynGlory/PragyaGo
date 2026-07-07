@@ -1,43 +1,35 @@
 import { supabase } from '@/lib/supabase';
-import { useTheme } from '@/lib/useTheme';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function LandingScreen() {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState<string | null>(null);
 
   useEffect(() => {
     checkAuthState();
-
-    // Listen for auth changes
     try {
       const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        async (event, session) => {
+        async (_event, session) => {
           if (session?.user?.id) {
-            // User is logged in, fetch their role and navigate
             await fetchUserRole(session.user.id);
           } else {
-            // User is not logged in
-            setUserRole(null);
             setLoading(false);
           }
         }
       );
-
-      return () => {
-        try {
-          subscription?.unsubscribe();
-        } catch (error) {
-          console.error('Error unsubscribing:', error);
-        }
-      };
-    } catch (error) {
-      console.error('Error setting up auth listener:', error);
+      return () => { try { subscription?.unsubscribe(); } catch {} };
+    } catch {
       setLoading(false);
     }
   }, []);
@@ -45,207 +37,280 @@ export default function LandingScreen() {
   const checkAuthState = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
-
       if (session?.user?.id) {
-        // User is logged in
         await fetchUserRole(session.user.id);
       } else {
-        // User is not logged in
-        setUserRole(null);
         setLoading(false);
       }
-    } catch (error) {
-      console.error('Error checking auth state:', error);
-      setUserRole(null);
+    } catch {
       setLoading(false);
     }
   };
 
   const fetchUserRole = async (userId: string) => {
-    if (!userId) {
-      setUserRole(null);
-      setLoading(false);
-      return;
-    }
-
+    if (!userId) { setLoading(false); return; }
     try {
       const { data, error } = await supabase
         .from('profiles')
-        .select('role, suspended, suspension_reason, phone_verified, phone')
+        .select('role, suspended, suspension_reason')
         .eq('id', userId)
         .single();
 
-      if (error) {
-        console.error('Error fetching user role:', error);
-        setUserRole(null);
+      if (error || !data?.role) { setLoading(false); return; }
+
+      if (data.suspended) {
+        const reason = data.suspension_reason ?? 'No reason provided.';
+        await supabase.auth.signOut();
         setLoading(false);
-      } else if (data?.role) {
-        if (data.suspended) {
-          const reason = data.suspension_reason ?? 'No reason provided.';
-          await supabase.auth.signOut();
-          setUserRole(null);
-          setLoading(false);
-          Alert.alert(
-            'Account Suspended',
-            `Your account has been suspended. Reason: ${reason}\n\nPlease contact PragyaGo support for assistance.`
-          );
-          return;
-        }
-        setUserRole(data.role);
-        if (data.role === 'driver') {
-          const { data: driver } = await supabase
-            .from('drivers')
-            .select('verification_status')
-            .eq('profile_id', userId)
-            .single();
-          const status = driver?.verification_status;
-          if (status === 'pending') {
-            router.replace('/auth/pending' as any);
-          } else if (status === 'rejected') {
-            router.replace('/auth/rejected' as any);
-          } else {
-            router.replace('/driver/home' as any);
-          }
-        } else {
-          router.replace('/rider/home' as any);
-        }
-      } else {
-        setUserRole(null);
-        setLoading(false);
+        Alert.alert('Account Suspended', `Your account has been suspended.\n\nReason: ${reason}\n\nPlease contact PragyaGo support.`);
+        return;
       }
-    } catch (error) {
-      console.error('Error fetching role:', error);
-      setUserRole(null);
+
+      if (data.role === 'driver') {
+        const { data: driver } = await supabase
+          .from('drivers')
+          .select('verification_status')
+          .eq('profile_id', userId)
+          .single();
+        const status = driver?.verification_status;
+        if (status === 'pending') router.replace('/auth/pending' as any);
+        else if (status === 'rejected') router.replace('/auth/rejected' as any);
+        else router.replace('/driver/home' as any);
+      } else {
+        router.replace('/rider/home' as any);
+      }
+    } catch {
       setLoading(false);
     }
-  };
-
-  const handleLoginPress = () => {
-    router.push('/auth/login');
-  };
-
-  const handleRegisterPress = () => {
-    router.push('/auth/register');
   };
 
   if (loading) {
     return (
-      <View style={[styles.container, styles.centerContent]}>
-        <ActivityIndicator size="large" color="#007AFF" />
+      <View style={styles.loadingScreen}>
+        <View style={styles.glowOrb} />
+        <Image source={require('@/assets/images/icon.png')} style={styles.loadingLogo} />
+        <ActivityIndicator size="large" color="#1D9E75" style={{ marginTop: 28 }} />
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.welcomeTitle}>Welcome to PragyaGo</Text>
-        <Text style={styles.welcomeSubtitle}>Your trusted ride-sharing platform</Text>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      {/* Background decorations */}
+      <View style={styles.bgCircleTopRight} />
+      <View style={styles.bgCircleBottomLeft} />
+      <View style={styles.bgCircleMidRight} />
 
-        <View style={styles.featureContainer}>
-          <Text style={styles.featureItem}>🚗 Quick & Reliable Rides</Text>
-          <Text style={styles.featureItem}>💰 Affordable Fares</Text>
-          <Text style={styles.featureItem}>🔒 Safe & Secure</Text>
+      {/* Top: logo + brand + pills */}
+      <View style={styles.topSection}>
+        <View style={styles.logoWrapper}>
+          <View style={styles.logoGlow} />
+          <Image
+            source={require('@/assets/images/icon.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
+        </View>
+        <Text style={styles.brandName}>PragyaGo</Text>
+        <Text style={styles.tagline}>Your Pragya, Anytime. Anywhere.</Text>
+
+        <View style={styles.pillsRow}>
+          <View style={styles.pill}>
+            <Text style={styles.pillText}>📍 Live Tracking</Text>
+          </View>
+          <View style={styles.pill}>
+            <Text style={styles.pillText}>💰 Fair Fares</Text>
+          </View>
+          <View style={styles.pill}>
+            <Text style={styles.pillText}>🪪 Safe Rides</Text>
+          </View>
         </View>
       </View>
 
-      <View style={styles.buttonContainer}>
-        <Pressable style={styles.loginButton} onPress={handleLoginPress}>
-          <Text style={styles.loginButtonText}>Login</Text>
+      {/* Bottom: CTA */}
+      <View style={styles.bottomSection}>
+        <Pressable
+          style={({ pressed }) => [styles.getStartedBtn, pressed && styles.btnPressed]}
+          onPress={() => router.push('/auth/register')}
+        >
+          <Text style={styles.getStartedText}>Get Started</Text>
         </Pressable>
 
-        <Pressable style={styles.registerButton} onPress={handleRegisterPress}>
-          <Text style={styles.registerButtonText}>Register</Text>
-        </Pressable>
+        <View style={styles.signInRow}>
+          <Text style={styles.signInPrompt}>Already have an account? </Text>
+          <Pressable onPress={() => router.push('/auth/login')}>
+            <Text style={styles.signInLink}>Sign In</Text>
+          </Pressable>
+        </View>
 
-        <Text style={styles.termsText}>
-          By continuing, you agree to our Terms of Service and Privacy Policy
-        </Text>
+        <Text style={styles.footerText}>Ghana's first tricycle ride-hailing platform</Text>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
-function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
-  return StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: c.background,
-      paddingHorizontal: 20,
-      paddingVertical: 20,
-      justifyContent: 'space-between',
-    },
-    centerContent: {
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    content: {
-      flex: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
-      paddingTop: 40,
-    },
-    welcomeTitle: {
-      fontSize: 36,
-      fontWeight: 'bold',
-      color: c.text,
-      textAlign: 'center',
-      marginBottom: 12,
-    },
-    welcomeSubtitle: {
-      fontSize: 18,
-      color: c.subtext,
-      textAlign: 'center',
-      marginBottom: 48,
-    },
-    featureContainer: {
-      backgroundColor: c.card,
-      borderRadius: 12,
-      padding: 24,
-      gap: 16,
-    },
-    featureItem: {
-      fontSize: 16,
-      color: c.text,
-      fontWeight: '500',
-      textAlign: 'center',
-    },
-    buttonContainer: {
-      paddingBottom: 20,
-    },
-    loginButton: {
-      width: '100%',
-      paddingVertical: 14,
-      paddingHorizontal: 20,
-      backgroundColor: '#007AFF',
-      borderRadius: 8,
-      alignItems: 'center',
-      marginBottom: 12,
-    },
-    loginButtonText: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: '#fff',
-    },
-    registerButton: {
-      width: '100%',
-      paddingVertical: 14,
-      paddingHorizontal: 20,
-      backgroundColor: c.card,
-      borderRadius: 8,
-      alignItems: 'center',
-      marginBottom: 20,
-    },
-    registerButtonText: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: c.text,
-    },
-    termsText: {
-      fontSize: 12,
-      color: c.subtext,
-      textAlign: 'center',
-      lineHeight: 18,
-    },
-  });
-}
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#0D1F2D',
+    paddingHorizontal: 40,
+    paddingVertical: 60,
+    justifyContent: 'space-between',
+  },
+
+  /* Loading */
+  loadingScreen: {
+    flex: 1,
+    backgroundColor: '#0D1F2D',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingLogo: {
+    width: 100,
+    height: 100,
+    borderRadius: 24,
+  },
+  glowOrb: {
+    position: 'absolute',
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: 'rgba(29,158,117,0.08)',
+    shadowColor: '#1D9E75',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 60,
+  },
+
+  /* Background circles */
+  bgCircleTopRight: {
+    position: 'absolute',
+    width: 320,
+    height: 320,
+    borderRadius: 160,
+    backgroundColor: 'rgba(29,158,117,0.06)',
+    top: -80,
+    right: -80,
+  },
+  bgCircleBottomLeft: {
+    position: 'absolute',
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: 'rgba(24,95,165,0.07)',
+    bottom: 60,
+    left: -70,
+  },
+  bgCircleMidRight: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: 'rgba(29,158,117,0.04)',
+    top: '42%',
+    right: -50,
+  },
+
+  /* Top section */
+  topSection: {
+    alignItems: 'center',
+  },
+  logoWrapper: {
+    width: 120,
+    height: 120,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  logoGlow: {
+    position: 'absolute',
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'rgba(29,158,117,0.12)',
+  },
+  logo: {
+    width: 120,
+    height: 120,
+    borderRadius: 28,
+    backgroundColor: 'transparent',
+  },
+  brandName: {
+    fontSize: 42,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: -1,
+    marginBottom: 8,
+  },
+  tagline: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1D9E75',
+    marginBottom: 32,
+  },
+  pillsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  pill: {
+    alignSelf: 'flex-start',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 100,
+    backgroundColor: 'rgba(29,158,117,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(29,158,117,0.3)',
+  },
+  pillText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#4ECCA3',
+  },
+
+  /* Bottom section */
+  bottomSection: {
+    gap: 16,
+  },
+  getStartedBtn: {
+    backgroundColor: '#1D9E75',
+    borderRadius: 14,
+    paddingVertical: 18,
+    alignItems: 'center',
+    shadowColor: '#1D9E75',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.45,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  btnPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.98 }],
+  },
+  getStartedText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
+  signInRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  signInPrompt: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.5)',
+  },
+  signInLink: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1D9E75',
+  },
+  footerText: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.3)',
+    textAlign: 'center',
+  },
+});

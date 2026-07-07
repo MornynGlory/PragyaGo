@@ -1,26 +1,29 @@
 import { supabase } from '@/lib/supabase';
-import { useTheme } from '@/lib/useTheme';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function LoginScreen() {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
   const router = useRouter();
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [focusedField, setFocusedField] = useState<'phone' | 'password' | null>(null);
 
   const handleLogin = async () => {
     if (!phone.trim() || !password.trim()) {
@@ -30,44 +33,45 @@ export default function LoginScreen() {
 
     setLoading(true);
     try {
-      console.log('Looking up phone:', phone.trim());
-      const { data: profile, error: profileError } = await supabase
+      // Connection test
+      const { data: testData, error: testError } = await supabase
+        .from('profiles')
+        .select('count');
+      console.log('Connection test - count:', JSON.stringify(testData));
+      console.log('Connection test - error:', JSON.stringify(testError));
+      console.log('SUPABASE URL:', process.env.EXPO_PUBLIC_SUPABASE_URL);
+      console.log('SUPABASE KEY exists:', !!process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY);
+
+      // Step 1: look up profile by phone
+      console.log('Phone:', phone.trim());
+      const { data: profile } = await supabase
         .from('profiles')
         .select('id, role, email')
         .eq('phone', phone.trim())
-        .single();
+        .maybeSingle();
 
-      console.log('Profile result:', JSON.stringify(profile), 'Error:', JSON.stringify(profileError));
-
-      if (profileError) {
-        const notFound = profileError.code === 'PGRST116' || profileError.details?.includes('0 rows');
-        Alert.alert('Error', notFound ? 'Phone number not registered.' : 'Failed to look up account. Please try again.');
-        return;
-      }
+      console.log('Profile:', JSON.stringify(profile));
 
       if (!profile) {
         Alert.alert('Error', 'Phone number not registered.');
         return;
       }
 
-      console.log('Email found:', profile?.email);
-      const email = profile.email ?? null;
-      if (!email) {
-        Alert.alert('Error', 'Account details incomplete. Please contact support.');
+      // Step 2: sign in with the profile's email
+      const { error } = await supabase.auth.signInWithPassword({
+        email: profile.email,
+        password,
+      });
+
+      console.log('SignIn error:', JSON.stringify(error));
+
+      if (error) {
+        Alert.alert('Login Failed', error.message);
         return;
       }
 
-      const role = profile.role ?? 'rider';
-
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-      console.log('Sign in error:', JSON.stringify(signInError));
-
-      if (signInError) {
-        Alert.alert('Login Failed', signInError.message ?? 'Incorrect password.');
-        return;
-      }
-
-      if (role === 'driver') {
+      // Step 3: navigate by role
+      if (profile.role === 'driver') {
         router.replace('/driver/home' as any);
       } else {
         router.replace('/rider/home' as any);
@@ -82,90 +86,262 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <ScrollView style={styles.container}>
-        <View style={styles.content}>
+      {/* Background decorations */}
+      <View style={styles.bgCircleTop} />
+      <View style={styles.bgCircleBottom} />
+
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Back arrow */}
+          <TouchableOpacity style={styles.backBtn} onPress={() => router.replace('/')} disabled={loading}>
+            <Text style={styles.backBtnText}>←</Text>
+          </TouchableOpacity>
+
+          {/* Logo + brand */}
+          <View style={styles.logoSection}>
+            <Image
+              source={require('@/assets/images/icon.png')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+            <Text style={styles.brandName}>PragyaGo</Text>
+          </View>
+
+          {/* Heading */}
           <Text style={styles.title}>Welcome Back</Text>
-          <Text style={styles.subtitle}>Sign in to PragyaGo</Text>
+          <Text style={styles.subtitle}>Sign in to continue</Text>
 
+          {/* Form */}
           <View style={styles.form}>
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Phone Number</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="024XXXXXXX"
-                value={phone}
-                onChangeText={setPhone}
-                keyboardType="phone-pad"
-                editable={!loading}
-                placeholderTextColor={colors.subtext}
-              />
-            </View>
+            <TextInput
+              style={[styles.input, focusedField === 'phone' && styles.inputFocused]}
+              placeholder="024XXXXXXX"
+              placeholderTextColor="rgba(255,255,255,0.3)"
+              value={phone}
+              onChangeText={setPhone}
+              keyboardType="phone-pad"
+              editable={!loading}
+              onFocus={() => setFocusedField('phone')}
+              onBlur={() => setFocusedField(null)}
+            />
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Password</Text>
+            <View style={styles.passwordWrapper}>
               <TextInput
-                style={styles.input}
-                placeholder="Enter your password"
+                style={[styles.input, styles.passwordInput, focusedField === 'password' && styles.inputFocused]}
+                placeholder="Password"
+                placeholderTextColor="rgba(255,255,255,0.3)"
                 value={password}
                 onChangeText={setPassword}
-                secureTextEntry
+                secureTextEntry={!showPassword}
                 editable={!loading}
-                placeholderTextColor={colors.subtext}
+                onFocus={() => setFocusedField('password')}
+                onBlur={() => setFocusedField(null)}
               />
+              <TouchableOpacity
+                style={styles.eyeBtn}
+                onPress={() => setShowPassword(v => !v)}
+                disabled={loading}
+              >
+                <Text style={styles.eyeIcon}>{showPassword ? '🙈' : '👁️'}</Text>
+              </TouchableOpacity>
             </View>
 
+            <TouchableOpacity style={styles.forgotRow} disabled={loading}>
+              <Text style={styles.forgotText}>Forgot Password?</Text>
+            </TouchableOpacity>
+
             <Pressable
-              style={[styles.loginButton, loading && styles.buttonDisabled]}
+              style={({ pressed }) => [styles.loginBtn, loading && styles.loginBtnDisabled, pressed && styles.loginBtnPressed]}
               onPress={handleLogin}
               disabled={loading}
             >
               {loading
                 ? <ActivityIndicator color="#fff" />
-                : <Text style={styles.loginButtonText}>Login</Text>
+                : <Text style={styles.loginBtnText}>Sign In</Text>
               }
             </Pressable>
           </View>
 
-          <View style={styles.registerSection}>
-            <Text style={styles.registerText}>Don't have an account? </Text>
-            <Pressable onPress={() => router.push('/auth/register')} disabled={loading}>
-              <Text style={styles.registerLink}>Register here</Text>
-            </Pressable>
+          {/* Register link */}
+          <View style={styles.registerRow}>
+            <Text style={styles.registerPrompt}>Don't have an account? </Text>
+            <TouchableOpacity onPress={() => router.push('/auth/register')} disabled={loading}>
+              <Text style={styles.registerLink}>Register</Text>
+            </TouchableOpacity>
           </View>
-
-          <Pressable onPress={() => router.replace('/')}>
-            <Text style={styles.backButton}>← Back to Home</Text>
-          </Pressable>
-        </View>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
-  return StyleSheet.create({
-    safeArea: { flex: 1, backgroundColor: c.background },
-    container: { flex: 1, backgroundColor: c.background },
-    content: { padding: 20, paddingTop: 60, paddingBottom: 40 },
-    title: { fontSize: 32, fontWeight: 'bold', color: '#1D9E75', marginBottom: 8 },
-    subtitle: { fontSize: 16, color: c.subtext, marginBottom: 32 },
-    form: { marginBottom: 24 },
-    inputGroup: { marginBottom: 16 },
-    label: { fontSize: 14, fontWeight: '600', color: c.text, marginBottom: 8 },
-    input: {
-      borderWidth: 1, borderColor: c.border, borderRadius: 8,
-      paddingHorizontal: 16, paddingVertical: 12,
-      fontSize: 14, backgroundColor: c.inputBg, color: c.text,
-    },
-    loginButton: {
-      backgroundColor: '#1D9E75', paddingVertical: 14,
-      borderRadius: 8, alignItems: 'center', marginTop: 8,
-    },
-    buttonDisabled: { opacity: 0.6 },
-    loginButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-    registerSection: { flexDirection: 'row', justifyContent: 'center', marginBottom: 16 },
-    registerText: { fontSize: 14, color: c.subtext },
-    registerLink: { fontSize: 14, color: '#1D9E75', fontWeight: '600' },
-    backButton: { fontSize: 14, color: c.subtext, textAlign: 'center', marginTop: 8 },
-  });
-}
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#0D1F2D',
+  },
+  scrollContent: {
+    paddingHorizontal: 28,
+    paddingBottom: 40,
+    flexGrow: 1,
+  },
+
+  /* Background decorations */
+  bgCircleTop: {
+    position: 'absolute',
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: 'rgba(29,158,117,0.06)',
+    top: -80,
+    right: -60,
+  },
+  bgCircleBottom: {
+    position: 'absolute',
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: 'rgba(24,95,165,0.07)',
+    bottom: 40,
+    left: -60,
+  },
+
+  /* Back button */
+  backBtn: {
+    marginTop: 12,
+    marginBottom: 24,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  backBtnText: {
+    fontSize: 20,
+    color: '#FFFFFF',
+    lineHeight: 24,
+  },
+
+  /* Logo */
+  logoSection: {
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  logo: {
+    width: 60,
+    height: 60,
+    borderRadius: 14,
+    backgroundColor: 'transparent',
+    marginBottom: 8,
+  },
+  brandName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: -0.3,
+  },
+
+  /* Heading */
+  title: {
+    fontSize: 28,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: -0.5,
+    marginBottom: 6,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.5)',
+    marginBottom: 32,
+  },
+
+  /* Form */
+  form: {
+    gap: 14,
+    marginBottom: 28,
+  },
+  input: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    fontSize: 15,
+    color: '#FFFFFF',
+  },
+  inputFocused: {
+    borderColor: '#1D9E75',
+    backgroundColor: 'rgba(29,158,117,0.08)',
+  },
+  passwordWrapper: {
+    position: 'relative',
+  },
+  passwordInput: {
+    paddingRight: 52,
+  },
+  eyeBtn: {
+    position: 'absolute',
+    right: 14,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  eyeIcon: {
+    fontSize: 18,
+  },
+  forgotRow: {
+    alignSelf: 'flex-end',
+    marginTop: -4,
+  },
+  forgotText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1D9E75',
+  },
+  loginBtn: {
+    backgroundColor: '#1D9E75',
+    borderRadius: 14,
+    paddingVertical: 18,
+    alignItems: 'center',
+    marginTop: 4,
+    shadowColor: '#1D9E75',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 14,
+    elevation: 7,
+  },
+  loginBtnDisabled: { opacity: 0.6 },
+  loginBtnPressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
+  loginBtnText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
+
+  /* Register row */
+  registerRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  registerPrompt: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.5)',
+  },
+  registerLink: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1D9E75',
+  },
+});

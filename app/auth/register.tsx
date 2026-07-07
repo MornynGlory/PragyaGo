@@ -1,16 +1,18 @@
 import { supabase } from '@/lib/supabase';
-import { useTheme } from '@/lib/useTheme';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
+  Image,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -19,12 +21,10 @@ const PRAGYA_COLORS = ['Red', 'Blue', 'Yellow', 'Green', 'White', 'Black', 'Oran
 
 const COLOR_HEX: Record<string, string> = {
   Red: '#FF3B30', Blue: '#2563eb', Yellow: '#FFD60A', Green: '#34C759',
-  White: '#F2F2F7', Black: '#1C1C1E', Orange: '#FF9500', Silver: '#8E8E93',
+  White: '#F2F2F7', Black: '#3A3A3C', Orange: '#FF9500', Silver: '#8E8E93',
 };
 
 export default function RegisterScreen() {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -36,6 +36,7 @@ export default function RegisterScreen() {
   const [pragyaColor, setPragyaColor] = useState('');
   const [role, setRole] = useState<'rider' | 'driver'>('rider');
   const [loading, setLoading] = useState(false);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
 
   const driverAnim = useRef(new Animated.Value(0)).current;
 
@@ -58,6 +59,7 @@ export default function RegisterScreen() {
       if (!pragyaColor) { Alert.alert('Validation', 'Please select your Pragya Color'); return; }
     }
     if (password !== confirmPassword) { Alert.alert('Validation', 'Passwords do not match'); return; }
+    if (!agreedToTerms) { Alert.alert('Terms Required', 'Please agree to our Terms of Service and Privacy Policy to continue.'); return; }
     if (password.length < 6) { Alert.alert('Validation', 'Password must be at least 6 characters'); return; }
 
     setLoading(true);
@@ -67,12 +69,9 @@ export default function RegisterScreen() {
       if (!data?.user) return;
 
       const { error: profileError } = await supabase.from('profiles').insert([{
-        id: data.user.id,
-        role,
-        full_name: fullName.trim(),
-        phone: phone.trim(),
-        email: email.trim(),
-        created_at: new Date().toISOString(),
+        id: data.user.id, role,
+        full_name: fullName.trim(), phone: phone.trim(),
+        email: email.trim(), created_at: new Date().toISOString(),
       }]);
 
       if (profileError) {
@@ -86,9 +85,7 @@ export default function RegisterScreen() {
           vehicle_number: ghanaCardId.trim(),
           plate_number: plateNumber.trim().toUpperCase(),
           pragya_color: pragyaColor,
-          is_online: false,
-          rating: 0,
-          total_rides: 0,
+          is_online: false, rating: 0, total_rides: 0,
         }]);
         if (driverError) {
           Alert.alert('Driver Profile Error', 'Account created but driver profile setup failed. Please try logging in.');
@@ -96,7 +93,6 @@ export default function RegisterScreen() {
         }
       }
 
-      // Brief delay lets Supabase session propagate before navigating
       await new Promise(resolve => setTimeout(resolve, 500));
       if (role === 'driver') {
         router.replace('/auth/verify-driver' as any);
@@ -113,198 +109,328 @@ export default function RegisterScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
-        <View style={styles.content}>
+      {/* Background decorations */}
+      <View style={styles.bgCircleTopRight} />
+      <View style={styles.bgCircleBottomLeft} />
+
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Back button */}
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.replace('/')} disabled={loading}>
+          <Text style={styles.backBtnText}>←</Text>
+        </TouchableOpacity>
+
+        {/* Logo + heading */}
+        <View style={styles.headerSection}>
+          <Image source={require('@/assets/images/icon.png')} style={styles.logo} resizeMode="contain" />
           <Text style={styles.title}>Join PragyaGo</Text>
-          <Text style={styles.subtitle}>Create a new account</Text>
+          <Text style={styles.subtitle}>Create your account in seconds</Text>
+        </View>
 
-          <View style={styles.form}>
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Full Name</Text>
-              <TextInput style={styles.input} placeholder="Enter your full name" value={fullName} onChangeText={setFullName} editable={!loading} placeholderTextColor={colors.subtext} />
-            </View>
+        {/* Role selector */}
+        <View style={styles.roleRow}>
+          <TouchableOpacity
+            style={[styles.roleCard, role === 'rider' && styles.roleCardActiveGreen]}
+            onPress={() => setRole('rider')}
+            disabled={loading}
+          >
+            <Text style={styles.roleEmoji}>👤</Text>
+            <Text style={[styles.roleTitle, role === 'rider' && styles.roleTitleGreen]}>Rider</Text>
+            <Text style={styles.roleSubtitle}>Book rides easily</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.roleCard, role === 'driver' && styles.roleCardActiveBlue]}
+            onPress={() => setRole('driver')}
+            disabled={loading}
+          >
+            <Text style={styles.roleEmoji}>🛺</Text>
+            <Text style={[styles.roleTitle, role === 'driver' && styles.roleTitleBlue]}>Driver</Text>
+            <Text style={styles.roleSubtitle}>Earn with your Pragya</Text>
+          </TouchableOpacity>
+        </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Email</Text>
-              <TextInput style={styles.input} placeholder="Enter your email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" editable={!loading} placeholderTextColor={colors.subtext} />
-            </View>
+        {/* Common fields */}
+        <View style={styles.form}>
+          <Text style={styles.fieldLabel}>Full Name</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Enter your full name"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+            value={fullName}
+            onChangeText={setFullName}
+            editable={!loading}
+          />
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Phone Number *</Text>
-              <TextInput style={styles.input} placeholder="024XXXXXXX" value={phone} onChangeText={setPhone} keyboardType="phone-pad" editable={!loading} placeholderTextColor={colors.subtext} />
-            </View>
+          <Text style={styles.fieldLabel}>Email</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Enter your email"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            editable={!loading}
+          />
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>I want to</Text>
-              <View style={styles.roleContainer}>
-                <Pressable
-                  style={[styles.roleCard, role === 'rider' && styles.roleCardRiderActive]}
-                  onPress={() => setRole('rider')}
-                  disabled={loading}
-                >
-                  <Text style={styles.roleCardEmoji}>👤</Text>
-                  <Text style={[styles.roleCardTitle, role === 'rider' && styles.roleCardTitleGreen]}>Rider</Text>
-                  <Text style={styles.roleCardDesc}>Book rides easily</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.roleCard, role === 'driver' && styles.roleCardDriverActive]}
-                  onPress={() => setRole('driver')}
-                  disabled={loading}
-                >
-                  <Text style={styles.roleCardEmoji}>🛺</Text>
-                  <Text style={[styles.roleCardTitle, role === 'driver' && styles.roleCardTitleBlue]}>Driver</Text>
-                  <Text style={styles.roleCardDesc}>Earn with your Pragya</Text>
-                </Pressable>
+          <Text style={styles.fieldLabel}>Phone Number</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="024XXXXXXX"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+            value={phone}
+            onChangeText={setPhone}
+            keyboardType="phone-pad"
+            editable={!loading}
+          />
+
+          {/* Driver details */}
+          {role === 'driver' && (
+            <Animated.View style={[styles.driverSection, {
+              opacity: driverAnim,
+              transform: [{ translateY: driverAnim.interpolate({ inputRange: [0, 1], outputRange: [-12, 0] }) }],
+            }]}>
+              <Text style={styles.driverSectionTitle}>🛺 Driver Details</Text>
+
+              <Text style={styles.fieldLabel}>Ghana Card ID</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="GHA-XXXXXXXXX-X"
+                placeholderTextColor="rgba(255,255,255,0.35)"
+                value={ghanaCardId}
+                onChangeText={setGhanaCardId}
+                autoCapitalize="characters"
+                editable={!loading}
+              />
+
+              <Text style={styles.fieldLabel}>Plate Number</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="M-21-AW 5615"
+                placeholderTextColor="rgba(255,255,255,0.35)"
+                value={plateNumber}
+                onChangeText={(t) => setPlateNumber(t.toUpperCase())}
+                autoCapitalize="characters"
+                editable={!loading}
+              />
+
+              <Text style={styles.fieldLabel}>Pragya Color</Text>
+              <View style={styles.colorGrid}>
+                {PRAGYA_COLORS.map((color) => (
+                  <TouchableOpacity
+                    key={color}
+                    style={[
+                      styles.colorChip,
+                      pragyaColor === color && { borderColor: COLOR_HEX[color], backgroundColor: 'rgba(255,255,255,0.1)' },
+                    ]}
+                    onPress={() => setPragyaColor(color)}
+                    disabled={loading}
+                  >
+                    <View style={[
+                      styles.colorDot,
+                      { backgroundColor: COLOR_HEX[color] },
+                      color === 'White' && styles.colorDotWhite,
+                    ]} />
+                    <Text style={[
+                      styles.colorChipText,
+                      pragyaColor === color && { color: COLOR_HEX[color], fontWeight: '700' },
+                    ]}>{color}</Text>
+                  </TouchableOpacity>
+                ))}
               </View>
-            </View>
 
-            {role === 'driver' && (
-              <Animated.View style={[styles.driverSection, {
-                opacity: driverAnim,
-                transform: [{ translateY: driverAnim.interpolate({ inputRange: [0, 1], outputRange: [-12, 0] }) }],
-              }]}>
-                <Text style={styles.driverSectionTitle}>🛺 Driver Details</Text>
+              <View style={styles.driverNote}>
+                <Text style={styles.driverNoteText}>🔒 These details will be locked after registration. Visit any PragyaGo office to make changes.</Text>
+              </View>
+            </Animated.View>
+          )}
 
-                <View style={styles.inputGroup}>
-                  <Text style={styles.label}>Ghana Card ID *</Text>
-                  <TextInput style={styles.input} placeholder="GHA-XXXXXXXXX-X" value={ghanaCardId} onChangeText={setGhanaCardId} autoCapitalize="characters" editable={!loading} placeholderTextColor={colors.subtext} />
-                </View>
+          <Text style={styles.fieldLabel}>Password</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Minimum 6 characters"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+            editable={!loading}
+          />
 
-                <View style={styles.inputGroup}>
-                  <Text style={styles.label}>Plate Number *</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="M-21-AW 5615"
-                    value={plateNumber}
-                    onChangeText={(t) => setPlateNumber(t.toUpperCase())}
-                    autoCapitalize="characters"
-                    editable={!loading}
-                    placeholderTextColor={colors.subtext}
-                  />
-                </View>
+          <Text style={styles.fieldLabel}>Confirm Password</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Confirm your password"
+            placeholderTextColor="rgba(255,255,255,0.35)"
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+            secureTextEntry
+            editable={!loading}
+          />
 
-                <View style={styles.inputGroup}>
-                  <Text style={styles.label}>Pragya Color *</Text>
-                  <View style={styles.colorGrid}>
-                    {PRAGYA_COLORS.map((color) => (
-                      <Pressable
-                        key={color}
-                        style={[
-                          styles.colorChip,
-                          pragyaColor === color && { borderColor: COLOR_HEX[color], backgroundColor: '#F8FAFF' },
-                        ]}
-                        onPress={() => setPragyaColor(color)}
-                        disabled={loading}
-                      >
-                        <View style={[
-                          styles.colorDot,
-                          { backgroundColor: COLOR_HEX[color] },
-                          color === 'White' && styles.colorDotWhite,
-                        ]} />
-                        <Text style={[
-                          styles.colorChipText,
-                          pragyaColor === color && { color: COLOR_HEX[color], fontWeight: '700' },
-                        ]}>{color}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </View>
-
-                <View style={styles.driverNote}>
-                  <Text style={styles.driverNoteText}>🔒 These details will be locked after registration. Visit any PragyaGo office to make changes.</Text>
-                </View>
-              </Animated.View>
-            )}
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Password</Text>
-              <TextInput style={styles.input} placeholder="Minimum 6 characters" value={password} onChangeText={setPassword} secureTextEntry editable={!loading} placeholderTextColor={colors.subtext} />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Confirm Password</Text>
-              <TextInput style={styles.input} placeholder="Confirm your password" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry editable={!loading} placeholderTextColor={colors.subtext} />
-            </View>
-
-            <Pressable
-              style={[styles.registerButton, role === 'driver' && styles.registerButtonDriver, loading && styles.buttonDisabled]}
-              onPress={handleRegister}
+          {/* Terms */}
+          <View style={styles.termsRow}>
+            <TouchableOpacity
+              style={[styles.checkbox, agreedToTerms && styles.checkboxChecked]}
+              onPress={() => setAgreedToTerms(v => !v)}
               disabled={loading}
             >
-              {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.registerButtonText}>Create Account</Text>}
-            </Pressable>
+              {agreedToTerms && <Text style={styles.checkmark}>✓</Text>}
+            </TouchableOpacity>
+            <View style={styles.termsTextRow}>
+              <Text style={styles.termsText}>I agree to the </Text>
+              <TouchableOpacity onPress={() => Linking.openURL('https://www.pragyago.com/terms')}>
+                <Text style={styles.termsLink}>Terms of Service</Text>
+              </TouchableOpacity>
+              <Text style={styles.termsText}> and </Text>
+              <TouchableOpacity onPress={() => Linking.openURL('https://www.pragyago.com/privacy-policy')}>
+                <Text style={styles.termsLink}>Privacy Policy</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
-          <View style={styles.loginSection}>
-            <Text style={styles.loginText}>Already have an account? </Text>
-            <Pressable onPress={() => router.push('/auth/login')} disabled={loading}>
-              <Text style={styles.loginLink}>Login here</Text>
-            </Pressable>
-          </View>
-
-          <Pressable onPress={() => router.replace('/')}>
-            <Text style={styles.backButton}>← Back to Home</Text>
+          {/* Register button */}
+          <Pressable
+            style={({ pressed }) => [
+              styles.registerBtn,
+              role === 'driver' && styles.registerBtnDriver,
+              loading && styles.btnDisabled,
+              pressed && styles.btnPressed,
+            ]}
+            onPress={handleRegister}
+            disabled={loading}
+          >
+            {loading
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={styles.registerBtnText}>Create Account</Text>
+            }
           </Pressable>
+        </View>
+
+        {/* Sign in link */}
+        <View style={styles.signInRow}>
+          <Text style={styles.signInPrompt}>Already have an account? </Text>
+          <TouchableOpacity onPress={() => router.push('/auth/login')} disabled={loading}>
+            <Text style={styles.signInLink}>Sign In</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
-  return StyleSheet.create({
-    safeArea: { flex: 1, backgroundColor: c.background },
-    container: { flex: 1, backgroundColor: c.background },
-    content: { padding: 20, paddingTop: 60, paddingBottom: 40 },
-    title: { fontSize: 32, fontWeight: 'bold', color: c.text, marginBottom: 8 },
-    subtitle: { fontSize: 16, color: c.subtext, marginBottom: 32 },
-    form: { marginBottom: 24 },
-    inputGroup: { marginBottom: 16 },
-    label: { fontSize: 14, fontWeight: '600', color: c.text, marginBottom: 8 },
-    input: {
-      borderWidth: 1, borderColor: c.border, borderRadius: 8,
-      paddingHorizontal: 16, paddingVertical: 12,
-      fontSize: 14, backgroundColor: c.inputBg, color: c.text,
-    },
-    roleContainer: { flexDirection: 'row', gap: 12 },
-    roleCard: {
-      flex: 1, borderWidth: 2, borderColor: c.border, borderRadius: 12,
-      paddingVertical: 18, paddingHorizontal: 12, alignItems: 'center',
-      backgroundColor: c.card,
-    },
-    roleCardRiderActive: { borderColor: '#1D9E75', backgroundColor: '#F0FDF7' },
-    roleCardDriverActive: { borderColor: '#2563eb', backgroundColor: '#EFF6FF' },
-    roleCardEmoji: { fontSize: 30, marginBottom: 6 },
-    roleCardTitle: { fontSize: 15, fontWeight: '700', color: c.text, marginBottom: 2 },
-    roleCardTitleGreen: { color: '#1D9E75' },
-    roleCardTitleBlue: { color: '#2563eb' },
-    roleCardDesc: { fontSize: 11, color: c.subtext, textAlign: 'center' },
-    driverSection: {
-      borderWidth: 2, borderColor: '#2563eb', borderRadius: 12,
-      padding: 16, marginBottom: 16, backgroundColor: '#F8FAFF',
-    },
-    driverSectionTitle: { fontSize: 14, fontWeight: '700', color: '#2563eb', marginBottom: 16 },
-    colorGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    colorChip: {
-      flexDirection: 'row', alignItems: 'center', gap: 6,
-      borderWidth: 1.5, borderColor: c.border, borderRadius: 20,
-      paddingVertical: 6, paddingHorizontal: 10, backgroundColor: c.card,
-    },
-    colorDot: { width: 14, height: 14, borderRadius: 7 },
-    colorDotWhite: { borderWidth: 1, borderColor: '#ccc' },
-    colorChipText: { fontSize: 12, color: c.subtext },
-    driverNote: { backgroundColor: '#EFF6FF', borderRadius: 8, padding: 10, marginTop: 4 },
-    driverNoteText: { fontSize: 12, color: '#2563eb', lineHeight: 18 },
-    registerButton: {
-      backgroundColor: '#1D9E75', paddingVertical: 14,
-      borderRadius: 8, alignItems: 'center', marginTop: 8,
-    },
-    registerButtonDriver: { backgroundColor: '#2563eb' },
-    buttonDisabled: { opacity: 0.6 },
-    registerButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-    loginSection: { flexDirection: 'row', justifyContent: 'center', marginBottom: 16 },
-    loginText: { fontSize: 14, color: c.subtext },
-    loginLink: { fontSize: 14, color: '#1D9E75', fontWeight: '600' },
-    backButton: { fontSize: 14, color: c.subtext, textAlign: 'center', marginTop: 8 },
-  });
-}
+const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: '#0D1F2D' },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 24, paddingBottom: 48 },
+
+  /* Background */
+  bgCircleTopRight: {
+    position: 'absolute', width: 300, height: 300, borderRadius: 150,
+    backgroundColor: 'rgba(29,158,117,0.06)', top: -60, right: -60,
+  },
+  bgCircleBottomLeft: {
+    position: 'absolute', width: 220, height: 220, borderRadius: 110,
+    backgroundColor: 'rgba(24,95,165,0.07)', bottom: 80, left: -50,
+  },
+
+  /* Back */
+  backBtn: {
+    marginTop: 12, marginBottom: 20, width: 40, height: 40,
+    borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  backBtnText: { fontSize: 20, color: '#FFFFFF', lineHeight: 24 },
+
+  /* Header */
+  headerSection: { alignItems: 'center', marginBottom: 28 },
+  logo: { width: 50, height: 50, borderRadius: 12, backgroundColor: 'transparent', marginBottom: 12 },
+  title: { fontSize: 28, fontWeight: '900', color: '#FFFFFF', letterSpacing: -0.5, marginBottom: 6 },
+  subtitle: { fontSize: 14, color: 'rgba(255,255,255,0.5)' },
+
+  /* Role selector */
+  roleRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
+  roleCard: {
+    flex: 1, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 14, paddingVertical: 16, paddingHorizontal: 10,
+    alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  roleCardActiveGreen: {
+    borderColor: '#1D9E75',
+    backgroundColor: 'rgba(29,158,117,0.15)',
+  },
+  roleCardActiveBlue: {
+    borderColor: '#185FA5',
+    backgroundColor: 'rgba(24,95,165,0.15)',
+  },
+  roleEmoji: { fontSize: 28, marginBottom: 6 },
+  roleTitle: { fontSize: 15, fontWeight: '700', color: 'rgba(255,255,255,0.7)', marginBottom: 2 },
+  roleTitleGreen: { color: '#1D9E75' },
+  roleTitleBlue: { color: '#4DA3FF' },
+  roleSubtitle: { fontSize: 11, color: 'rgba(255,255,255,0.4)', textAlign: 'center' },
+
+  /* Form */
+  form: { gap: 6 },
+  fieldLabel: { fontSize: 13, fontWeight: '600', color: 'rgba(255,255,255,0.6)', marginTop: 10, marginBottom: 6 },
+  input: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 12, paddingHorizontal: 16, paddingVertical: 15,
+    fontSize: 15, color: '#FFFFFF',
+  },
+
+  /* Driver section */
+  driverSection: {
+    borderWidth: 1, borderColor: 'rgba(24,95,165,0.2)', borderRadius: 12,
+    padding: 16, marginTop: 10, marginBottom: 4,
+    backgroundColor: 'rgba(24,95,165,0.08)',
+  },
+  driverSectionTitle: { fontSize: 14, fontWeight: '700', color: '#185FA5', marginBottom: 14 },
+  colorGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
+  colorChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.15)', borderRadius: 20,
+    paddingVertical: 6, paddingHorizontal: 10,
+  },
+  colorDot: { width: 14, height: 14, borderRadius: 7 },
+  colorDotWhite: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)' },
+  colorChipText: { fontSize: 12, color: 'rgba(255,255,255,0.6)' },
+  driverNote: {
+    backgroundColor: 'rgba(24,95,165,0.12)', borderRadius: 8,
+    padding: 10, marginTop: 8,
+  },
+  driverNoteText: { fontSize: 12, color: '#4DA3FF', lineHeight: 18 },
+
+  /* Terms */
+  termsRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 4, paddingHorizontal: 2 },
+  checkbox: {
+    width: 22, height: 22, borderRadius: 5,
+    borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  checkboxChecked: { backgroundColor: '#1D9E75', borderColor: '#1D9E75' },
+  checkmark: { color: '#fff', fontSize: 13, fontWeight: '700', lineHeight: 16 },
+  termsTextRow: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
+  termsText: { fontSize: 13, color: 'rgba(255,255,255,0.7)' },
+  termsLink: { fontSize: 13, color: '#1D9E75', fontWeight: '600' },
+
+  /* Register button */
+  registerBtn: {
+    backgroundColor: '#1D9E75', borderRadius: 14,
+    paddingVertical: 18, alignItems: 'center', marginTop: 20,
+    shadowColor: '#1D9E75', shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4, shadowRadius: 14, elevation: 7,
+  },
+  registerBtnDriver: { backgroundColor: '#185FA5', shadowColor: '#185FA5' },
+  btnDisabled: { opacity: 0.6 },
+  btnPressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
+  registerBtnText: { fontSize: 17, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.3 },
+
+  /* Sign in row */
+  signInRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 24 },
+  signInPrompt: { fontSize: 14, color: 'rgba(255,255,255,0.5)' },
+  signInLink: { fontSize: 14, fontWeight: '700', color: '#1D9E75' },
+});
