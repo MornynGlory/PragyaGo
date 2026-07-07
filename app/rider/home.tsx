@@ -709,11 +709,11 @@ export default function RiderHomeScreen() {
       <View style={styles.mapContainer}>
         <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/notifications' as any)}>
           <Text style={styles.bellIcon}>🔔</Text>
-          {unreadCount > 0 && (
+          {unreadCount > 0 ? (
             <View style={styles.bellBadge}>
               <Text style={styles.bellBadgeText}>{unreadCount}</Text>
             </View>
-          )}
+          ) : null}
         </TouchableOpacity>
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -723,13 +723,13 @@ export default function RiderHomeScreen() {
         ) : (
           <MapView ref={mapRef} style={styles.map} mapType="standard" zoomEnabled={true} scrollEnabled={true}
             initialRegion={{ latitude: location?.latitude || 7.3349, longitude: location?.longitude || -2.3123, latitudeDelta: 0.05, longitudeDelta: 0.05 }}>
-            {location && (
+            {location ? (
               <Marker coordinate={location} title="You are here">
                 <View style={styles.riderMarker}>
                   <View style={styles.riderMarkerInner} />
                 </View>
               </Marker>
-            )}
+            ) : null}
             {nearbyDrivers.map((driver) => (
               <Marker key={driver.id} coordinate={{ latitude: driver.current_lat, longitude: driver.current_lng }}>
                 <View style={styles.tricycleMarker}>
@@ -737,7 +737,7 @@ export default function RiderHomeScreen() {
                 </View>
               </Marker>
             ))}
-            {driverLocation && (
+            {driverLocation ? (
               <MarkerAnimated coordinate={driverLocationAnim} title="Your Driver">
                 <View style={styles.trackingMarkerWrap}>
                   <Animated.View
@@ -754,10 +754,10 @@ export default function RiderHomeScreen() {
                   </View>
                 </View>
               </MarkerAnimated>
-            )}
-            {routePoints.length > 1 && (
+            ) : null}
+            {routePoints.length > 1 ? (
               <Polyline coordinates={routePoints} strokeColor="#1D9E75" strokeWidth={4} />
-            )}
+            ) : null}
           </MapView>
         )}
       </View>
@@ -786,42 +786,42 @@ export default function RiderHomeScreen() {
         </View>
       )}
 
-      {currentRide && (
+      {currentRide ? (
         <View style={styles.rideStatusBanner}>
           <Text style={styles.rideStatusText}>{getRideStatusLabel()}</Text>
           <Text style={styles.rideStatusSub}>To: {currentRide.dropoff_address}</Text>
-          {currentRide.stops?.length > 0 && (
-            <Text style={styles.rideStatusStops}>Stops: {currentRide.stops.map((s: any) => s.address).join(' → ')}</Text>
-          )}
+          {(currentRide.stops?.length ?? 0) > 0 ? (
+            <Text style={styles.rideStatusStops}>{`Stops: ${currentRide.stops.map((s: any) => s.address).join(' → ')}`}</Text>
+          ) : null}
           <View style={styles.fareRow}>
             <Text style={styles.rideStatusFare}>GHS {displayFare}</Text>
-            {finalFare && finalFare !== currentRide.fare_ghs && (
+            {!!finalFare && finalFare !== currentRide.fare_ghs ? (
               <Text style={styles.originalFare}>(est. GHS {currentRide.fare_ghs})</Text>
-            )}
+            ) : null}
           </View>
           <View style={styles.rideActions}>
-            {rideStatus === 'requested' && (
+            {rideStatus === 'requested' ? (
               <TouchableOpacity style={styles.cancelButton} onPress={cancelRide}>
                 <Text style={styles.cancelButtonText}>Cancel Ride</Text>
               </TouchableOpacity>
-            )}
-            {rideStatus === 'payment_pending' && !riderConfirmedPayment && (
+            ) : null}
+            {rideStatus === 'payment_pending' && !riderConfirmedPayment ? (
               <TouchableOpacity style={styles.confirmPaymentButton} onPress={() => confirmPayment(currentRide, displayFare)}>
                 <Text style={styles.confirmPaymentText}>
                   {currentRide.payment_method === 'cash' ? 'Cash Sent' : 'Confirm Payment'}
                 </Text>
               </TouchableOpacity>
-            )}
-            {driverInfo && (rideStatus === 'accepted' || rideStatus === 'arrived_pickup') && (
+            ) : null}
+            {driverInfo && (rideStatus === 'accepted' || rideStatus === 'arrived_pickup') ? (
               <TouchableOpacity style={styles.viewDriverButton} onPress={() => setShowDriverCard(true)}>
                 <Text style={styles.viewDriverButtonText}>View Driver</Text>
               </TouchableOpacity>
-            )}
+            ) : null}
           </View>
         </View>
-      )}
+      ) : null}
 
-      {!currentRide && (
+      {!currentRide ? (
         <ScrollView style={styles.bottomPanel}>
           <Text style={styles.panelTitle}>Where do you want to go?</Text>
           <Text style={styles.driversCount}>
@@ -831,14 +831,14 @@ export default function RiderHomeScreen() {
           <View style={styles.destInputContainer}>
             <View style={styles.inputWrapper}>
               <TextInput style={styles.inputWithClear} placeholder="Enter final destination" value={destination} onChangeText={handleDestinationChange} placeholderTextColor={colors.subtext} />
-              {destination.length > 0 && (
+              {destination.length > 0 ? (
                 <TouchableOpacity style={styles.clearBtn} onPress={() => { setDestination(''); setDestinationSuggestions([]); setFareEstimate(0); setFareBreakdown(null); setDiscountResult(null); setOriginalFare(null); setSelectedDestCoords(null); }}>
                   <Text style={styles.clearBtnText}>✕</Text>
                 </TouchableOpacity>
-              )}
+              ) : null}
             </View>
-            {loadingDestSuggestions && <ActivityIndicator size="small" color="#2563eb" style={styles.suggestionsLoader} />}
-            {destinationSuggestions.length > 0 && (
+            {loadingDestSuggestions ? <ActivityIndicator size="small" color="#2563eb" style={styles.suggestionsLoader} /> : null}
+            {destinationSuggestions.length > 0 ? (
             <View style={styles.suggestionsCard}>
               {destinationSuggestions.map((item, index) => {
                 const prev = index > 0 ? destinationSuggestions[index - 1] : null;
@@ -846,8 +846,8 @@ export default function RiderHomeScreen() {
                 const showPlacesHeader = item.source === 'place' && prev?.source !== 'place';
                 return (
                   <React.Fragment key={item.id ?? index}>
-                    {showFaresHeader && <Text style={styles.sectionLabel}>📍 Fixed Fares</Text>}
-                    {showPlacesHeader && <Text style={styles.sectionLabel}>🗺️ All Places</Text>}
+                    {showFaresHeader ? <Text style={styles.sectionLabel}>📍 Fixed Fares</Text> : null}
+                    {showPlacesHeader ? <Text style={styles.sectionLabel}>🗺️ All Places</Text> : null}
                     <TouchableOpacity
                       style={[
                         styles.suggestionItem,
@@ -879,11 +879,11 @@ export default function RiderHomeScreen() {
                 );
               })}
             </View>
-            )}
+            ) : null}
           </View>
-          {stops.length > 0 && (
+          {stops.length > 0 ? (
             <View style={styles.stopsContainer}>
-              <Text style={styles.stopsTitle}>Stops ({stops.length}/3)</Text>
+              <Text style={styles.stopsTitle}>{`Stops (${stops.length}/3)`}</Text>
               {stops.map((stop, index) => (
                 <View key={index} style={styles.stopRow}>
                   <Text style={styles.stopNumber}>{index + 1}</Text>
@@ -894,8 +894,8 @@ export default function RiderHomeScreen() {
                 </View>
               ))}
             </View>
-          )}
-          {stops.length < 3 && (
+          ) : null}
+          {stops.length < 3 ? (
             <View>
               <View style={styles.addStopRow}>
                 <TextInput style={styles.stopInput} placeholder="Add a stop (optional)" value={newStop} onChangeText={handleStopChange} placeholderTextColor={colors.subtext} />
@@ -903,8 +903,8 @@ export default function RiderHomeScreen() {
                   <Text style={styles.addStopButtonText}>+ Add</Text>
                 </TouchableOpacity>
               </View>
-              {loadingStopSuggestions && <ActivityIndicator size="small" color="#2563eb" style={styles.suggestionsLoader} />}
-              {stopSuggestions.length > 0 && (
+              {loadingStopSuggestions ? <ActivityIndicator size="small" color="#2563eb" style={styles.suggestionsLoader} /> : null}
+              {stopSuggestions.length > 0 ? (
                 <View style={styles.suggestionsCard}>
                   {stopSuggestions.map((item, index) => (
                     <TouchableOpacity
@@ -916,20 +916,20 @@ export default function RiderHomeScreen() {
                     </TouchableOpacity>
                   ))}
                 </View>
-              )}
+              ) : null}
             </View>
-          )}
-          {calculatingFare && (
+          ) : null}
+          {calculatingFare ? (
             <ActivityIndicator color="#1D9E75" style={{ marginVertical: 12 }} />
-          )}
-          {fareEstimate && (
+          ) : null}
+          {fareEstimate ? (
             <View style={styles.fareBadgeWrapper}>
               <View style={styles.fareBadge}>
                 <Text style={styles.fareBadgeAmount}>GHS {fareEstimate.toFixed(2)}</Text>
                 <Text style={styles.fareBadgeLabel}>Estimated Fare</Text>
               </View>
             </View>
-          )}
+          ) : null}
           <View style={styles.paymentContainer}>
             <Text style={styles.paymentLabel}>Payment Method</Text>
             <View style={styles.paymentOptions}>
@@ -965,7 +965,7 @@ export default function RiderHomeScreen() {
             </TouchableOpacity>
           </View>
         </ScrollView>
-      )}
+      ) : null}
 
       {/* Fare Accept Modal */}
       <Modal visible={showFareAcceptModal} transparent animationType="slide">
@@ -988,9 +988,9 @@ export default function RiderHomeScreen() {
                 <Text style={styles.fareCompareNew}>GHS {finalFare}</Text>
               </View>
             </View>
-            {currentRide?.actual_distance_km && (
-              <Text style={styles.fareDistance}>Actual distance: {currentRide.actual_distance_km} km</Text>
-            )}
+            {currentRide?.actual_distance_km ? (
+              <Text style={styles.fareDistance}>{`Actual distance: ${currentRide.actual_distance_km} km`}</Text>
+            ) : null}
             <TouchableOpacity style={styles.acceptFareButton} onPress={acceptNewFare}>
               <Text style={styles.acceptFareButtonText}>Accept & Pay GHS {finalFare}</Text>
             </TouchableOpacity>

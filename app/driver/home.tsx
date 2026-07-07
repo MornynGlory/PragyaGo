@@ -1,7 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { getDriverToken, getRiderToken, sendPushNotification } from '@/lib/notifications';
 import { calculateFinalFare } from '@/lib/fares';
-import { useTheme } from '@/lib/useTheme';
 import { autoAssignDriverZone } from '@/lib/zones';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
@@ -9,6 +8,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -28,13 +28,11 @@ const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: numbe
   return R * c;
 };
 
-
 export default function DriverHomeScreen() {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
+
   const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [isOnline, setIsOnline] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -47,14 +45,18 @@ export default function DriverHomeScreen() {
   const [currentStopIndex, setCurrentStopIndex] = useState(0);
   const [pickupLocation, setPickupLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [recalculatedFare, setRecalculatedFare] = useState<number | null>(null);
-  const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const rideSubscription = useRef<any>(null);
-  const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
   const [currentZoneId, setCurrentZoneId] = useState<string | null>(null);
-  const currentZoneIdRef = useRef<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLocked, setIsLocked] = useState(false);
   const [commissionOwed, setCommissionOwed] = useState(0);
+  const [driverName, setDriverName] = useState('Driver');
+  const [pendingRide, setPendingRide] = useState<any>(null);
+  const [acceptingRide, setAcceptingRide] = useState(false);
+
+  const locationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const rideSubscription = useRef<any>(null);
+  const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const currentZoneIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     requestLocationPermission();
@@ -87,6 +89,10 @@ export default function DriverHomeScreen() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+
+      const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', user.id).single();
+      if (profile?.full_name) setDriverName(profile.full_name);
+
       const { data: driver } = await supabase.from('drivers').select('*').eq('profile_id', user.id).single();
       if (driver) {
         setRating(driver.rating || 0);
@@ -98,7 +104,6 @@ export default function DriverHomeScreen() {
         const dbCommission = driver.commission_owed ?? 0;
         const dbLocked = driver.is_locked || false;
         setCommissionOwed(dbCommission);
-        // Lock is only effective when commission_owed > 0; repair stale flag if needed
         if (dbLocked && dbCommission === 0) {
           await supabase.from('drivers').update({ is_locked: false }).eq('id', driver.id);
           setIsLocked(false);
@@ -110,7 +115,7 @@ export default function DriverHomeScreen() {
       }
       const today = new Date(); today.setHours(0, 0, 0, 0);
       const { data: payments } = await supabase.from('payments').select('amount_ghs').eq('status', 'success').gte('created_at', today.toISOString());
-      if (payments) setDailyEarnings(payments.reduce((sum, p) => sum + (p.amount_ghs || 0), 0));
+      if (payments) setDailyEarnings(payments.reduce((sum: number, p: { amount_ghs: number }) => sum + (p.amount_ghs || 0), 0));
     } catch (error) { console.error('Error fetching stats:', error); }
   };
 
@@ -123,7 +128,6 @@ export default function DriverHomeScreen() {
           const ride = payload.new;
           if (ride.status === 'requested') {
             const requestFare = (ride.discounted_fare && ride.discounted_fare > 0 ? ride.discounted_fare : null) ?? ride.fare_ghs;
-            const stopsInfo = ride.stops?.length > 0 ? `\nStops: ${ride.stops.map((s: any) => s.address).join(' → ')}` : '';
             const driverToken = await getDriverToken(driverId);
             if (driverToken) {
               await sendPushNotification(
@@ -132,34 +136,7 @@ export default function DriverHomeScreen() {
                 `Pickup: ${ride.pickup_address} → ${ride.dropoff_address} | GHS ${requestFare}`
               );
             }
-            Alert.alert(
-              'New Ride Request!',
-              `Pickup: ${ride.pickup_address}\nTo: ${ride.dropoff_address}${stopsInfo}\nEstimated Fare: GHS ${requestFare}`,
-              [
-                { text: 'Decline', style: 'cancel' },
-                { text: 'Accept', onPress: async () => {
-                  const { data: { user } } = await supabase.auth.getUser();
-                  if (!user) return;
-                  const { data: driver } = await supabase.from('drivers').select('id').eq('profile_id', user.id).single();
-                  if (!driver) return;
-                  const { error } = await supabase.from('rides').update({ driver_id: driver.id, status: 'accepted' }).eq('id', ride.id).eq('status', 'requested');
-                  if (error) { Alert.alert('Error', error.message); return; }
-                  setActiveRide(ride);
-                  setRideStatus('accepted');
-                  setCurrentStopIndex(0);
-                  setRecalculatedFare(null);
-                  const riderToken = await getRiderToken(ride.rider_id);
-                  if (riderToken) {
-                    await sendPushNotification(
-                      riderToken,
-                      'Driver Found! 🛺',
-                      'Your Pragya driver is on the way. ETA ~5 mins.'
-                    );
-                  }
-                  Alert.alert('Ride Accepted!', 'Head to the pickup location.');
-                }},
-              ]
-            );
+            setPendingRide(ride);
           }
         })
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides', filter: `driver_id=eq.${driverId}` }, async (payload) => {
@@ -179,11 +156,7 @@ export default function DriverHomeScreen() {
             setPickupLocation(null); setRecalculatedFare(null);
             const riderToken = await getRiderToken(ride.rider_id);
             if (riderToken) {
-              await sendPushNotification(
-                riderToken,
-                'Ride Complete! ✅',
-                `Your ride is complete. Total fare: GHS ${actualFare}. Thank you for riding with PragyaGo!`
-              );
+              await sendPushNotification(riderToken, 'Ride Complete! ✅', `Your ride is complete. Total fare: GHS ${actualFare}. Thank you for riding with PragyaGo!`);
             }
             const today = new Date().toISOString().split('T')[0];
             const isCash = ride.payment_method === 'cash';
@@ -217,7 +190,6 @@ export default function DriverHomeScreen() {
             }
             Alert.alert('Ride Complete!', `GHS ${actualFare} earned!`);
 
-            // Re-check commission_owed; auto-unlock if it has been cleared
             const { data: freshDriver } = await supabase
               .from('drivers')
               .select('commission_owed, is_locked')
@@ -237,13 +209,45 @@ export default function DriverHomeScreen() {
             await subscribeToRideRequests(driverId);
           }
         });
-      await channel.subscribe((status) => console.log('Subscription status:', status));
+      channel.subscribe((status) => console.log('Subscription status:', status));
       rideSubscription.current = channel;
     } catch (error) { console.error('Subscription error:', error); }
   };
 
+  const acceptPendingRide = async () => {
+    if (!pendingRide) return;
+    setAcceptingRide(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: driver } = await supabase.from('drivers').select('id').eq('profile_id', user.id).single();
+      if (!driver) return;
+      const { error } = await supabase
+        .from('rides')
+        .update({ driver_id: driver.id, status: 'accepted' })
+        .eq('id', pendingRide.id)
+        .eq('status', 'requested');
+      if (error) { Alert.alert('Error', error.message); return; }
+      setActiveRide(pendingRide);
+      setRideStatus('accepted');
+      setCurrentStopIndex(0);
+      setRecalculatedFare(null);
+      const riderToken = await getRiderToken(pendingRide.rider_id);
+      if (riderToken) {
+        await sendPushNotification(riderToken, 'Driver Found! 🛺', 'Your Pragya driver is on the way. ETA ~5 mins.');
+      }
+      setPendingRide(null);
+      Alert.alert('Ride Accepted!', 'Head to the pickup location.');
+    } catch {
+      Alert.alert('Error', 'Could not accept ride. Please try again.');
+    } finally {
+      setAcceptingRide(false);
+    }
+  };
+
+  const declinePendingRide = () => setPendingRide(null);
+
   const toggleOnlineStatus = async () => {
-    // Dual-condition lock: only block when BOTH is_locked=true AND commission_owed > 0
     if (isLocked && commissionOwed > 0) {
       Alert.alert(
         '🔒 Account Locked',
@@ -291,7 +295,7 @@ export default function DriverHomeScreen() {
         if (rideSubscription.current) { await supabase.removeChannel(rideSubscription.current); rideSubscription.current = null; }
         Alert.alert('You are Offline', 'You will not receive ride requests.');
       }
-    } catch (error) { Alert.alert('Error', 'Could not update status.'); }
+    } catch { Alert.alert('Error', 'Could not update status.'); }
   };
 
   const arrivedAtPickup = async () => {
@@ -300,7 +304,6 @@ export default function DriverHomeScreen() {
     if (error) { Alert.alert('Error', error.message); return; }
     setRideStatus('arrived_pickup');
 
-    // Fetch driver's own name for the notification message
     let driverName = 'Your driver';
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
@@ -308,17 +311,11 @@ export default function DriverHomeScreen() {
       if (profile?.full_name) driverName = profile.full_name;
     }
 
-    // Push notification to rider
     const riderToken = await getRiderToken(activeRide.rider_id);
     if (riderToken) {
-      await sendPushNotification(
-        riderToken,
-        '🛺 Your Driver Has Arrived!',
-        `Your Pragya driver ${driverName} has arrived at your pickup location. Please come out!`
-      );
+      await sendPushNotification(riderToken, '🛺 Your Driver Has Arrived!', `Your Pragya driver ${driverName} has arrived at your pickup location. Please come out!`);
     }
 
-    // In-app notification record for rider's notification feed
     await supabase.from('user_notifications').insert({
       user_id: activeRide.rider_id,
       title: 'Driver Has Arrived!',
@@ -374,15 +371,9 @@ export default function DriverHomeScreen() {
     setRideStatus('payment_pending');
 
     if (fareDiff > 0.5 && increased) {
-      Alert.alert(
-        'Fare Recalculated',
-        `Fare adjusted: +GHS ${fareDiff.toFixed(2)} (longer route)\nFinal fare: GHS ${newFare.toFixed(2)}\n\nWaiting for rider to accept.`
-      );
+      Alert.alert('Fare Recalculated', `Fare adjusted: +GHS ${fareDiff.toFixed(2)} (longer route)\nFinal fare: GHS ${newFare.toFixed(2)}\n\nWaiting for rider to accept.`);
     } else if (fareDiff > 0.5 && !increased) {
-      Alert.alert(
-        'Fare Recalculated',
-        `Fare reduced: -GHS ${fareDiff.toFixed(2)} (shorter route)\nFinal fare: GHS ${newFare.toFixed(2)}\n\nWaiting for rider to accept.`
-      );
+      Alert.alert('Fare Recalculated', `Fare reduced: -GHS ${fareDiff.toFixed(2)} (shorter route)\nFinal fare: GHS ${newFare.toFixed(2)}\n\nWaiting for rider to accept.`);
     } else {
       Alert.alert('Destination Reached!', `Fare unchanged: GHS ${newFare.toFixed(2)}\nConfirm payment with rider.`);
     }
@@ -428,14 +419,11 @@ export default function DriverHomeScreen() {
                 supabase.from('profiles').select('full_name').eq('id', activeRide.rider_id).single(),
               ]);
 
-              const driverName = driverProfile?.full_name ?? 'Unknown Driver';
+              const driverDisplayName = driverProfile?.full_name ?? 'Unknown Driver';
               const riderName = riderProfile?.full_name ?? 'Unknown Rider';
               const commission = Math.round(activeRide.fare_ghs * 0.15 * 100) / 100;
 
-              await supabase.from('rides').update({
-                status: 'cancelled',
-                cancellation_reason: 'driver_breakdown',
-              }).eq('id', activeRide.id);
+              await supabase.from('rides').update({ status: 'cancelled', cancellation_reason: 'driver_breakdown' }).eq('id', activeRide.id);
 
               await supabase.from('user_notifications').insert({
                 user_id: activeRide.rider_id,
@@ -452,7 +440,7 @@ export default function DriverHomeScreen() {
                   admins.map((admin: { id: string }) => ({
                     user_id: admin.id,
                     title: 'Driver Breakdown Reported',
-                    message: `Driver breakdown reported on ride ${activeRide.id}. Driver: ${driverName}. Rider: ${riderName}. Commission: GHS ${commission.toFixed(2)}`,
+                    message: `Driver breakdown reported on ride ${activeRide.id}. Driver: ${driverDisplayName}. Rider: ${riderName}. Commission: GHS ${commission.toFixed(2)}`,
                     type: 'admin_alert',
                     is_read: false,
                     created_at: new Date().toISOString(),
@@ -461,18 +449,12 @@ export default function DriverHomeScreen() {
               }
 
               if (driverRecord) {
-                await supabase.from('drivers').update({
-                  commission_owed: (driverRecord.commission_owed ?? 0) + commission,
-                }).eq('id', driverRecord.id);
+                await supabase.from('drivers').update({ commission_owed: (driverRecord.commission_owed ?? 0) + commission }).eq('id', driverRecord.id);
               }
 
               setActiveRide(null);
               setRideStatus('');
-
-              Alert.alert(
-                'Breakdown Reported',
-                `The rider has been notified. Commission of GHS ${commission.toFixed(2)} has been added to your account.`
-              );
+              Alert.alert('Breakdown Reported', `The rider has been notified. Commission of GHS ${commission.toFixed(2)} has been added to your account.`);
             } catch (error) {
               console.error('Breakdown report error:', error);
               Alert.alert('Error', 'Failed to report breakdown. Please try again.');
@@ -513,99 +495,47 @@ export default function DriverHomeScreen() {
     } catch {}
   };
 
-  const handleLogout = async () => { await supabase.auth.signOut(); router.replace('/'); };
+  // Suppress unused variable warnings — currentZoneId used via ref; pickupLocation reserved for map markers
+  void currentZoneId;
+  void pickupLocation;
 
   const activeRideFare = (activeRide?.discounted_fare && activeRide?.discounted_fare > 0 ? activeRide?.discounted_fare : null) ?? activeRide?.fare_ghs;
-  const displayFare = recalculatedFare || activeRideFare;
+  const displayFare = recalculatedFare ?? activeRideFare;
+
+  const pendingRideFare = (pendingRide?.discounted_fare && pendingRide?.discounted_fare > 0 ? pendingRide?.discounted_fare : null) ?? pendingRide?.fare_ghs;
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <View style={styles.statsBar}>
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>GHS {dailyEarnings.toFixed(2)}</Text>
-          <Text style={styles.statLabel}>Today's Earnings</Text>
-        </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>{totalRides}</Text>
-          <Text style={styles.statLabel}>Total Rides</Text>
-        </View>
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>★ {rating.toFixed(1)}</Text>
-          <Text style={styles.statLabel}>Rating</Text>
-        </View>
-        <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/notifications' as any)}>
-          <Text style={styles.bellIcon}>🔔</Text>
-          {unreadCount > 0 && (
-            <View style={styles.bellBadge}>
-              <Text style={styles.bellBadgeText}>{unreadCount}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {activeRide && (
-        <View style={styles.activeBanner}>
-          <Text style={styles.activeBannerTitle}>{getStatusLabel()}</Text>
-          <Text style={styles.activeBannerText}>To: {activeRide.dropoff_address}</Text>
-          {activeRide.stops?.length > 0 && (
-            <Text style={styles.activeBannerStops}>
-              {activeRide.stops.filter((s: any) => s.completed).length}/{activeRide.stops.length} stops completed
-            </Text>
-          )}
-          <View style={styles.fareRow}>
-            <Text style={styles.activeBannerFare}>GHS {displayFare}</Text>
-            <Text style={styles.activeBannerPayment}>{activeRide.payment_method?.toUpperCase()}</Text>
-          </View>
-
-          {rideStatus === 'accepted' && (
-            <TouchableOpacity style={styles.actionBtn} onPress={arrivedAtPickup}>
-              <Text style={styles.actionBtnText}>Arrived at Pickup</Text>
-            </TouchableOpacity>
-          )}
-          {rideStatus === 'arrived_pickup' && (
-            <View style={styles.waitingBadge}>
-              <Text style={styles.waitingText}>Waiting for rider to confirm pickup...</Text>
-            </View>
-          )}
-          {rideStatus === 'in_progress' && (
-            <>
-              {hasMoreStops() ? (
-                <TouchableOpacity style={styles.actionBtn} onPress={arrivedAtStop}>
-                  <Text style={styles.actionBtnText}>Arrived at Stop {currentStopIndex + 1}</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#1D9E75' }]} onPress={reachedDestination}>
-                  <Text style={styles.actionBtnText}>Reached Final Destination</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity style={styles.breakdownBtn} onPress={reportBreakdown}>
-                <Text style={styles.breakdownBtnText}>⚠️ Report Breakdown</Text>
-              </TouchableOpacity>
-            </>
-          )}
-          {rideStatus === 'payment_pending' && (
+    <View style={styles.container}>
+      {/* Stats bar */}
+      <SafeAreaView edges={['top']} style={styles.statsBarSafeArea}>
+        <View style={styles.statsBar}>
+          <View style={styles.statsRow1}>
             <View>
-              <Text style={styles.paymentInstructions}>
-                {activeRide.payment_method === 'cash'
-                  ? `Collect GHS ${displayFare} cash from rider`
-                  : `Go Cash: GHS ${displayFare}`}
-              </Text>
-              {!driverConfirmedPayment ? (
-                <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#1D9E75' }]} onPress={confirmPaymentReceived}>
-                  <Text style={styles.actionBtnText}>
-                    {activeRide.payment_method === 'cash' ? 'Cash Received' : 'Confirm Payment'}
-                  </Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={styles.waitingBadge}>
-                  <Text style={styles.waitingText}>Waiting for rider to confirm payment...</Text>
-                </View>
-              )}
+              <Text style={styles.driverNameText}>{driverName}</Text>
+              <View style={[styles.onlineStatusBadge, isOnline ? styles.onlineStatusOn : styles.onlineStatusOff]}>
+                <Text style={styles.onlineStatusText}>{isOnline ? '🟢 Online' : '⚫ Offline'}</Text>
+              </View>
             </View>
-          )}
+            <View style={styles.earningsBlock}>
+              <Text style={styles.earningsAmount}>GHS {dailyEarnings.toFixed(2)}</Text>
+              <Text style={styles.earningsLabel}>Today's Earnings</Text>
+            </View>
+          </View>
+          <View style={styles.statsRow2}>
+            <View style={styles.statPill}><Text style={styles.statPillText}>⭐ {rating.toFixed(1)}</Text></View>
+            <View style={styles.statPill}><Text style={styles.statPillText}>🛺 {totalRides} Rides</Text></View>
+            <View style={styles.statPill}><Text style={styles.statPillText}>💰 GHS {commissionOwed.toFixed(2)}</Text></View>
+            <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/notifications' as any)}>
+              <Text style={styles.bellIcon}>🔔</Text>
+              {unreadCount > 0 ? (
+                <View style={styles.bellBadge}><Text style={styles.bellBadgeText}>{unreadCount}</Text></View>
+              ) : null}
+            </TouchableOpacity>
+          </View>
         </View>
-      )}
+      </SafeAreaView>
 
+      {/* Map */}
       <View style={styles.mapContainer}>
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -613,8 +543,14 @@ export default function DriverHomeScreen() {
             <Text style={styles.loadingText}>Getting your location...</Text>
           </View>
         ) : (
-          <MapView ref={mapRef} style={styles.map} mapType="standard" zoomEnabled={true} scrollEnabled={true}
-            initialRegion={{ latitude: location?.latitude || 7.3349, longitude: location?.longitude || -2.3123, latitudeDelta: 0.01, longitudeDelta: 0.01 }}>
+          <MapView
+            ref={mapRef}
+            style={styles.map}
+            mapType="standard"
+            zoomEnabled
+            scrollEnabled
+            initialRegion={{ latitude: location?.latitude || 7.3349, longitude: location?.longitude || -2.3123, latitudeDelta: 0.01, longitudeDelta: 0.01 }}
+          >
             {location && (
               <Marker coordinate={location} title="You are here">
                 <View style={[styles.tricycleMarker, !isOnline && styles.tricycleMarkerOffline]}>
@@ -626,109 +562,344 @@ export default function DriverHomeScreen() {
         )}
       </View>
 
-      {!activeRide && (
-        <View style={[styles.bottomPanel, { paddingBottom: insets.bottom + 16 }]}>
-          {isLocked && commissionOwed > 0 && (
+      {/* Floating bottom panel */}
+      <View style={[styles.bottomPanel, { paddingBottom: Math.max(insets.bottom, 12) + 8 }]}>
+        {activeRide ? (
+          <View>
+            <View style={styles.rideStatusHeader}>
+              <Text style={styles.rideStatusLabel}>{getStatusLabel()}</Text>
+              <View style={styles.rideFareBadge}>
+                <Text style={styles.rideFareText}>GHS {displayFare}</Text>
+              </View>
+            </View>
+            <Text style={styles.rideRouteText}>📍 {activeRide.pickup_address}</Text>
+            <Text style={styles.rideRouteText}>🏁 {activeRide.dropoff_address}</Text>
+            {activeRide.stops?.length > 0 ? (
+              <Text style={styles.rideStopsText}>{`${activeRide.stops.filter((s: any) => s.completed).length}/${activeRide.stops.length} stops completed`}</Text>
+            ) : null}
+            <Text style={styles.ridePaymentBadge}>{activeRide.payment_method?.toUpperCase()}</Text>
+
+            {rideStatus === 'accepted' ? (
+              <TouchableOpacity style={styles.primaryBtn} onPress={arrivedAtPickup}>
+                <Text style={styles.primaryBtnText}>Arrived at Pickup</Text>
+              </TouchableOpacity>
+            ) : null}
+            {rideStatus === 'arrived_pickup' ? (
+              <View style={styles.waitingBadge}>
+                <Text style={styles.waitingText}>Waiting for rider to confirm pickup...</Text>
+              </View>
+            ) : null}
+            {rideStatus === 'in_progress' ? (
+              <>
+                {hasMoreStops() ? (
+                  <TouchableOpacity style={styles.primaryBtn} onPress={arrivedAtStop}>
+                    <Text style={styles.primaryBtnText}>{`Arrived at Stop ${currentStopIndex + 1}`}</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity style={styles.primaryBtn} onPress={reachedDestination}>
+                    <Text style={styles.primaryBtnText}>Reached Final Destination</Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity style={styles.breakdownBtn} onPress={reportBreakdown}>
+                  <Text style={styles.breakdownBtnText}>⚠️ Report Breakdown</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+            {rideStatus === 'payment_pending' ? (
+              <View>
+                <Text style={styles.paymentInstructions}>
+                  {activeRide.payment_method === 'cash'
+                    ? `Collect GHS ${displayFare} cash from rider`
+                    : `Go Cash: GHS ${displayFare}`}
+                </Text>
+                {!driverConfirmedPayment ? (
+                  <TouchableOpacity style={styles.primaryBtn} onPress={confirmPaymentReceived}>
+                    <Text style={styles.primaryBtnText}>
+                      {activeRide.payment_method === 'cash' ? 'Cash Received' : 'Confirm Payment'}
+                    </Text>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.waitingBadge}>
+                    <Text style={styles.waitingText}>Waiting for rider to confirm payment...</Text>
+                  </View>
+                )}
+              </View>
+            ) : null}
+          </View>
+        ) : (
+          <>
+            {isLocked && commissionOwed > 0 ? (
+              <TouchableOpacity style={styles.lockBanner} onPress={() => router.push('/driver/wallet' as any)} activeOpacity={0.8}>
+                <Text style={styles.lockBannerText}>🔒 Account locked — GHS {commissionOwed.toFixed(2)} commission owed. Tap to pay.</Text>
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity
-              style={styles.lockBanner}
-              onPress={() => router.push('/driver/wallet' as any)}
-              activeOpacity={0.8}
+              style={[styles.onlineBtn, isOnline ? styles.onlineBtnRed : styles.onlineBtnGreen, isLocked && commissionOwed > 0 && styles.onlineBtnDisabled]}
+              onPress={toggleOnlineStatus}
+              activeOpacity={0.85}
             >
-              <Text style={styles.lockBannerText}>
-                🔒 Account locked — GHS {commissionOwed.toFixed(2)} commission owed. Tap to pay.
-              </Text>
+              <Text style={styles.onlineBtnText}>{isOnline ? '⚫  Go Offline' : '🟢  Go Online'}</Text>
             </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={[
-              styles.onlineButton,
-              isOnline ? styles.onlineActive : styles.onlineInactive,
-              isLocked && commissionOwed > 0 && styles.onlineDisabled,
-            ]}
-            onPress={toggleOnlineStatus}
-          >
-            <Text style={styles.onlineButtonText}>{isOnline ? 'Go Offline' : 'Go Online'}</Text>
-          </TouchableOpacity>
-          <View style={styles.actionRow}>
-            <TouchableOpacity style={styles.walletButton} onPress={() => router.push('/driver/wallet' as any)}>
-              <Text style={styles.walletButtonText}>💰 Wallet</Text>
+            <View style={styles.actionGrid}>
+              <TouchableOpacity style={[styles.actionCard, { backgroundColor: '#F0FAF6' }]} onPress={() => router.push('/driver/profile')}>
+                <Text style={styles.actionCardIcon}>👤</Text>
+                <Text style={[styles.actionCardLabel, { color: '#1D9E75' }]}>Profile</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.actionCard, { backgroundColor: '#FFF8E1' }]} onPress={() => router.push('/driver/report')}>
+                <Text style={styles.actionCardIcon}>📊</Text>
+                <Text style={[styles.actionCardLabel, { color: '#B45309' }]}>Reports</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.actionCard, { backgroundColor: '#E6F1FB' }]} onPress={() => router.push('/driver/wallet' as any)}>
+                <Text style={styles.actionCardIcon}>💰</Text>
+                <Text style={[styles.actionCardLabel, { color: '#185FA5' }]}>Wallet</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.actionCard, { backgroundColor: '#FBE9F0' }]} onPress={() => router.push('/support' as any)}>
+                <Text style={styles.actionCardIcon}>🎧</Text>
+                <Text style={[styles.actionCardLabel, { color: '#993556' }]}>Support</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={styles.switchModeBtn}
+              onPress={() => router.replace('/rider/home' as any)}
+            >
+              <Text style={styles.switchModeBtnText}>👤 Switch to Rider Mode</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.profileButton} onPress={() => router.push('/driver/profile')}>
-              <Text style={styles.profileButtonText}>Profile</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.reportButton} onPress={() => router.push('/driver/report')}>
-              <Text style={styles.reportButtonText}>Report</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.switchButton} onPress={() => router.replace('/rider/home' as any)}>
-              <Text style={styles.switchButtonText}>👤 Rider Mode</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.supportButton} onPress={() => router.push('/support' as any)}>
-              <Text style={styles.supportButtonText}>🎧 Support</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-              <Text style={styles.logoutButtonText}>Logout</Text>
-            </TouchableOpacity>
+          </>
+        )}
+      </View>
+
+      {/* New ride request modal */}
+      <Modal visible={pendingRide !== null} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>🛺 New Ride Request!</Text>
+            <View style={styles.modalFareRow}>
+              <Text style={styles.modalFare}>GHS {pendingRideFare}</Text>
+            </View>
+            <View style={styles.modalRouteCard}>
+              <Text style={styles.modalRouteLabel}>📍 PICKUP</Text>
+              <Text style={styles.modalRouteValue}>{pendingRide?.pickup_address}</Text>
+              <View style={styles.modalDivider} />
+              <Text style={styles.modalRouteLabel}>🏁 DROPOFF</Text>
+              <Text style={styles.modalRouteValue}>{pendingRide?.dropoff_address}</Text>
+              {pendingRide?.stops?.length > 0 ? (
+                <>
+                  <View style={styles.modalDivider} />
+                  <Text style={styles.modalRouteLabel}>🔶 STOPS</Text>
+                  <Text style={styles.modalRouteValue}>{pendingRide?.stops.map((s: any) => s.address).join(' → ')}</Text>
+                </>
+              ) : null}
+            </View>
+            <View style={styles.modalBtnRow}>
+              <TouchableOpacity style={styles.modalDeclineBtn} onPress={declinePendingRide} disabled={acceptingRide}>
+                <Text style={styles.modalDeclineBtnText}>Decline</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalAcceptBtn} onPress={acceptPendingRide} disabled={acceptingRide}>
+                {acceptingRide
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={styles.modalAcceptBtnText}>Accept</Text>
+                }
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
-      )}
-    </SafeAreaView>
+      </Modal>
+    </View>
   );
 }
 
-function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
-  return StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#1D9E75' },
-  container: { flex: 1, backgroundColor: c.background },
-  statsBar: { flexDirection: 'row', backgroundColor: '#1D9E75', paddingVertical: 12, paddingHorizontal: 16, justifyContent: 'space-between' },
-  statItem: { alignItems: 'center' },
-  statValue: { fontSize: 16, fontWeight: 'bold', color: '#fff' },
-  statLabel: { fontSize: 11, color: '#E1F5EE', marginTop: 2 },
-  activeBanner: { backgroundColor: '#185FA5', padding: 14, margin: 10, borderRadius: 10 },
-  activeBannerTitle: { fontSize: 15, fontWeight: 'bold', color: '#fff', marginBottom: 4 },
-  activeBannerText: { fontSize: 13, color: '#E6F1FB', marginBottom: 2 },
-  activeBannerStops: { fontSize: 12, color: '#E6F1FB', marginBottom: 2, fontStyle: 'italic' },
-  fareRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  activeBannerFare: { fontSize: 14, color: '#fff', fontWeight: 'bold' },
-  originalFare: { fontSize: 11, color: '#E6F1FB', fontWeight: 'normal' },
-  activeBannerPayment: { fontSize: 12, color: '#E6F1FB' },
-  actionBtn: { backgroundColor: '#fff', paddingVertical: 10, borderRadius: 8, alignItems: 'center', marginTop: 4 },
-  actionBtnText: { color: '#185FA5', fontWeight: 'bold', fontSize: 14 },
-  breakdownBtn: { backgroundColor: 'rgba(255,255,255,0.15)', borderWidth: 1, borderColor: '#FF6B35', borderRadius: 8, paddingVertical: 10, alignItems: 'center', marginTop: 8 },
-  breakdownBtnText: { color: '#FF6B35', fontWeight: '700', fontSize: 14 },
-  waitingBadge: { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 8, borderRadius: 8, alignItems: 'center', marginTop: 4 },
-  waitingText: { color: '#E6F1FB', fontSize: 13, fontStyle: 'italic' },
-  paymentInstructions: { color: '#fff', fontSize: 13, marginBottom: 8, textAlign: 'center' },
-  mapContainer: { flex: 1 },
-  map: { flex: 1 },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { marginTop: 12, fontSize: 14, color: c.subtext },
-  bottomPanel: { backgroundColor: c.card, padding: 16, borderTopWidth: 1, borderTopColor: c.border },
-  onlineButton: { paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
-  onlineActive: { backgroundColor: '#FF3B30' },
-  onlineInactive: { backgroundColor: '#1D9E75' },
-  onlineButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  actionRow: { flexDirection: 'row', gap: 8 },
-  profileButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#EEEDFE' },
-  profileButtonText: { color: '#534AB7', fontWeight: '600', fontSize: 12 },
-  reportButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FAEEDA' },
-  reportButtonText: { color: '#854F0B', fontWeight: '600', fontSize: 12 },
-  walletButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E1F5EE' },
-  walletButtonText: { color: '#085041', fontWeight: '600', fontSize: 12 },
-  supportButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FBEAF0' },
-  supportButtonText: { color: '#993556', fontWeight: '600', fontSize: 12 },
-  switchButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E6F1FB' },
-  switchButtonText: { color: '#185FA5', fontWeight: '600', fontSize: 12 },
-  logoutButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FFE5E5' },
-  logoutButtonText: { color: '#FF3B30', fontWeight: '600', fontSize: 12 },
-  tricycleMarker: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1D9E75', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 4 },
-  tricycleMarkerOffline: { backgroundColor: '#999' },
-  tricycleEmoji: { fontSize: 20 },
-  lockBanner: { backgroundColor: '#FF3B30', borderRadius: 8, padding: 10, marginBottom: 8, alignItems: 'center' },
-  lockBannerText: { color: '#fff', fontSize: 13, fontWeight: '600', textAlign: 'center' },
-  onlineDisabled: { opacity: 0.5 },
-  bellBtn: { justifyContent: 'center', alignItems: 'center', position: 'relative', width: 36, height: 36 },
-  bellIcon: { fontSize: 22 },
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#0D1F2D' },
+
+  /* Stats bar */
+  statsBarSafeArea: { backgroundColor: '#1D9E75' },
+  statsBar: {
+    backgroundColor: '#1D9E75',
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 16,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+  },
+  statsRow1: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 14,
+  },
+  driverNameText: { fontSize: 16, fontWeight: '700', color: '#fff', marginBottom: 5 },
+  onlineStatusBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 20, alignSelf: 'flex-start' },
+  onlineStatusOn: { backgroundColor: 'rgba(0,0,0,0.2)' },
+  onlineStatusOff: { backgroundColor: 'rgba(0,0,0,0.25)' },
+  onlineStatusText: { fontSize: 12, fontWeight: '600', color: '#fff' },
+  earningsBlock: { alignItems: 'flex-end' },
+  earningsAmount: { fontSize: 26, fontWeight: '900', color: '#fff', letterSpacing: -0.5 },
+  earningsLabel: { fontSize: 11, color: 'rgba(255,255,255,0.75)', marginTop: 2 },
+  statsRow2: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  statPill: {
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+  statPillText: { fontSize: 12, fontWeight: '600', color: '#fff' },
+  bellBtn: { marginLeft: 'auto', width: 32, height: 32, justifyContent: 'center', alignItems: 'center', position: 'relative' },
+  bellIcon: { fontSize: 20 },
   bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },
   bellBadgeText: { color: '#fff', fontSize: 9, fontWeight: 'bold' },
-  });
-}
+
+  /* Map */
+  mapContainer: { flex: 1 },
+  map: { flex: 1 },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0D1F2D' },
+  loadingText: { marginTop: 12, fontSize: 14, color: 'rgba(255,255,255,0.6)' },
+  tricycleMarker: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1D9E75', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 4 },
+  tricycleMarkerOffline: { backgroundColor: '#9CA3AF' },
+  tricycleEmoji: { fontSize: 20 },
+
+  /* Floating bottom panel */
+  bottomPanel: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    elevation: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+  },
+
+  /* Lock banner */
+  lockBanner: { backgroundColor: '#FF3B30', borderRadius: 10, padding: 10, marginBottom: 12, alignItems: 'center' },
+  lockBannerText: { color: '#fff', fontSize: 13, fontWeight: '600', textAlign: 'center' },
+
+  /* Online button */
+  onlineBtn: { borderRadius: 14, paddingVertical: 18, alignItems: 'center', marginBottom: 16 },
+  onlineBtnGreen: {
+    backgroundColor: '#1D9E75',
+    shadowColor: '#1D9E75',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  onlineBtnRed: {
+    backgroundColor: '#DC2626',
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  onlineBtnDisabled: { opacity: 0.5 },
+  onlineBtnText: { fontSize: 17, fontWeight: '700', color: '#fff', letterSpacing: 0.3 },
+
+  /* Action grid (2x2) */
+  actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  actionCard: {
+    width: '47%',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+  },
+  actionCardIcon: { fontSize: 28, marginBottom: 6 },
+  actionCardLabel: { fontSize: 12, fontWeight: '600' },
+
+  /* Active ride panel */
+  rideStatusHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  rideStatusLabel: { fontSize: 15, fontWeight: '700', color: '#0D1F2D', flex: 1, marginRight: 8 },
+  rideFareBadge: { backgroundColor: '#E6F9F1', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20 },
+  rideFareText: { fontSize: 15, fontWeight: '800', color: '#1D9E75' },
+  rideRouteText: { fontSize: 13, color: '#374151', marginBottom: 4 },
+  rideStopsText: { fontSize: 12, color: '#6B7280', fontStyle: 'italic', marginBottom: 4 },
+  ridePaymentBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 10,
+    fontSize: 11,
+    color: '#374151',
+    fontWeight: '600',
+    marginBottom: 10,
+    overflow: 'hidden',
+  },
+  primaryBtn: {
+    backgroundColor: '#1D9E75',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  primaryBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  breakdownBtn: {
+    borderWidth: 1,
+    borderColor: '#FF6B35',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  breakdownBtnText: { color: '#FF6B35', fontWeight: '700', fontSize: 13 },
+  waitingBadge: { backgroundColor: '#F3F4F6', paddingVertical: 10, borderRadius: 10, alignItems: 'center', marginTop: 8 },
+  waitingText: { color: '#6B7280', fontSize: 13, fontStyle: 'italic' },
+  paymentInstructions: { fontSize: 14, color: '#374151', textAlign: 'center', marginBottom: 8, fontWeight: '500', marginTop: 8 },
+
+  /* Ride request modal */
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+  },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: '#0D1F2D', textAlign: 'center', marginBottom: 16 },
+  modalFareRow: { alignItems: 'center', marginBottom: 20 },
+  modalFare: { fontSize: 40, fontWeight: '900', color: '#1D9E75', letterSpacing: -1 },
+  modalRouteCard: { backgroundColor: '#F8FAFC', borderRadius: 12, padding: 16, marginBottom: 20 },
+  modalRouteLabel: { fontSize: 10, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.8, marginBottom: 4 },
+  modalRouteValue: { fontSize: 14, color: '#111827', fontWeight: '500', marginBottom: 6 },
+  modalDivider: { height: 1, backgroundColor: '#E5E7EB', marginVertical: 6 },
+  modalBtnRow: { flexDirection: 'row', gap: 12 },
+  modalDeclineBtn: { flex: 1, backgroundColor: '#F3F4F6', borderRadius: 12, paddingVertical: 16, alignItems: 'center' },
+  modalDeclineBtnText: { fontSize: 16, fontWeight: '700', color: '#6B7280' },
+  modalAcceptBtn: {
+    flex: 1,
+    backgroundColor: '#1D9E75',
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    shadowColor: '#1D9E75',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  modalAcceptBtnText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+
+  /* Switch mode */
+  switchModeBtn: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(24,95,165,0.3)',
+    backgroundColor: 'rgba(24,95,165,0.05)',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  switchModeBtnText: { fontSize: 14, fontWeight: '600', color: '#185FA5' },
+});
