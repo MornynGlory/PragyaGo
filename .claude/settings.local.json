@@ -16,7 +16,8 @@
       "Bash(node -e \"const p=require\\('c:/Users/USER/PragyaGo/node_modules/react-native-paystack-webview/package.json'\\); console.log\\('version:', p.version, '\\\\nmain:', p.main\\)\")",
       "Bash(npm ls *)",
       "Bash(ls \"c:/Users/USER/PragyaGo Landing Page/\")",
-      "Read(//c/Users/USER/PragyaGo Landing Page/**)"
+      "Read(//c/Users/USER/PragyaGo Landing Page/**)",
+      "PowerShell(cd \"c:\\\\Users\\\\USER\\\\PragyaGo\"; $out = npx tsc --noEmit --skipLibCheck 2>&1; $out | Where-Object { $_ -match \"rider\" })"
     ]
   }
 }

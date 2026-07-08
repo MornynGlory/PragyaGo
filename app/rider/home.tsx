@@ -121,6 +121,13 @@ export default function RiderHomeScreen() {
   const [isDriver, setIsDriver] = useState(false);
   const [showArrivedBanner, setShowArrivedBanner] = useState(false);
   const [arrivedBannerDriverName, setArrivedBannerDriverName] = useState('');
+  const [pickupLocation, setPickupLocation] = useState('My Current Location');
+  const [pickupLat, setPickupLat] = useState<number | null>(null);
+  const [pickupLng, setPickupLng] = useState<number | null>(null);
+  const [pickupSuggestions, setPickupSuggestions] = useState<any[]>([]);
+  const [editingPickup, setEditingPickup] = useState(false);
+  const [loadingPickupSuggestions, setLoadingPickupSuggestions] = useState(false);
+  const pickupDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { currentRideRef.current = currentRide; }, [currentRide]);
   useEffect(() => { rideStatusRef.current = rideStatus; }, [rideStatus]);
@@ -148,6 +155,7 @@ export default function RiderHomeScreen() {
       if (pulseLoopRef.current) pulseLoopRef.current.stop();
       if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
       if (stopDebounceRef.current) clearTimeout(stopDebounceRef.current);
+      if (pickupDebounceRef.current) clearTimeout(pickupDebounceRef.current);
     };
   }, []);
 
@@ -295,14 +303,15 @@ export default function RiderHomeScreen() {
     }
   };
 
-  const fetchGooglePlacesSuggestions = async (query: string): Promise<any[]> => {
-    console.log('EXPO_PUBLIC_GOOGLE_MAPS_API_KEY:', (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k'));
-    if (!(process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k')) return [];
+  const fetchGooglePlacesSuggestions = async (query: string, lat?: number, lng?: number): Promise<any[]> => {
+    if (!GOOGLE_API_KEY) return [];
     try {
-      const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&key=${(process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k')}&components=country:gh&language=en`;
+      const locationBias = lat != null && lng != null
+        ? `&location=${lat},${lng}&radius=20000&strictbounds=false`
+        : '';
+      const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&key=${GOOGLE_API_KEY}&components=country:gh${locationBias}&language=en`;
       const response = await fetch(url);
       const data = await response.json();
-      console.log('Places API response:', JSON.stringify(data));
       if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') return [];
       return (data.predictions ?? []).map((p: any) => ({
         id: `gplace-${p.place_id}`,
@@ -340,7 +349,7 @@ export default function RiderHomeScreen() {
         const fareZoneIds = regionZoneIdsRef.current.length > 0 ? regionZoneIdsRef.current : zoneIdRef.current;
         const [zoneSuggestions, placeSuggestions] = await Promise.all([
           getFareSuggestions(fareZoneIds, text),
-          fetchGooglePlacesSuggestions(text),
+          fetchGooglePlacesSuggestions(text, location?.latitude, location?.longitude),
         ]);
         console.log('Zone suggestions:', zoneSuggestions.length, 'Place suggestions:', placeSuggestions.length);
         const zoneItems = zoneSuggestions.map((z: any, i: number) => ({
@@ -360,13 +369,33 @@ export default function RiderHomeScreen() {
     }, 500);
   };
 
+  const handlePickupChange = (text: string) => {
+    setPickupLocation(text);
+    if (pickupDebounceRef.current) clearTimeout(pickupDebounceRef.current);
+    if (text.length < 2) { setPickupSuggestions([]); return; }
+    pickupDebounceRef.current = setTimeout(async () => {
+      setLoadingPickupSuggestions(true);
+      const results = await fetchGooglePlacesSuggestions(text, location?.latitude, location?.longitude);
+      setPickupSuggestions(results);
+      setLoadingPickupSuggestions(false);
+    }, 500);
+  };
+
+  const resetPickupToGPS = () => {
+    setPickupLocation('My Current Location');
+    setPickupLat(null);
+    setPickupLng(null);
+    setPickupSuggestions([]);
+    setEditingPickup(false);
+  };
+
   const handleStopChange = (text: string) => {
     setNewStop(text);
     if (stopDebounceRef.current) clearTimeout(stopDebounceRef.current);
     if (text.length >= 2) {
       stopDebounceRef.current = setTimeout(async () => {
         setLoadingStopSuggestions(true);
-        const results = await fetchGooglePlacesSuggestions(text);
+        const results = await fetchGooglePlacesSuggestions(text, location?.latitude, location?.longitude);
         setStopSuggestions(results);
         setLoadingStopSuggestions(false);
       }, 500);
@@ -409,7 +438,8 @@ export default function RiderHomeScreen() {
     try {
       const fareResult = await calculateZoneFare(
         zoneIdRef.current, destination, stops.length,
-        location?.latitude ?? 0, location?.longitude ?? 0,
+        pickupLat ?? location?.latitude ?? 0,
+        pickupLng ?? location?.longitude ?? 0,
         selectedDestCoords?.lat, selectedDestCoords?.lng
       );
       setFareBreakdown(fareResult);
@@ -442,7 +472,7 @@ export default function RiderHomeScreen() {
       setDiscountResult(null);
       setOriginalFare(null);
     }
-  }, [destination, stops, selectedDestCoords]);
+  }, [destination, stops, selectedDestCoords, pickupLat, pickupLng]);
 
   const subscribeToRideUpdates = async (rideId: string) => {
     if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
@@ -595,8 +625,9 @@ export default function RiderHomeScreen() {
         .from('rides')
         .insert([{
           rider_id: user.id,
-          pickup_lat: location.latitude, pickup_lng: location.longitude,
-          pickup_address: 'Current Location',
+          pickup_lat: pickupLat ?? location.latitude,
+          pickup_lng: pickupLng ?? location.longitude,
+          pickup_address: pickupLat ? pickupLocation : 'Current Location',
           dropoff_lat: selectedDestCoords?.lat ?? location.latitude + 0.01,
           dropoff_lng: selectedDestCoords?.lng ?? location.longitude + 0.01,
           dropoff_address: destination,
@@ -632,6 +663,7 @@ export default function RiderHomeScreen() {
         if (discountResult?.discount) await recordDiscountUse(discountResult.discount.id);
         Alert.alert('Ride Requested 🛺', stops.length > 0 ? `Finding a driver... ${stops.length} stop(s) added.` : 'Finding a nearby driver...');
         setDestination(''); setStops([]); setFareEstimate(null); setFareBreakdown(null); setDiscountResult(null); setOriginalFare(null);
+        setPickupLocation('My Current Location'); setPickupLat(null); setPickupLng(null);
       }
     } catch (error) { Alert.alert('Error', 'Could not request ride.'); }
     finally { setRequesting(false); }
@@ -827,6 +859,72 @@ export default function RiderHomeScreen() {
           <Text style={styles.driversCount}>
             {nearbyDrivers.length > 0 ? `🛺 ${nearbyDrivers.length} Pragya driver${nearbyDrivers.length > 1 ? 's' : ''} nearby` : '😔 No drivers nearby right now'}
           </Text>
+          {/* Pickup location */}
+          <View style={styles.pickupInputContainer}>
+            {editingPickup ? (
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  style={[styles.inputWithClear, styles.pickupTextInput]}
+                  placeholder="Search pickup location..."
+                  value={pickupLocation}
+                  onChangeText={handlePickupChange}
+                  autoFocus
+                  placeholderTextColor="#999"
+                />
+                <TouchableOpacity style={styles.clearBtn} onPress={resetPickupToGPS}>
+                  <Text style={styles.clearBtnText}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.pickupDisplay} onPress={() => {
+                if (pickupLocation === 'My Current Location') setPickupLocation('');
+                setEditingPickup(true);
+              }}>
+                <Text style={[styles.pickupDisplayText, pickupLat ? styles.pickupDisplayTextCustom : styles.pickupDisplayTextDefault]} numberOfLines={1}>
+                  {pickupLat ? pickupLocation : '📍 My Current Location'}
+                </Text>
+                {pickupLat ? (
+                  <TouchableOpacity onPress={resetPickupToGPS} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Text style={styles.clearBtnText}>✕</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </TouchableOpacity>
+            )}
+            {loadingPickupSuggestions ? <ActivityIndicator size="small" color="#1D9E75" style={styles.suggestionsLoader} /> : null}
+            {pickupSuggestions.length > 0 ? (
+              <View style={styles.suggestionsCard}>
+                {pickupSuggestions.map((item, index) => (
+                  <TouchableOpacity
+                    key={item.id ?? index}
+                    style={[styles.suggestionItem, index < pickupSuggestions.length - 1 && styles.suggestionItemBorder]}
+                    onPress={async () => {
+                      if (pickupDebounceRef.current) clearTimeout(pickupDebounceRef.current);
+                      setPickupLocation(item.label);
+                      setPickupSuggestions([]);
+                      setEditingPickup(false);
+                      if (item.placeId) {
+                        const coords = await fetchPlaceDetails(item.placeId);
+                        if (coords) {
+                          setPickupLat(coords.lat);
+                          setPickupLng(coords.lng);
+                        }
+                      }
+                    }}
+                  >
+                    <Text style={styles.suggestionText} numberOfLines={2}>📍 {item.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
+          </View>
+          {/* Route connector */}
+          <View style={styles.routeConnector}>
+            <View style={styles.connectorContent}>
+              <View style={styles.connectorDotGreen} />
+              <View style={styles.connectorLine} />
+              <View style={styles.connectorDotBlue} />
+            </View>
+          </View>
           <Text style={styles.inputLabel}>Final Destination</Text>
           <View style={styles.destInputContainer}>
             <View style={styles.inputWrapper}>
@@ -933,35 +1031,35 @@ export default function RiderHomeScreen() {
           <View style={styles.paymentContainer}>
             <Text style={styles.paymentLabel}>Payment Method</Text>
             <View style={styles.paymentOptions}>
-              <TouchableOpacity style={[styles.paymentOption, paymentMethod === 'cash' && styles.paymentActive]} onPress={() => setPaymentMethod('cash')}>
-                <Text style={[styles.paymentText, paymentMethod === 'cash' && styles.paymentTextActive]}>Cash</Text>
+              <TouchableOpacity style={[styles.paymentOption, paymentMethod === 'cash' ? styles.paymentActiveCash : null]} onPress={() => setPaymentMethod('cash')}>
+                <Text style={[styles.paymentText, paymentMethod === 'cash' ? styles.paymentTextActive : null]}>Cash</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.paymentOption, paymentMethod === 'momo' && styles.paymentActive]} onPress={() => setPaymentMethod('momo')}>
-                <Text style={[styles.paymentText, paymentMethod === 'momo' && styles.paymentTextActive]}>Go Cash</Text>
+              <TouchableOpacity style={[styles.paymentOption, paymentMethod === 'momo' ? styles.paymentActiveMomo : null]} onPress={() => setPaymentMethod('momo')}>
+                <Text style={[styles.paymentText, paymentMethod === 'momo' ? styles.paymentTextActive : null]}>Go Cash</Text>
               </TouchableOpacity>
             </View>
           </View>
           <TouchableOpacity style={[styles.requestButton, requesting && styles.buttonDisabled]} onPress={requestRide} disabled={requesting}>
             {requesting ? <ActivityIndicator color="#fff" /> : <Text style={styles.requestButtonText}>🛺 Request Pragya</Text>}
           </TouchableOpacity>
-          <View style={styles.actionRow}>
-            <TouchableOpacity style={styles.walletButton} onPress={() => router.push('/rider/gocash')}>
-              <Text style={styles.walletButtonText}>💰 My Wallet</Text>
+          <View style={styles.actionGrid}>
+            <TouchableOpacity style={[styles.actionCard, { backgroundColor: '#F0FAF6' }]} onPress={() => router.push('/rider/gocash')}>
+              <Text style={styles.actionCardIcon}>💰</Text>
+              <Text style={[styles.actionCardLabel, { color: '#1D9E75' }]}>My Wallet</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.actionCard, { backgroundColor: '#FBE9F0' }]} onPress={() => router.push('/support' as any)}>
+              <Text style={styles.actionCardIcon}>🎧</Text>
+              <Text style={[styles.actionCardLabel, { color: '#993556' }]}>Support</Text>
             </TouchableOpacity>
             {isDriver ? (
-              <TouchableOpacity style={styles.switchButton} onPress={() => router.replace('/driver/home' as any)}>
-                <Text style={styles.switchButtonText}>🛺 Driver Mode</Text>
+              <TouchableOpacity style={[styles.actionCard, { backgroundColor: '#E6F1FB' }]} onPress={() => router.replace('/driver/home' as any)}>
+                <Text style={styles.actionCardIcon}>🛺</Text>
+                <Text style={[styles.actionCardLabel, { color: '#185FA5' }]}>Driver Mode</Text>
               </TouchableOpacity>
-            ) : (
-              <TouchableOpacity style={styles.switchButton} onPress={() => Alert.alert('Want to become a Driver?', 'To register as a Pragya driver, visit any PragyaGo office or station near you with your Ghana Card and vehicle details.\n\nOur offices are open Monday to Friday, 8am - 5pm.', [{ text: 'OK' }])}>
-                <Text style={styles.switchButtonText}>Become a Driver</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity style={styles.supportButton} onPress={() => router.push('/support' as any)}>
-              <Text style={styles.supportButtonText}>🎧 Support</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-              <Text style={styles.logoutButtonText}>Logout</Text>
+            ) : null}
+            <TouchableOpacity style={[styles.actionCard, { backgroundColor: '#FFF0F0' }]} onPress={handleLogout}>
+              <Text style={styles.actionCardIcon}>🚪</Text>
+              <Text style={[styles.actionCardLabel, { color: '#DC2626' }]}>Logout</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -1118,6 +1216,17 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
   driversCount: { fontSize: 13, color: '#1D9E75', marginBottom: 12 },
   inputLabel: { fontSize: 13, fontWeight: '600', color: c.subtext, marginBottom: 6 },
   input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 12, fontSize: 14, backgroundColor: c.inputBg, color: c.text, marginBottom: 10 },
+  pickupInputContainer: { position: 'relative', zIndex: 10000, backgroundColor: 'rgba(29,158,117,0.08)', borderWidth: 1, borderColor: 'rgba(29,158,117,0.2)', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 2, marginBottom: 0 },
+  pickupDisplay: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 44 },
+  pickupDisplayText: { flex: 1, fontSize: 14, fontWeight: '600' },
+  pickupDisplayTextDefault: { color: '#1D9E75' },
+  pickupDisplayTextCustom: { color: c.text },
+  pickupTextInput: { borderWidth: 0, backgroundColor: 'transparent', paddingHorizontal: 4, paddingVertical: 0 },
+  routeConnector: { paddingLeft: 16, paddingVertical: 3 },
+  connectorContent: { alignItems: 'center', width: 12 },
+  connectorDotGreen: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#1D9E75' },
+  connectorLine: { width: 2, height: 14, backgroundColor: '#CBD5E1', marginVertical: 1 },
+  connectorDotBlue: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#185FA5' },
   destInputContainer: { position: 'relative', zIndex: 9999, marginBottom: 10 },
   inputWrapper: { position: 'relative' },
   inputWithClear: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 16, paddingRight: 40, paddingVertical: 12, fontSize: 14, backgroundColor: c.inputBg, color: c.text },
@@ -1156,22 +1265,18 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
   paymentContainer: { marginBottom: 12 },
   paymentLabel: { fontSize: 13, fontWeight: '600', color: c.text, marginBottom: 8 },
   paymentOptions: { flexDirection: 'row', gap: 10 },
-  paymentOption: { flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: c.border, alignItems: 'center', backgroundColor: c.card },
-  paymentActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
-  paymentText: { fontSize: 14, fontWeight: '600', color: c.text },
+  paymentOption: { flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', alignItems: 'center', backgroundColor: '#F5F5F5' },
+  paymentActiveCash: { backgroundColor: '#1D9E75', borderColor: '#1D9E75' },
+  paymentActiveMomo: { backgroundColor: '#185FA5', borderColor: '#185FA5' },
+  paymentText: { fontSize: 14, fontWeight: '600', color: '#666' },
   paymentTextActive: { color: '#fff' },
-  requestButton: { backgroundColor: '#2563eb', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
+  requestButton: { backgroundColor: '#1D9E75', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
   buttonDisabled: { opacity: 0.6 },
   requestButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  actionRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
-  walletButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E1F5EE' },
-  walletButtonText: { color: '#1D9E75', fontWeight: '600', fontSize: 14 },
-  supportButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FBEAF0' },
-  supportButtonText: { color: '#993556', fontWeight: '600', fontSize: 14 },
-  switchButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#E6F1FB' },
-  switchButtonText: { color: '#185FA5', fontWeight: '600', fontSize: 14 },
-  logoutButton: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: '#FFE5E5' },
-  logoutButtonText: { color: '#FF3B30', fontWeight: '600', fontSize: 14 },
+  actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 10 },
+  actionCard: { width: '47%', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 12, padding: 14, alignItems: 'center' },
+  actionCardIcon: { fontSize: 28, marginBottom: 6 },
+  actionCardLabel: { fontSize: 12, fontWeight: '600' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   fareAcceptCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24 },
   fareAcceptTitle: { fontSize: 20, fontWeight: 'bold', color: c.text, textAlign: 'center', marginBottom: 8 },
