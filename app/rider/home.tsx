@@ -44,27 +44,19 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
 }
 
 const customMapStyle = [
-  { elementType: 'geometry', stylers: [{ color: '#EBE8E0' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#523735' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#f5f1e6' }] },
-  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#c9b2a6' }] },
-  { featureType: 'administrative.land_parcel', stylers: [{ visibility: 'off' }] },
-  { featureType: 'administrative.neighborhood', stylers: [{ visibility: 'off' }] },
-  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
-  { featureType: 'poi.park', elementType: 'geometry.fill', stylers: [{ color: '#C8E6B2' }] },
-  { featureType: 'poi.park', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
-  { featureType: 'road', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-  { featureType: 'road.arterial', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#F8D48A' }] },
-  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#e9bc62' }] },
-  { featureType: 'road.highway', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-  { featureType: 'road.local', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
+  { elementType: 'geometry', stylers: [{ color: '#f0ede6' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#4a4a4a' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#ffffff' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#f5d88a' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#e8c56a' }] },
+  { featureType: 'water', elementType: 'geometry.fill', stylers: [{ color: '#a8d5e8' }] },
+  { featureType: 'poi.park', elementType: 'geometry.fill', stylers: [{ color: '#c8e6b0' }] },
+  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#e8e4dc' }] },
   { featureType: 'transit', stylers: [{ visibility: 'off' }] },
-  { featureType: 'water', elementType: 'geometry.fill', stylers: [{ color: '#AED6F1' }] },
-  { featureType: 'water', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#F0EBE0' }] },
-  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#DCEDC8' }] },
+  { featureType: 'administrative', elementType: 'labels', stylers: [{ visibility: 'on' }] },
+  { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'on' }] },
+  { featureType: 'road', elementType: 'labels', stylers: [{ visibility: 'on' }] },
 ];
 
 const PRAGYA_COLOR_MAP: { [key: string]: string } = {
@@ -784,7 +776,7 @@ export default function RiderHomeScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'height' : 'padding'}>
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'height' : 'padding'} keyboardVerticalOffset={80}>
       <View style={styles.mapContainer}>
         <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/notifications' as any)}>
           <Feather name="bell" size={22} color={theme.text} />
@@ -951,11 +943,16 @@ export default function RiderHomeScreen() {
       ) : null}
 
       {!currentRide ? (
-        <ScrollView style={styles.bottomPanel}>
+        <View style={[styles.bottomPanel, { paddingBottom: insets.bottom + 16 }]}>
           <Text style={styles.panelTitle}>Where do you want to go?</Text>
           <Text style={styles.driversCount}>
             {nearbyDrivers.length > 0 ? `🛺 ${nearbyDrivers.length} Pragya driver${nearbyDrivers.length > 1 ? 's' : ''} nearby` : '😔 No drivers nearby right now'}
           </Text>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            style={styles.bottomPanelScroll}
+          >
           {/* Pickup location */}
           <View style={styles.pickupInputContainer}>
             {editingPickup ? (
@@ -1136,10 +1133,11 @@ export default function RiderHomeScreen() {
               </TouchableOpacity>
             </View>
           </View>
+          </ScrollView>
           <TouchableOpacity style={[styles.requestButton, requesting && styles.buttonDisabled]} onPress={requestRide} disabled={requesting}>
             {requesting ? <ActivityIndicator color="#fff" /> : <Text style={styles.requestButtonText}>🛺 Request Pragya</Text>}
           </TouchableOpacity>
-        </ScrollView>
+        </View>
       ) : null}
 
       {/* Floating chat button — shown during active ride */}
@@ -1304,7 +1302,19 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   confirmPaymentText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
   viewDriverButton: { flex: 1, backgroundColor: '#fff', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
   viewDriverButtonText: { color: '#185FA5', fontWeight: 'bold', fontSize: 14 },
-  bottomPanel: { backgroundColor: c.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, maxHeight: 480, borderTopWidth: 1, borderTopColor: c.border },
+  bottomPanel: {
+    backgroundColor: c.card,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+  },
+  bottomPanelScroll: { maxHeight: 320 },
   panelTitle: { fontSize: 18, fontWeight: 'bold', color: c.text, marginBottom: 4 },
   driversCount: { fontSize: 13, color: '#1D9E75', marginBottom: 12 },
   inputLabel: { fontSize: 13, fontWeight: '600', color: c.textSecondary, marginBottom: 6 },

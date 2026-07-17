@@ -15,7 +15,7 @@ export default function RiderLayout() {
           borderTopColor: theme.tabBarBorder,
           borderTopWidth: 0.5,
           height: 60 + insets.bottom,
-          paddingBottom: insets.bottom + 4,
+          paddingBottom: insets.bottom + 6,
           paddingTop: 8,
           elevation: 0,
         },
