@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase'
 import { useTheme } from '@/lib/theme'
 import { Feather } from '@expo/vector-icons'
+import { useRouter } from 'expo-router'
 import React, { useEffect, useState } from 'react'
 import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -25,9 +26,10 @@ function getIconConfig(type: NotificationType, theme: any) {
   return { icon: 'bell', bg: theme.green }
 }
 
-export default function RiderNotificationsScreen() {
+export default function DriverNotificationsScreen() {
   const theme = useTheme()
   const styles = makeStyles(theme)
+  const router = useRouter()
   const [notifications, setNotifications] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [userId, setUserId] = useState<string | null>(null)
@@ -101,11 +103,16 @@ export default function RiderNotificationsScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+          <Feather name="arrow-left" size={22} color={theme.text} />
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifications</Text>
-        {hasUnread && (
-          <TouchableOpacity onPress={markAllRead} activeOpacity={0.7}>
-            <Text style={styles.markAllText}>Mark all read</Text>
+        {hasUnread ? (
+          <TouchableOpacity onPress={markAllRead} activeOpacity={0.7} style={styles.headerBtn}>
+            <Text style={styles.markAllText}>Mark all</Text>
           </TouchableOpacity>
+        ) : (
+          <View style={styles.headerBtn} />
         )}
       </View>
 
@@ -130,7 +137,8 @@ export default function RiderNotificationsScreen() {
 function makeStyles(c: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: c.background },
-    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 0.5, borderBottomColor: c.border, backgroundColor: c.background },
+    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: c.border, backgroundColor: c.background },
+    headerBtn: { minWidth: 48, height: 40, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: c.text },
     markAllText: { fontSize: 13, color: c.green, fontWeight: '600' },
     loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },

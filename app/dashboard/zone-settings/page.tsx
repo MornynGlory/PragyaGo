@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import { useTheme } from '@/lib/useTheme';
+import { useTheme } from '@/lib/theme';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -27,8 +27,8 @@ interface Zone {
 }
 
 export default function ZoneSettingsPage() {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
+  const theme = useTheme();
+  const styles = makeStyles(theme);
 
   const [zones, setZones] = useState<Zone[]>([]);
   const [settings, setSettings] = useState<ZoneSettings[]>([]);
@@ -123,7 +123,7 @@ export default function ZoneSettingsPage() {
                   onChangeText={v => updateEdit(zone.id, 'stop_fee', v)}
                   keyboardType="decimal-pad"
                   placeholder="e.g. 2.00"
-                  placeholderTextColor={colors.subtext}
+                  placeholderTextColor={theme.placeholder}
                 />
 
                 <Text style={styles.fieldLabel}>Fallback Rate (GHS/km, when no zone fare matched)</Text>
@@ -133,7 +133,7 @@ export default function ZoneSettingsPage() {
                   onChangeText={v => updateEdit(zone.id, 'fallback_per_km', v)}
                   keyboardType="decimal-pad"
                   placeholder="e.g. 1.50"
-                  placeholderTextColor={colors.subtext}
+                  placeholderTextColor={theme.placeholder}
                 />
 
                 <TouchableOpacity
@@ -154,7 +154,7 @@ export default function ZoneSettingsPage() {
   );
 }
 
-function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+function makeStyles(c: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: c.background },
     container: { padding: 16, paddingBottom: 40 },
@@ -166,8 +166,8 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
     formulaNote: { fontSize: 12, color: '#4A7C6A', lineHeight: 18 },
     zoneCard: { backgroundColor: c.card, borderRadius: 12, padding: 16, marginBottom: 14 },
     zoneName: { fontSize: 16, fontWeight: '700', color: c.text, marginBottom: 12 },
-    fieldLabel: { fontSize: 12, fontWeight: '600', color: c.subtext, marginBottom: 6 },
-    input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: c.text, backgroundColor: c.inputBg, marginBottom: 12 },
+    fieldLabel: { fontSize: 12, fontWeight: '600', color: c.textSecondary, marginBottom: 6 },
+    input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: c.text, backgroundColor: c.input, marginBottom: 12 },
     saveBtn: { backgroundColor: '#1D9E75', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginTop: 4 },
     btnDisabled: { opacity: 0.6 },
     saveBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },

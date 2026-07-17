@@ -1,6 +1,8 @@
 import { supabase } from '@/lib/supabase';
 import { MoMoProvider, PROVIDER_COLORS, PROVIDER_LABELS } from '@/lib/paystack';
-import { useTheme } from '@/lib/useTheme';
+import { useTheme } from '@/lib/theme';
+import { Feather } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -35,8 +37,9 @@ function PaystackAutoCheckout({ params }: { params: any }) {
 }
 
 export default function DriverWalletScreen() {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
+  const theme = useTheme();
+  const styles = makeStyles(theme);
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabName>('wallet');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -331,6 +334,13 @@ export default function DriverWalletScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+            <Feather name="arrow-left" size={22} color={theme.text} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Wallet</Text>
+          <View style={styles.headerBtn} />
+        </View>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#1D9E75" />
         </View>
@@ -340,6 +350,13 @@ export default function DriverWalletScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+          <Feather name="arrow-left" size={22} color={theme.text} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Wallet</Text>
+        <View style={styles.headerBtn} />
+      </View>
       <View style={styles.tabs}>
         {(['wallet', 'gocash', 'history'] as TabName[]).map((tab) => (
           <TouchableOpacity
@@ -403,7 +420,7 @@ export default function DriverWalletScreen() {
               keyboardType="phone-pad"
               value={topUpPhone}
               onChangeText={setTopUpPhone}
-              placeholderTextColor={colors.subtext}
+              placeholderTextColor={theme.placeholder}
             />
 
             <Text style={styles.fieldLabel}>Amount (GHS)</Text>
@@ -413,7 +430,7 @@ export default function DriverWalletScreen() {
               keyboardType="numeric"
               value={topUpAmount}
               onChangeText={setTopUpAmount}
-              placeholderTextColor={colors.subtext}
+              placeholderTextColor={theme.placeholder}
             />
             {[[1, 2, 5], [10, 20, 50, 100]].map((row, ri) => (
               <View key={ri} style={[styles.quickAmounts, ri === 0 && { marginBottom: 8 }]}>
@@ -486,7 +503,7 @@ export default function DriverWalletScreen() {
                 keyboardType="phone-pad"
                 value={withdrawPhone}
                 onChangeText={setWithdrawPhone}
-                placeholderTextColor={colors.subtext}
+                placeholderTextColor={theme.placeholder}
               />
               <TextInput
                 style={styles.input}
@@ -494,7 +511,7 @@ export default function DriverWalletScreen() {
                 keyboardType="numeric"
                 value={withdrawAmount}
                 onChangeText={setWithdrawAmount}
-                placeholderTextColor={colors.subtext}
+                placeholderTextColor={theme.placeholder}
               />
               <View style={styles.quickAmounts}>
                 {[20, 50, 100, 200].map((amt) => (
@@ -566,14 +583,17 @@ export default function DriverWalletScreen() {
   );
 }
 
-function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+function makeStyles(c: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: c.background },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: c.border, backgroundColor: c.card },
+  headerBtn: { width: 48, height: 40, justifyContent: 'center', alignItems: 'center' },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: c.text },
   tabs: { flexDirection: 'row', backgroundColor: c.card, borderBottomWidth: 1, borderBottomColor: c.border },
   tab: { flex: 1, paddingVertical: 12, alignItems: 'center' },
   tabActive: { borderBottomWidth: 2, borderBottomColor: '#1D9E75' },
-  tabText: { fontSize: 14, fontWeight: '600', color: c.subtext },
+  tabText: { fontSize: 14, fontWeight: '600', color: c.textSecondary },
   tabTextActive: { color: '#1D9E75' },
   content: { flex: 1 },
   balanceCard: { backgroundColor: '#1D9E75', margin: 16, borderRadius: 16, padding: 24, alignItems: 'center' },
@@ -587,7 +607,7 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
   commissionNote: { fontSize: 12, color: '#CC2200', lineHeight: 18 },
   section: { backgroundColor: c.card, margin: 16, marginTop: 0, borderRadius: 12, padding: 16 },
   sectionTitle: { fontSize: 16, fontWeight: '600', color: c.text, marginBottom: 14 },
-  input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: c.text, backgroundColor: c.inputBg, marginBottom: 12 },
+  input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: c.text, backgroundColor: c.input, marginBottom: 12 },
   quickAmounts: { flexDirection: 'row', gap: 8, marginBottom: 14 },
   quickBtn: { flex: 1, borderWidth: 1, borderColor: '#1D9E75', borderRadius: 8, paddingVertical: 8, alignItems: 'center' },
   quickBtnText: { fontSize: 13, fontWeight: '600', color: '#1D9E75' },
@@ -597,18 +617,18 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
   buttonDisabled: { opacity: 0.6 },
   actionButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   networkRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: c.subtext, marginBottom: 8 },
+  fieldLabel: { fontSize: 13, fontWeight: '600', color: c.textSecondary, marginBottom: 8 },
   networkBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1.5, borderColor: c.border, alignItems: 'center', backgroundColor: c.card },
-  networkBtnText: { fontSize: 13, fontWeight: '600', color: c.subtext },
+  networkBtnText: { fontSize: 13, fontWeight: '600', color: c.textSecondary },
   networkBtnTextActive: { color: '#fff' },
-  paystackNote: { textAlign: 'center', color: c.subtext, fontSize: 11, marginTop: 10 },
-  warningText: { fontSize: 14, color: c.subtext, lineHeight: 22, textAlign: 'center', padding: 8 },
-  emptyText: { textAlign: 'center', color: c.subtext, fontSize: 14, marginTop: 40 },
+  paystackNote: { textAlign: 'center', color: c.textSecondary, fontSize: 11, marginTop: 10 },
+  warningText: { fontSize: 14, color: c.textSecondary, lineHeight: 22, textAlign: 'center', padding: 8 },
+  emptyText: { textAlign: 'center', color: c.textSecondary, fontSize: 14, marginTop: 40 },
   txnRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.card, marginHorizontal: 16, marginTop: 8, borderRadius: 10, padding: 14 },
   txnIcon: { fontSize: 22, marginRight: 12 },
   txnDetails: { flex: 1 },
   txnDescription: { fontSize: 14, fontWeight: '600', color: c.text, marginBottom: 3 },
-  txnDate: { fontSize: 12, color: c.subtext },
+  txnDate: { fontSize: 12, color: c.textSecondary },
   txnAmount: { fontSize: 15, fontWeight: 'bold' },
   modalClose: { padding: 16, borderBottomWidth: 1, borderBottomColor: c.border },
   modalCloseText: { fontSize: 16, color: c.text, fontWeight: '600' },

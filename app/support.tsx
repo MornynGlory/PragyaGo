@@ -1,5 +1,7 @@
 import { supabase } from '@/lib/supabase';
-import { useTheme } from '@/lib/useTheme';
+import { useTheme } from '@/lib/theme';
+import { Feather } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -25,8 +27,9 @@ const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
 };
 
 export default function SupportScreen() {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
+  const theme = useTheme();
+  const styles = makeStyles(theme);
+  const router = useRouter();
   const [tickets, setTickets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -100,6 +103,9 @@ export default function SupportScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['bottom']}>
       <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <Feather name="arrow-left" size={22} color={theme.text} />
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>Help & Support</Text>
         <TouchableOpacity style={styles.newButton} onPress={() => setShowModal(true)}>
           <Text style={styles.newButtonText}>+ New</Text>
@@ -173,7 +179,7 @@ export default function SupportScreen() {
                 placeholder="Brief description of your issue"
                 value={subject}
                 onChangeText={setSubject}
-                placeholderTextColor={colors.subtext}
+                placeholderTextColor={theme.placeholder}
                 editable={!submitting}
               />
 
@@ -186,7 +192,7 @@ export default function SupportScreen() {
                 multiline
                 numberOfLines={5}
                 textAlignVertical="top"
-                placeholderTextColor={colors.subtext}
+                placeholderTextColor={theme.placeholder}
                 editable={!submitting}
               />
 
@@ -205,17 +211,18 @@ export default function SupportScreen() {
   );
 }
 
-function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+function makeStyles(c: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: c.background },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: c.card, borderBottomWidth: 1, borderBottomColor: c.border },
+    backBtn: { width: 32, height: 32, justifyContent: 'center', alignItems: 'flex-start' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: '#1D9E75' },
     newButton: { backgroundColor: '#1D9E75', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
     newButtonText: { color: '#fff', fontWeight: '600', fontSize: 14 },
     center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 60 },
     emptyIcon: { fontSize: 48, marginBottom: 12 },
     emptyTitle: { fontSize: 18, fontWeight: '600', color: c.text, marginBottom: 6 },
-    emptySubtitle: { fontSize: 14, color: c.subtext, textAlign: 'center' },
+    emptySubtitle: { fontSize: 14, color: c.textSecondary, textAlign: 'center' },
     list: { padding: 16, gap: 12 },
     ticketCard: { backgroundColor: c.card, borderRadius: 12, padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
     ticketTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
@@ -223,8 +230,8 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
     statusBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
     statusText: { fontSize: 11, fontWeight: '700' },
     ticketCategory: { fontSize: 12, color: '#1D9E75', fontWeight: '600', marginBottom: 6 },
-    ticketMessage: { fontSize: 13, color: c.subtext, lineHeight: 18, marginBottom: 8 },
-    ticketDate: { fontSize: 11, color: c.subtext },
+    ticketMessage: { fontSize: 13, color: c.textSecondary, lineHeight: 18, marginBottom: 8 },
+    ticketDate: { fontSize: 11, color: c.textSecondary },
     replyBox: { marginTop: 10, backgroundColor: '#F0FDF7', borderRadius: 8, padding: 10, borderLeftWidth: 3, borderLeftColor: '#1D9E75' },
     replyLabel: { fontSize: 11, fontWeight: '700', color: '#1D9E75', marginBottom: 4 },
     replyText: { fontSize: 13, color: c.text, lineHeight: 18 },
@@ -232,14 +239,14 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
     modalCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '90%' },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
     modalTitle: { fontSize: 18, fontWeight: '700', color: c.text },
-    modalClose: { fontSize: 18, color: c.subtext, paddingHorizontal: 4 },
+    modalClose: { fontSize: 18, color: c.textSecondary, paddingHorizontal: 4 },
     fieldLabel: { fontSize: 13, fontWeight: '600', color: c.text, marginBottom: 8, marginTop: 4 },
     categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
     categoryChip: { borderWidth: 1.5, borderColor: c.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: c.card },
     categoryChipActive: { borderColor: '#1D9E75', backgroundColor: '#F0FDF7' },
-    categoryChipText: { fontSize: 12, color: c.subtext },
+    categoryChipText: { fontSize: 12, color: c.textSecondary },
     categoryChipTextActive: { color: '#1D9E75', fontWeight: '700' },
-    input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, color: c.text, backgroundColor: c.inputBg, marginBottom: 14 },
+    input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, color: c.text, backgroundColor: c.input, marginBottom: 14 },
     messageInput: { height: 110, paddingTop: 11 },
     submitButton: { backgroundColor: '#1D9E75', paddingVertical: 14, borderRadius: 8, alignItems: 'center', marginTop: 4, marginBottom: 8 },
     buttonDisabled: { opacity: 0.6 },

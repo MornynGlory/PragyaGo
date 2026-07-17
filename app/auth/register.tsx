@@ -37,6 +37,11 @@ export default function RegisterScreen() {
   const [role, setRole] = useState<'rider' | 'driver'>('rider');
   const [loading, setLoading] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [showOTPScreen, setShowOTPScreen] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [sendingOTP, setSendingOTP] = useState(false);
+  const [verifyingOTP, setVerifyingOTP] = useState(false);
+  const [registeredPhone, setRegisteredPhone] = useState('');
 
   const driverAnim = useRef(new Animated.Value(0)).current;
 
@@ -93,12 +98,7 @@ export default function RegisterScreen() {
         }
       }
 
-      await new Promise(resolve => setTimeout(resolve, 500));
-      if (role === 'driver') {
-        router.replace('/auth/verify-driver' as any);
-      } else {
-        router.replace('/rider/home' as any);
-      }
+      await sendOTP(phone.trim());
     } catch (err) {
       console.error('Registration error:', err);
       Alert.alert('Error', 'An unexpected error occurred during registration');
@@ -106,6 +106,116 @@ export default function RegisterScreen() {
       setLoading(false);
     }
   };
+
+  const sendOTP = async (phoneNumber: string) => {
+    setSendingOTP(true);
+    try {
+      const response = await fetch('https://admin.pragyago.com/api/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phoneNumber }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        setRegisteredPhone(phoneNumber);
+        setShowOTPScreen(true);
+      } else {
+        Alert.alert('Error', 'Could not send OTP. Please try again.');
+      }
+    } catch {
+      Alert.alert('Error', 'Could not send OTP. Please try again.');
+    } finally {
+      setSendingOTP(false);
+    }
+  };
+
+  const verifyOTP = async () => {
+    if (otp.length !== 6) { Alert.alert('Error', 'Please enter the 6-digit code'); return; }
+    setVerifyingOTP(true);
+    try {
+      const response = await fetch('https://admin.pragyago.com/api/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: registeredPhone, code: otp }),
+      });
+      const data = await response.json();
+      if (data.verified) {
+        await supabase.from('profiles').update({ phone_verified: true }).eq('phone', registeredPhone);
+        Alert.alert('Success', 'Phone verified successfully!');
+        if (role === 'driver') {
+          router.replace('/auth/verify-driver' as any);
+        } else {
+          router.replace('/rider/home' as any);
+        }
+      } else {
+        Alert.alert('Invalid Code', 'The code you entered is incorrect. Please try again.');
+      }
+    } catch {
+      Alert.alert('Error', 'Could not verify OTP. Please try again.');
+    } finally {
+      setVerifyingOTP(false);
+    }
+  };
+
+  const resendOTP = async () => {
+    setOtp('');
+    await sendOTP(registeredPhone);
+  };
+
+  if (showOTPScreen) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+        <View style={styles.otpContainer}>
+          <TouchableOpacity style={styles.backBtn} onPress={() => setShowOTPScreen(false)}>
+            <Text style={styles.backBtnText}>←</Text>
+          </TouchableOpacity>
+
+          <View style={styles.headerSection}>
+            <Image source={require('@/assets/images/icon.png')} style={styles.logo} resizeMode="contain" />
+            <Text style={styles.title}>Verify your number</Text>
+            <Text style={styles.otpSubtitle}>Enter the 6-digit code sent to{'\n'}{registeredPhone}</Text>
+          </View>
+
+          <TextInput
+            style={styles.otpInput}
+            value={otp}
+            onChangeText={setOtp}
+            keyboardType="numeric"
+            maxLength={6}
+            placeholder="------"
+            placeholderTextColor="rgba(255,255,255,0.2)"
+            textAlign="center"
+            autoFocus
+            editable={!verifyingOTP}
+          />
+
+          <TouchableOpacity
+            style={[styles.registerBtn, (verifyingOTP || sendingOTP) && styles.btnDisabled]}
+            onPress={verifyOTP}
+            disabled={verifyingOTP || sendingOTP}
+            activeOpacity={0.85}
+          >
+            {verifyingOTP
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={styles.registerBtnText}>Verify</Text>
+            }
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.resendBtn}
+            onPress={resendOTP}
+            disabled={sendingOTP || verifyingOTP}
+            activeOpacity={0.7}
+          >
+            {sendingOTP
+              ? <ActivityIndicator color="#1D9E75" size="small" />
+              : <Text style={styles.resendBtnText}>Resend code</Text>
+            }
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -433,4 +543,17 @@ const styles = StyleSheet.create({
   signInRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 24 },
   signInPrompt: { fontSize: 14, color: 'rgba(255,255,255,0.5)' },
   signInLink: { fontSize: 14, fontWeight: '700', color: '#1D9E75' },
+
+  /* OTP screen */
+  otpContainer: { flex: 1, paddingHorizontal: 24, paddingBottom: 48 },
+  otpSubtitle: { fontSize: 14, color: 'rgba(255,255,255,0.5)', textAlign: 'center', lineHeight: 20 },
+  otpInput: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 12, paddingHorizontal: 16, paddingVertical: 16,
+    fontSize: 32, fontWeight: '700', letterSpacing: 8,
+    color: '#FFFFFF', marginBottom: 24,
+  },
+  resendBtn: { alignItems: 'center', marginTop: 16, paddingVertical: 10 },
+  resendBtnText: { fontSize: 14, color: '#1D9E75', fontWeight: '600' },
 });

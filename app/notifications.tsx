@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import { useTheme } from '@/lib/useTheme';
+import { useTheme } from '@/lib/theme';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -19,8 +19,8 @@ const TYPE_ICON: Record<string, string> = {
 };
 
 export default function NotificationsScreen() {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
+  const theme = useTheme();
+  const styles = makeStyles(theme);
   const [loading, setLoading] = useState(true);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [markingAll, setMarkingAll] = useState(false);
@@ -132,7 +132,7 @@ export default function NotificationsScreen() {
   );
 }
 
-function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+function makeStyles(c: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: c.background },
     markAllRow: { alignSelf: 'flex-end', paddingVertical: 6, paddingHorizontal: 4, marginBottom: 4 },
@@ -140,7 +140,7 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
     loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
     emptyIcon: { fontSize: 48 },
-    emptyText: { fontSize: 16, color: c.subtext },
+    emptyText: { fontSize: 16, color: c.textSecondary },
     list: { flex: 1 },
     listContent: { padding: 12, gap: 8 },
     card: { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: c.card, borderRadius: 12, padding: 14, position: 'relative' },
@@ -149,7 +149,7 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
     typeIcon: { fontSize: 26, marginRight: 12, marginTop: 2 },
     cardContent: { flex: 1 },
     cardTitle: { fontSize: 15, fontWeight: '700', color: c.text, marginBottom: 4 },
-    cardMessage: { fontSize: 13, color: c.subtext, lineHeight: 19, marginBottom: 6 },
-    cardDate: { fontSize: 11, color: c.subtext },
+    cardMessage: { fontSize: 13, color: c.textSecondary, lineHeight: 19, marginBottom: 6 },
+    cardDate: { fontSize: 11, color: c.textSecondary },
   });
 }

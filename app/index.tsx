@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { useTheme } from '@/lib/theme';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
@@ -13,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function LandingScreen() {
+  const theme = useTheme();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
 

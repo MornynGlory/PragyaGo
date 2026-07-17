@@ -1,4 +1,3 @@
-import * as Sentry from '@sentry/react-native';
 import { supabase } from '@/lib/supabase';
 import { Feather } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
@@ -119,7 +118,6 @@ export default function ResetPasswordScreen() {
       return;
     }
     await supabase.auth.signOut();
-    Sentry.setUser(null);
     setScreen('done');
   };
 

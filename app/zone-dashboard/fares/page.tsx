@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import { useTheme } from '@/lib/useTheme';
+import { useTheme } from '@/lib/theme';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -32,8 +32,8 @@ function computeFarePreview(baseFare: number) {
 }
 
 export default function ZoneFaresPage() {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
+  const theme = useTheme();
+  const styles = makeStyles(theme);
 
   const [zones, setZones] = useState<Zone[]>([]);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
@@ -129,14 +129,14 @@ export default function ZoneFaresPage() {
           <TextInput
             style={styles.input}
             placeholder="Destination name"
-            placeholderTextColor={colors.subtext}
+            placeholderTextColor={theme.placeholder}
             value={newLocation}
             onChangeText={setNewLocation}
           />
           <TextInput
             style={styles.input}
             placeholder="Base fare (GHS)"
-            placeholderTextColor={colors.subtext}
+            placeholderTextColor={theme.placeholder}
             value={newBaseFare}
             onChangeText={setNewBaseFare}
             keyboardType="decimal-pad"
@@ -190,21 +190,21 @@ export default function ZoneFaresPage() {
   );
 }
 
-function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
+function makeStyles(c: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: c.background },
     container: { padding: 16, paddingBottom: 40 },
     pageTitle: { fontSize: 22, fontWeight: '700', color: c.text, marginBottom: 6 },
     formulaBox: { fontSize: 13, color: '#085041', backgroundColor: '#E1F5EE', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, marginBottom: 16, fontWeight: '600' },
-    sectionLabel: { fontSize: 13, fontWeight: '700', color: c.subtext, marginBottom: 8, marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
+    sectionLabel: { fontSize: 13, fontWeight: '700', color: c.textSecondary, marginBottom: 8, marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
     zoneRow: { marginBottom: 16 },
     zoneChip: { borderWidth: 1.5, borderColor: c.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, marginRight: 8, backgroundColor: c.card },
     zoneChipActive: { borderColor: '#1D9E75', backgroundColor: '#E1F5EE' },
-    zoneChipText: { fontSize: 13, color: c.subtext, fontWeight: '600' },
+    zoneChipText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
     zoneChipTextActive: { color: '#085041' },
     addCard: { backgroundColor: c.card, borderRadius: 12, padding: 16, marginBottom: 20 },
     addCardTitle: { fontSize: 15, fontWeight: '700', color: c.text, marginBottom: 12 },
-    input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: c.text, backgroundColor: c.inputBg, marginBottom: 10 },
+    input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: c.text, backgroundColor: c.input, marginBottom: 10 },
     preview: { backgroundColor: '#E1F5EE', borderRadius: 8, padding: 12, marginBottom: 12 },
     previewTitle: { fontSize: 12, fontWeight: '700', color: '#085041', marginBottom: 6 },
     previewRow: { fontSize: 13, color: '#085041', marginBottom: 3 },
@@ -213,12 +213,12 @@ function makeStyles(c: ReturnType<typeof useTheme>['colors']) {
     addBtn: { backgroundColor: '#1D9E75', paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
     btnDisabled: { opacity: 0.6 },
     addBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
-    tableHeader: { flexDirection: 'row', backgroundColor: c.inputBg, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10, marginBottom: 4 },
-    tableHeaderCell: { flex: 1, fontSize: 11, fontWeight: '700', color: c.subtext, textTransform: 'uppercase' },
+    tableHeader: { flexDirection: 'row', backgroundColor: c.input, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10, marginBottom: 4 },
+    tableHeaderCell: { flex: 1, fontSize: 11, fontWeight: '700', color: c.textSecondary, textTransform: 'uppercase' },
     tableRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: c.card, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 10, marginBottom: 6 },
     tableCell: { flex: 1, fontSize: 13, color: c.text },
     tableCellHighlight: { color: '#1D9E75', fontWeight: '700' },
     deleteBtn: { color: '#FF3B30', fontSize: 14, fontWeight: '700' },
-    emptyText: { color: c.subtext, fontSize: 14, textAlign: 'center', marginTop: 20 },
+    emptyText: { color: c.textSecondary, fontSize: 14, textAlign: 'center', marginTop: 20 },
   });
 }

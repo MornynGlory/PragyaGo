@@ -17,7 +17,8 @@
       "Bash(npm ls *)",
       "Bash(ls \"c:/Users/USER/PragyaGo Landing Page/\")",
       "Read(//c/Users/USER/PragyaGo Landing Page/**)",
-      "PowerShell(cd \"c:\\\\Users\\\\USER\\\\PragyaGo\"; $out = npx tsc --noEmit --skipLibCheck 2>&1; $out | Where-Object { $_ -match \"rider\" })"
+      "PowerShell(cd \"c:\\\\Users\\\\USER\\\\PragyaGo\"; $out = npx tsc --noEmit --skipLibCheck 2>&1; $out | Where-Object { $_ -match \"rider\" })",
+      "Bash(Remove-Item \"c:\\\\Users\\\\USER\\\\PragyaGo\\\\lib\\\\useTheme.ts\" -Force)"
     ]
   }
 }

@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/theme';
 import { Feather } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -55,6 +56,7 @@ function getDateRange(filter: Filter): string {
 export default function DriverEarningsScreen() {
   const theme = useTheme();
   const styles = makeStyles(theme);
+  const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<Tab>('earnings');
   const [driverId, setDriverId] = useState<string | null>(null);
@@ -208,7 +210,11 @@ export default function DriverEarningsScreen() {
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+          <Feather name="arrow-left" size={22} color={theme.text} />
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>Earnings</Text>
+        <View style={styles.headerBtn} />
       </View>
 
       {/* Top Tab Switcher */}
@@ -466,9 +472,11 @@ function makeStyles(theme: ReturnType<typeof useTheme>) {
 
     // Header
     header: {
-      paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8,
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 8, paddingTop: 16, paddingBottom: 8,
       borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border,
     },
+    headerBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 22, fontWeight: '700', color: theme.text },
 
     // Tab switcher
