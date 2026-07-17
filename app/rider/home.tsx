@@ -12,6 +12,7 @@ import {
   Alert,
   Animated,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -147,6 +148,13 @@ export default function RiderHomeScreen() {
   const [editingPickup, setEditingPickup] = useState(false);
   const [loadingPickupSuggestions, setLoadingPickupSuggestions] = useState(false);
   const pickupDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, []);
 
   useEffect(() => { currentRideRef.current = currentRide; }, [currentRide]);
   useEffect(() => { rideStatusRef.current = rideStatus; }, [rideStatus]);
@@ -776,7 +784,8 @@ export default function RiderHomeScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'height' : 'padding'} keyboardVerticalOffset={80}>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
+      {!keyboardVisible && (
       <View style={styles.mapContainer}>
         <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/notifications' as any)}>
           <Feather name="bell" size={22} color={theme.text} />
@@ -882,6 +891,7 @@ export default function RiderHomeScreen() {
           </TouchableOpacity>
         ) : null}
       </View>
+      )}
 
       {/* Driver arrived banner — overlays the map, dismissible */}
       {showArrivedBanner && (
@@ -943,16 +953,27 @@ export default function RiderHomeScreen() {
       ) : null}
 
       {!currentRide ? (
-        <View style={[styles.bottomPanel, { paddingBottom: insets.bottom + 16 }]}>
+        <View
+          style={{
+            backgroundColor: theme.card,
+            borderTopLeftRadius: keyboardVisible ? 0 : 24,
+            borderTopRightRadius: keyboardVisible ? 0 : 24,
+            paddingHorizontal: 20,
+            paddingTop: 16,
+            paddingBottom: 16,
+            flex: keyboardVisible ? 1 : undefined,
+            elevation: 8,
+          }}
+        >
+          <ScrollView
+            scrollEnabled={true}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
           <Text style={styles.panelTitle}>Where do you want to go?</Text>
           <Text style={styles.driversCount}>
             {nearbyDrivers.length > 0 ? `🛺 ${nearbyDrivers.length} Pragya driver${nearbyDrivers.length > 1 ? 's' : ''} nearby` : '😔 No drivers nearby right now'}
           </Text>
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            style={styles.bottomPanelScroll}
-          >
           {/* Pickup location */}
           <View style={styles.pickupInputContainer}>
             {editingPickup ? (
@@ -1133,10 +1154,10 @@ export default function RiderHomeScreen() {
               </TouchableOpacity>
             </View>
           </View>
-          </ScrollView>
           <TouchableOpacity style={[styles.requestButton, requesting && styles.buttonDisabled]} onPress={requestRide} disabled={requesting}>
             {requesting ? <ActivityIndicator color="#fff" /> : <Text style={styles.requestButtonText}>🛺 Request Pragya</Text>}
           </TouchableOpacity>
+          </ScrollView>
         </View>
       ) : null}
 
@@ -1283,7 +1304,6 @@ export default function RiderHomeScreen() {
 function makeStyles(c: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: c.background },
-  container: { flex: 1, backgroundColor: c.background },
   mapContainer: { flex: 1, minHeight: 300 },
   map: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -1302,19 +1322,6 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   confirmPaymentText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
   viewDriverButton: { flex: 1, backgroundColor: '#fff', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
   viewDriverButtonText: { color: '#185FA5', fontWeight: 'bold', fontSize: 14 },
-  bottomPanel: {
-    backgroundColor: c.card,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-  },
-  bottomPanelScroll: { maxHeight: 320 },
   panelTitle: { fontSize: 18, fontWeight: 'bold', color: c.text, marginBottom: 4 },
   driversCount: { fontSize: 13, color: '#1D9E75', marginBottom: 12 },
   inputLabel: { fontSize: 13, fontWeight: '600', color: c.textSecondary, marginBottom: 6 },
@@ -1373,9 +1380,9 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   paymentActiveMomo: { backgroundColor: '#185FA5', borderColor: '#185FA5' },
   paymentText: { fontSize: 14, fontWeight: '600', color: '#666' },
   paymentTextActive: { color: '#fff' },
-  requestButton: { backgroundColor: '#1D9E75', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
+  requestButton: { backgroundColor: c.green, paddingVertical: 16, borderRadius: 14, alignItems: 'center' },
   buttonDisabled: { opacity: 0.6 },
-  requestButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  requestButtonText: { color: 'white', fontSize: 17, fontWeight: '700' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   fareAcceptCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24 },
   fareAcceptTitle: { fontSize: 20, fontWeight: 'bold', color: c.text, textAlign: 'center', marginBottom: 8 },
@@ -1429,14 +1436,14 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   submitRatingText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   skipRatingButton: { paddingVertical: 10 },
   skipRatingText: { color: c.textSecondary, fontSize: 14 },
-  suggestionsCard: { position: 'absolute', top: 46, left: 0, right: 0, zIndex: 9999, backgroundColor: 'white', borderRadius: 12, elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, maxHeight: 300, overflow: 'hidden' },
-  suggestionItem: { paddingHorizontal: 14, paddingVertical: 12 },
-  suggestionItemZone: { backgroundColor: '#F0FDF7' },
+  suggestionsCard: { position: 'absolute', top: 46, left: 0, right: 0, zIndex: 9999, backgroundColor: c.card, borderRadius: 12, borderWidth: 0.5, borderColor: c.border, elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, maxHeight: 300, overflow: 'hidden' },
+  suggestionItem: { backgroundColor: c.card, padding: 14 },
+  suggestionItemZone: { backgroundColor: c.greenLight },
   suggestionItemBorder: { borderBottomWidth: 0.5, borderBottomColor: c.border },
   suggestionRowZone: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  suggestionText: { fontSize: 13, color: c.text, lineHeight: 18 },
-  suggestionTextZone: { fontSize: 13, color: '#085041', fontWeight: '600', flex: 1, marginRight: 8 },
-  suggestionFare: { fontSize: 13, color: '#1D9E75', fontWeight: '700' },
+  suggestionText: { fontSize: 14, fontWeight: '600', color: c.text, lineHeight: 18 },
+  suggestionTextZone: { fontSize: 14, color: c.text, fontWeight: '600', flex: 1, marginRight: 8 },
+  suggestionFare: { fontSize: 13, color: c.green, fontWeight: '700' },
   sectionLabel: { fontSize: 11, fontWeight: '700', color: c.textSecondary, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4, backgroundColor: c.input, textTransform: 'uppercase', letterSpacing: 0.5 },
   suggestionsLoader: { alignSelf: 'center', marginBottom: 6 },
   tricycleMarker: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1D9E75', borderWidth: 3, borderColor: 'white', justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: '#1D9E75', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 8 },
