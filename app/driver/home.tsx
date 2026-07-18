@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import {
+  Alert,
   View,
   Text,
   StyleSheet,
@@ -44,10 +45,12 @@ export default function DriverHome() {
   const [ridesCount, setRidesCount] = useState<number>(0)
   const [commissionOwed, setCommissionOwed] = useState<number>(0)
   const [showCommissionModal, setShowCommissionModal] = useState(false)
+  const [vehicleVerified, setVehicleVerified] = useState<boolean | null>(null)
   const [unreadCount, setUnreadCount] = useState<number>(0)
   const [isOnline, setIsOnline] = useState<boolean>(false)
   const [activeRide, setActiveRide] = useState<any>(null)
   const [rideStatus, setRideStatus] = useState('')
+  const [riderInfo, setRiderInfo] = useState<any>(null)
   const [rideRequest, setRideRequest] = useState<any>(null)
   const [chatUnreadCount, setChatUnreadCount] = useState(0)
 
@@ -91,7 +94,7 @@ export default function DriverHome() {
 
       const { data: driverRecord } = await supabase
         .from('drivers')
-        .select('id, commission_owed')
+        .select('id, commission_owed, vehicle_verified')
         .eq('profile_id', user.id)
         .single()
       if (driverRecord) {
@@ -100,6 +103,7 @@ export default function DriverHome() {
         if (dbCommission > 0) {
           setShowCommissionModal(true)
         }
+        setVehicleVerified(!!driverRecord.vehicle_verified)
 
         const { data: activeRideData } = await supabase
           .from('rides')
@@ -150,11 +154,41 @@ export default function DriverHome() {
     }
   }, [activeRide?.id])
 
-  function toggleOnline() { setIsOnline((v) => !v) }
+  useEffect(() => {
+    if (activeRide?.rider_id) {
+      fetchRiderInfo(activeRide.rider_id)
+    } else {
+      setRiderInfo(null)
+    }
+  }, [activeRide?.rider_id])
+
+  async function fetchRiderInfo(riderId: string) {
+    try {
+      const { data: riderProfile } = await supabase
+        .from('profiles')
+        .select('full_name, phone')
+        .eq('id', riderId)
+        .single()
+      setRiderInfo(riderProfile)
+    } catch (e) {
+      console.warn(e)
+    }
+  }
+
+  function toggleOnline() {
+    if (vehicleVerified === false) {
+      Alert.alert('Verification Required', 'Complete vehicle verification first')
+      return
+    }
+    setIsOnline((v) => !v)
+  }
   function acceptRide() { setRideRequest(null) }
   function declineRide() { setRideRequest(null) }
   function arrivePickup() {}
   function completeRide() {}
+
+  const riderInitials = (riderInfo?.full_name || '')
+    .split(' ').map((n: string) => n[0]).filter(Boolean).join('').toUpperCase().slice(0, 2) || '?'
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -263,11 +297,24 @@ export default function DriverHome() {
         </TouchableOpacity>
       ) : null}
 
-      <View style={[styles.bottomSheet, { backgroundColor: theme.card, borderColor: theme.border }]}> 
+      <View style={[styles.bottomSheet, { backgroundColor: theme.card, borderColor: theme.border }]}>
+        {vehicleVerified === false ? (
+          <View style={styles.vehicleBanner}>
+            <Feather name="alert-circle" size={20} color="#B45309" />
+            <Text style={styles.vehicleBannerText}>Complete vehicle verification to start receiving rides</Text>
+            <TouchableOpacity style={styles.vehicleBannerBtn} onPress={() => router.push('/auth/verify-vehicle' as any)}>
+              <Text style={styles.vehicleBannerBtnText}>Verify Now</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
         {!activeRide ? (
           <View>
             <TouchableOpacity
-              style={[styles.fullButton, { backgroundColor: isOnline ? '#d9534f' : theme.green }]}
+              style={[
+                styles.fullButton,
+                { backgroundColor: isOnline ? '#d9534f' : theme.green },
+                vehicleVerified === false && styles.fullButtonDisabled,
+              ]}
               onPress={toggleOnline}
             >
               <Text style={styles.fullButtonText}>{isOnline ? 'Go Offline' : 'Go Online'}</Text>
@@ -279,6 +326,29 @@ export default function DriverHome() {
               <Text style={[styles.rideStatus, { color: theme.text }]}>{getStatusLabel()}</Text>
               <View style={styles.fareBadge}><Text style={{ color: '#fff' }}>GHS {activeRide.fare ?? '0.00'}</Text></View>
             </View>
+
+            {riderInfo && (rideStatus === 'accepted' || rideStatus === 'in_progress') ? (
+              <View style={[styles.riderInfoRow, { borderColor: theme.border }]}>
+                <View style={[styles.riderAvatarCircle, { backgroundColor: theme.green }]}>
+                  <Text style={styles.riderAvatarText}>{riderInitials}</Text>
+                </View>
+                <Text style={[styles.riderInfoName, { color: theme.text }]} numberOfLines={1}>{riderInfo.full_name || 'Rider'}</Text>
+                <View style={styles.riderInfoActions}>
+                  <TouchableOpacity
+                    style={[styles.riderActionBtn, { backgroundColor: theme.greenLight }]}
+                    onPress={() => router.push(('/chat/' + activeRide.id) as any)}
+                  >
+                    <Feather name="message-circle" size={18} color={theme.green} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.riderActionBtn, { backgroundColor: theme.blueLight }]}
+                    onPress={() => router.push(('/call/' + activeRide.id) as any)}
+                  >
+                    <Feather name="phone" size={18} color={theme.blue} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null}
 
             <View style={styles.rideRow}><Feather name="map-pin" size={18} color={theme.textSecondary} /><Text style={[styles.rideText, { color: theme.text }]}>{activeRide.pickup ?? 'Pickup address'}</Text></View>
             <View style={styles.rideRow}><Feather name="flag" size={18} color={theme.textSecondary} /><Text style={[styles.rideText, { color: theme.text }]}>{activeRide.dropoff ?? 'Dropoff address'}</Text></View>
@@ -425,7 +495,12 @@ const styles = StyleSheet.create({
   locateMeBtn: { position: 'absolute', right: 16, bottom: 16, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 6 },
   bottomSheet: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 16, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   fullButton: { width: '100%', paddingVertical: 14, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1D9E75', marginBottom: 12 },
+  fullButtonDisabled: { opacity: 0.5 },
   fullButtonText: { color: '#fff', fontWeight: '700' },
+  vehicleBanner: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FEF3C7', borderRadius: 12, padding: 12, marginBottom: 14 },
+  vehicleBannerText: { flex: 1, fontSize: 12, fontWeight: '600', color: '#92400E', lineHeight: 17 },
+  vehicleBannerBtn: { backgroundColor: '#B45309', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  vehicleBannerBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   quickActionsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
   quickAction: { flex: 1, padding: 12, borderRadius: 8, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', marginHorizontal: 4 },
   quickActionText: { marginLeft: 8, fontWeight: '600' },
@@ -435,6 +510,12 @@ const styles = StyleSheet.create({
   fareBadge: { backgroundColor: '#1D9E75', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16 },
   rideRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
   rideText: { marginLeft: 8 },
+  riderInfoRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  riderAvatarCircle: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  riderAvatarText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  riderInfoName: { flex: 1, fontSize: 15, fontWeight: '600', marginLeft: 10 },
+  riderInfoActions: { flexDirection: 'row', gap: 10 },
+  riderActionBtn: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
   modalCard: { width: '85%', borderRadius: 12, padding: 16 },
   modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 8 },

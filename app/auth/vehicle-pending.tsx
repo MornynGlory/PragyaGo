@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-export default function PendingScreen() {
+export default function VehiclePendingScreen() {
   const router = useRouter();
   const [checking, setChecking] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -30,12 +30,12 @@ export default function PendingScreen() {
       if (!user) return;
       const { data: driver } = await supabase
         .from('drivers')
-        .select('verification_status, vehicle_verified')
+        .select('vehicle_verified')
         .eq('profile_id', user.id)
         .single();
-      if (driver?.verification_status === 'approved') {
+      if (driver?.vehicle_verified) {
         if (intervalRef.current) clearInterval(intervalRef.current);
-        router.replace((driver.vehicle_verified ? '/driver/home' : '/auth/verify-vehicle') as any);
+        router.replace('/driver/home' as any);
       }
     } catch (err) {
       console.error('Error checking status:', err);
@@ -57,10 +57,9 @@ export default function PendingScreen() {
           <Text style={styles.icon}>⏳</Text>
         </View>
 
-        <Text style={styles.title}>Account Under Review</Text>
+        <Text style={styles.title}>Vehicle Documents Submitted</Text>
         <Text style={styles.message}>
-          Your documents have been submitted. Our team will verify your identity and notify you once approved.
-          {'\n\n'}This usually takes 24–48 hours.
+          We are reviewing your vehicle documents. This usually takes 24-48 hours. You will be notified once approved.
         </Text>
 
         <View style={styles.statusRow}>
@@ -74,9 +73,9 @@ export default function PendingScreen() {
 
         <View style={styles.infoBox}>
           <Text style={styles.infoTitle}>What happens next?</Text>
-          <Text style={styles.infoItem}>✅ Our team reviews your documents</Text>
+          <Text style={styles.infoItem}>✅ Our team reviews your vehicle documents</Text>
           <Text style={styles.infoItem}>✅ You receive a notification when approved</Text>
-          <Text style={styles.infoItem}>✅ You can then start accepting rides</Text>
+          <Text style={styles.infoItem}>✅ You can then go online and start receiving rides</Text>
         </View>
 
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>

@@ -1,9 +1,13 @@
+// Run in Supabase SQL:
+// insert into storage.buckets (id, name, public) values ('profile-pictures', 'profile-pictures', true);
+
 import { supabase } from '@/lib/supabase'
 import { useTheme } from '@/lib/theme'
 import { Feather } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
+import * as ImagePicker from 'expo-image-picker'
 import React, { useEffect, useState } from 'react'
-import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import { ActivityIndicator, Alert, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 export default function RiderEditProfileScreen() {
@@ -16,6 +20,8 @@ export default function RiderEditProfileScreen() {
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [saving, setSaving] = useState(false)
+  const [profilePic, setProfilePic] = useState<string | null>(null)
+  const [uploadingPic, setUploadingPic] = useState(false)
 
   useEffect(() => { fetchProfile() }, [])
 
@@ -33,6 +39,7 @@ export default function RiderEditProfileScreen() {
         setFullName(profile.full_name ?? '')
         setPhone(profile.phone ?? '')
         setEmail(profile.email ?? user.email ?? '')
+        if (profile.avatar_url) setProfilePic(profile.avatar_url)
       }
     } catch (e) {
       console.error('fetchProfile error:', e)
@@ -61,6 +68,65 @@ export default function RiderEditProfileScreen() {
     }
   }
 
+  const pickImage = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert('Permission needed', 'Please allow access to your photos')
+      return
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    })
+    if (!result.canceled) {
+      uploadImage(result.assets[0].uri)
+    }
+  }
+
+  const uploadImage = async (uri: string) => {
+    setUploadingPic(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      const fileName = `profile-${user.id}-${Date.now()}.jpg`
+      const formData = new FormData()
+      formData.append('file', {
+        uri,
+        name: fileName,
+        type: 'image/jpeg',
+      } as any)
+
+      const { error } = await supabase.storage
+        .from('profile-pictures')
+        .upload(fileName, formData, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        })
+
+      if (error) throw error
+
+      const { data: urlData } = supabase.storage
+        .from('profile-pictures')
+        .getPublicUrl(fileName)
+
+      const publicUrl = urlData.publicUrl
+
+      await supabase.from('profiles')
+        .update({ avatar_url: publicUrl })
+        .eq('id', user.id)
+
+      setProfilePic(publicUrl)
+      Alert.alert('Success', 'Profile picture updated!')
+    } catch (error) {
+      Alert.alert('Error', 'Could not upload image. Please try again.')
+    } finally {
+      setUploadingPic(false)
+    }
+  }
+
   const initials = fullName.split(' ').map(n => n[0]).filter(Boolean).join('').toUpperCase().slice(0, 2) || '?'
 
   return (
@@ -79,8 +145,28 @@ export default function RiderEditProfileScreen() {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         {/* Avatar */}
         <View style={styles.avatarSection}>
-          <View style={styles.avatarCircle}>
-            <Text style={styles.initials}>{initials}</Text>
+          <View style={styles.avatarWrapper}>
+            {profilePic ? (
+              <Image source={{ uri: profilePic }} style={styles.avatarCircle} />
+            ) : (
+              <View style={styles.avatarCircle}>
+                <Text style={styles.initials}>{initials}</Text>
+              </View>
+            )}
+            <TouchableOpacity onPress={pickImage} style={{
+              position: 'absolute', bottom: 0, right: 0,
+              width: 32, height: 32, borderRadius: 16,
+              backgroundColor: theme.green,
+              justifyContent: 'center', alignItems: 'center',
+              borderWidth: 2, borderColor: theme.card
+            }}>
+              <Feather name="camera" size={16} color="white" />
+            </TouchableOpacity>
+            {uploadingPic && (
+              <View style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 40, justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator color="white" />
+              </View>
+            )}
           </View>
         </View>
 
@@ -151,6 +237,7 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
     saveTextDisabled: { opacity: 0.4 },
     scrollContent: { paddingBottom: 40 },
     avatarSection: { alignItems: 'center', paddingVertical: 28, backgroundColor: c.card, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
+    avatarWrapper: { position: 'relative' },
     avatarCircle: { width: 80, height: 80, borderRadius: 40, backgroundColor: c.green, justifyContent: 'center', alignItems: 'center' },
     initials: { fontSize: 28, fontWeight: '700', color: '#fff' },
     formSection: { backgroundColor: c.card, marginHorizontal: 16, marginTop: 20, borderRadius: 14, padding: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: c.cardBorder },

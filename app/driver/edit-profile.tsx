@@ -1,11 +1,16 @@
+// Run in Supabase SQL:
+// insert into storage.buckets (id, name, public) values ('profile-pictures', 'profile-pictures', true);
+
 import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/theme';
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -34,7 +39,8 @@ export default function DriverEditProfileScreen() {
   const [ghanaCardId, setGhanaCardId] = useState('');
   const [plateNumber, setPlateNumber] = useState('');
   const [pragyaColor, setPragyaColor] = useState('');
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [profilePic, setProfilePic] = useState<string | null>(null);
+  const [uploadingPic, setUploadingPic] = useState(false);
 
   useEffect(() => { fetchProfile(); }, []);
 
@@ -46,24 +52,24 @@ export default function DriverEditProfileScreen() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('full_name, phone')
+        .select('full_name, phone, avatar_url')
         .eq('id', user.id)
         .single();
       if (profile) {
         setFullName(profile.full_name ?? '');
         setPhone(profile.phone ?? '');
+        if (profile.avatar_url) setProfilePic(profile.avatar_url);
       }
 
       const { data: driver } = await supabase
         .from('drivers')
-        .select('vehicle_number, plate_number, pragya_color, photo_url')
+        .select('vehicle_number, plate_number, pragya_color')
         .eq('profile_id', user.id)
         .single();
       if (driver) {
         setGhanaCardId(driver.vehicle_number ?? '');
         setPlateNumber(driver.plate_number ?? '');
         setPragyaColor(driver.pragya_color ?? '');
-        setPhotoUrl(driver.photo_url ?? null);
       }
     } catch (e) {
       console.error('fetchProfile error:', e);
@@ -95,6 +101,65 @@ export default function DriverEditProfileScreen() {
     }
   };
 
+  const pickImage = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission needed', 'Please allow access to your photos');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    });
+    if (!result.canceled) {
+      uploadImage(result.assets[0].uri);
+    }
+  };
+
+  const uploadImage = async (uri: string) => {
+    setUploadingPic(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const fileName = `profile-${user.id}-${Date.now()}.jpg`;
+      const formData = new FormData();
+      formData.append('file', {
+        uri,
+        name: fileName,
+        type: 'image/jpeg',
+      } as any);
+
+      const { error } = await supabase.storage
+        .from('profile-pictures')
+        .upload(fileName, formData, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        });
+
+      if (error) throw error;
+
+      const { data: urlData } = supabase.storage
+        .from('profile-pictures')
+        .getPublicUrl(fileName);
+
+      const publicUrl = urlData.publicUrl;
+
+      await supabase.from('profiles')
+        .update({ avatar_url: publicUrl })
+        .eq('id', user.id);
+
+      setProfilePic(publicUrl);
+      Alert.alert('Success', 'Profile picture updated!');
+    } catch (error) {
+      Alert.alert('Error', 'Could not upload image. Please try again.');
+    } finally {
+      setUploadingPic(false);
+    }
+  };
+
   const initials = fullName.split(' ').map(n => n[0]).filter(Boolean).join('').toUpperCase().slice(0, 2) || '?';
 
   if (loading) {
@@ -121,16 +186,30 @@ export default function DriverEditProfileScreen() {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         {/* Avatar */}
         <View style={styles.avatarSection}>
-          {photoUrl ? (
-            <View style={styles.avatarContainer}>
-              <Text style={styles.initials}>{initials}</Text>
-            </View>
-          ) : (
-            <View style={styles.avatarContainer}>
-              <Text style={styles.initials}>{initials}</Text>
-            </View>
-          )}
-          <Text style={styles.avatarHint}>Contact support to change your photo</Text>
+          <View style={styles.avatarWrapper}>
+            {profilePic ? (
+              <Image source={{ uri: profilePic }} style={styles.avatarContainer} />
+            ) : (
+              <View style={styles.avatarContainer}>
+                <Text style={styles.initials}>{initials}</Text>
+              </View>
+            )}
+            <TouchableOpacity onPress={pickImage} style={{
+              position: 'absolute', bottom: 0, right: 0,
+              width: 32, height: 32, borderRadius: 16,
+              backgroundColor: theme.green,
+              justifyContent: 'center', alignItems: 'center',
+              borderWidth: 2, borderColor: theme.card
+            }}>
+              <Feather name="camera" size={16} color="white" />
+            </TouchableOpacity>
+            {uploadingPic && (
+              <View style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 44, justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator color="white" />
+              </View>
+            )}
+          </View>
+          <Text style={styles.avatarHint}>Tap the camera icon to update your photo</Text>
         </View>
 
         {/* Editable fields */}
@@ -219,7 +298,8 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
     topBarTitle: { fontSize: 17, fontWeight: '700', color: c.text },
     scrollContent: { paddingBottom: 40 },
     avatarSection: { alignItems: 'center', paddingVertical: 28, backgroundColor: c.card, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
-    avatarContainer: { width: 88, height: 88, borderRadius: 44, backgroundColor: '#1D9E75', justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
+    avatarWrapper: { position: 'relative', marginBottom: 10 },
+    avatarContainer: { width: 88, height: 88, borderRadius: 44, backgroundColor: '#1D9E75', justifyContent: 'center', alignItems: 'center' },
     initials: { fontSize: 30, fontWeight: '700', color: '#fff' },
     avatarHint: { fontSize: 12, color: c.textMuted },
     section: { backgroundColor: c.card, marginHorizontal: 16, marginTop: 20, borderRadius: 14, padding: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: c.cardBorder },

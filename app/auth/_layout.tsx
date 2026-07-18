@@ -19,6 +19,8 @@ export default function AuthLayout() {
         name="verify-driver"
         options={{ title: 'Identity Verification' }}
       />
+      <Stack.Screen name="verify-vehicle" options={{ headerShown: false }} />
+      <Stack.Screen name="vehicle-pending" options={{ headerShown: false }} />
       <Stack.Screen
         name="pending"
         options={{ headerShown: false }}

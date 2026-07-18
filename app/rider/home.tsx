@@ -106,6 +106,7 @@ export default function RiderHomeScreen() {
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [selectedRating, setSelectedRating] = useState(0);
   const [completedRide, setCompletedRide] = useState<any>(null);
+  const [ratingComment, setRatingComment] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
   const [riderConfirmedPayment, setRiderConfirmedPayment] = useState(false);
   const [finalFare, setFinalFare] = useState<number | null>(null);
@@ -724,6 +725,7 @@ export default function RiderHomeScreen() {
       await supabase.from('ratings').insert([{
         ride_id: completedRide.id, rated_by: user.id,
         rated_user: driverInfo.profile_id, score: selectedRating,
+        comment: ratingComment.trim() || null,
         created_at: new Date().toISOString(),
       }]);
       const { data: ratings } = await supabase.from('ratings').select('score').eq('rated_user', driverInfo.profile_id);
@@ -735,7 +737,7 @@ export default function RiderHomeScreen() {
     } catch (error) { console.error('Error submitting rating:', error); }
     finally {
       setSubmittingRating(false); setShowRatingModal(false);
-      setSelectedRating(0); setCompletedRide(null); setDriverInfo(null); setEta(null);
+      setSelectedRating(0); setRatingComment(''); setCompletedRide(null); setDriverInfo(null); setEta(null);
     }
   };
 
@@ -781,6 +783,8 @@ export default function RiderHomeScreen() {
   };
 
   const displayFare = finalFare || currentRide?.discounted_fare || currentRide?.fare_ghs;
+  const driverInitials = (driverInfo?.profiles?.full_name || '')
+    .split(' ').map((n: string) => n[0]).filter(Boolean).join('').toUpperCase().slice(0, 2) || '?';
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -916,6 +920,47 @@ export default function RiderHomeScreen() {
           </View>
         </View>
       )}
+
+      {currentRide && driverInfo && ['accepted', 'arrived_pickup', 'in_progress'].includes(rideStatus) ? (
+        <View style={styles.driverInlineCard}>
+          <View style={styles.driverInlineTopRow}>
+            <View style={styles.driverInlineAvatar}>
+              <Text style={styles.driverInlineAvatarText}>{driverInitials}</Text>
+            </View>
+            <View style={styles.driverInlineInfo}>
+              <Text style={styles.driverInlineName} numberOfLines={1}>{driverInfo?.profiles?.full_name || 'Driver'}</Text>
+              <View style={styles.driverInlineBadgesRow}>
+                <View style={styles.pragyaColorBadge}>
+                  <View style={[styles.pragyaColorBadgeDot, { backgroundColor: PRAGYA_COLOR_MAP[driverInfo?.pragya_color] || theme.textMuted }]} />
+                  <Text style={styles.pragyaColorBadgeText}>
+                    {driverInfo?.pragya_color ? driverInfo.pragya_color.charAt(0).toUpperCase() + driverInfo.pragya_color.slice(1) : 'Unknown'}
+                  </Text>
+                </View>
+                <View style={styles.platePill}>
+                  <Text style={styles.platePillText}>{driverInfo?.plate_number || 'N/A'}</Text>
+                </View>
+              </View>
+            </View>
+            <View style={styles.driverInlineRating}>
+              <Feather name="star" size={14} color="#F59E0B" />
+              <Text style={styles.driverInlineRatingText}>{(driverInfo?.rating || 0).toFixed(1)}</Text>
+            </View>
+          </View>
+          <Text style={styles.driverInlineStatus}>
+            {rideStatus === 'arrived_pickup' ? 'Driver has arrived' : 'Your driver is on the way'}
+          </Text>
+          <View style={styles.driverInlineActions}>
+            <TouchableOpacity style={styles.driverInlineChatBtn} onPress={() => router.push(('/chat/' + currentRide.id) as any)}>
+              <Feather name="message-circle" size={18} color={theme.green} />
+              <Text style={styles.driverInlineChatBtnText}>Chat</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.driverInlineCallBtn} onPress={() => router.push(('/call/' + currentRide.id) as any)}>
+              <Feather name="phone" size={18} color="#185FA5" />
+              <Text style={styles.driverInlineCallBtnText}>Call</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
 
       {currentRide ? (
         <View style={styles.rideStatusBanner}>
@@ -1266,8 +1311,11 @@ export default function RiderHomeScreen() {
             {driverInfo?.photo_url ? (
               <Image source={{ uri: driverInfo.photo_url }} style={styles.ratingDriverPhoto} />
             ) : (
-              <View style={styles.ratingDriverPhotoPlaceholder}><Text style={{ fontSize: 40 }}>👤</Text></View>
+              <View style={styles.ratingDriverPhotoPlaceholder}>
+                <Feather name="user" size={40} color="#1D9E75" />
+              </View>
             )}
+            <Text style={styles.ratingDriverName}>{driverInfo?.profiles?.full_name || 'Your Driver'}</Text>
             {completedRide?.discount_amount > 0 ? (
               <View style={styles.receiptBox}>
                 <Text style={styles.receiptRow}>Original fare: <Text style={styles.receiptValue}>GHS {completedRide.final_fare_ghs || completedRide.fare_ghs}</Text></Text>
@@ -1280,17 +1328,26 @@ export default function RiderHomeScreen() {
             <View style={styles.starsRow}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <TouchableOpacity key={star} onPress={() => setSelectedRating(star)}>
-                  <Text style={[styles.star, selectedRating >= star && styles.starSelected]}>★</Text>
+                  <Feather name="star" size={36} color={selectedRating >= star ? '#F59E0B' : theme.border} />
                 </TouchableOpacity>
               ))}
             </View>
             <Text style={styles.ratingLabel}>
               {selectedRating === 1 ? 'Poor' : selectedRating === 2 ? 'Fair' : selectedRating === 3 ? 'Good' : selectedRating === 4 ? 'Very Good' : selectedRating === 5 ? 'Excellent!' : 'Tap a star to rate'}
             </Text>
+            <TextInput
+              style={styles.ratingCommentInput}
+              placeholder="Add a comment (optional)"
+              placeholderTextColor={theme.placeholder}
+              value={ratingComment}
+              onChangeText={setRatingComment}
+              multiline
+              numberOfLines={3}
+            />
             <TouchableOpacity style={[styles.submitRatingButton, (selectedRating === 0 || submittingRating) && styles.buttonDisabled]} onPress={submitRating} disabled={selectedRating === 0 || submittingRating}>
               {submittingRating ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitRatingText}>Submit Rating</Text>}
             </TouchableOpacity>
-            <TouchableOpacity style={styles.skipRatingButton} onPress={() => { setShowRatingModal(false); setSelectedRating(0); setCompletedRide(null); setDriverInfo(null); }}>
+            <TouchableOpacity style={styles.skipRatingButton} onPress={() => { setShowRatingModal(false); setSelectedRating(0); setRatingComment(''); setCompletedRide(null); setDriverInfo(null); }}>
               <Text style={styles.skipRatingText}>Skip</Text>
             </TouchableOpacity>
           </View>
@@ -1309,6 +1366,26 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: 14, color: c.textSecondary },
   rideStatusBanner: { backgroundColor: '#185FA5', padding: 16, margin: 10, borderRadius: 10 },
+  driverInlineCard: { backgroundColor: c.card, borderLeftWidth: 4, borderLeftColor: c.green, borderRadius: 16, padding: 16, marginHorizontal: 10, marginTop: 10 },
+  driverInlineTopRow: { flexDirection: 'row', alignItems: 'center' },
+  driverInlineAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: c.green, justifyContent: 'center', alignItems: 'center' },
+  driverInlineAvatarText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+  driverInlineInfo: { flex: 1, marginLeft: 12 },
+  driverInlineName: { fontSize: 15, fontWeight: '700', color: c.text },
+  driverInlineBadgesRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 },
+  pragyaColorBadge: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  pragyaColorBadgeDot: { width: 9, height: 9, borderRadius: 4.5 },
+  pragyaColorBadgeText: { fontSize: 12, color: c.textSecondary },
+  platePill: { backgroundColor: c.background2, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2 },
+  platePillText: { fontSize: 12, fontWeight: '600', color: c.textSecondary },
+  driverInlineRating: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  driverInlineRatingText: { fontSize: 13, fontWeight: '700', color: c.text },
+  driverInlineStatus: { fontSize: 13, color: c.green, fontWeight: '600', marginTop: 12 },
+  driverInlineActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  driverInlineChatBtn: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, backgroundColor: c.greenLight, borderRadius: 10, paddingVertical: 10 },
+  driverInlineChatBtnText: { fontSize: 13, fontWeight: '600', color: c.green },
+  driverInlineCallBtn: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, backgroundColor: c.blueLight, borderRadius: 10, paddingVertical: 10 },
+  driverInlineCallBtnText: { fontSize: 13, fontWeight: '600', color: '#185FA5' },
   rideStatusText: { fontSize: 15, fontWeight: 'bold', color: '#fff', marginBottom: 4 },
   rideStatusSub: { fontSize: 13, color: '#E6F1FB', marginBottom: 2 },
   rideStatusStops: { fontSize: 12, color: '#E6F1FB', marginBottom: 2, fontStyle: 'italic' },
@@ -1421,6 +1498,7 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   ratingSubtitle: { fontSize: 14, color: c.textSecondary, textAlign: 'center', marginBottom: 16 },
   ratingDriverPhoto: { width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: '#1D9E75', marginBottom: 8 },
   ratingDriverPhotoPlaceholder: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#E1F5EE', justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+  ratingDriverName: { fontSize: 16, fontWeight: '700', color: c.text, marginBottom: 12 },
   ratingFare: { fontSize: 14, color: '#1D9E75', fontWeight: '600', marginBottom: 16 },
   receiptBox: { backgroundColor: '#F0FDF7', borderRadius: 8, padding: 12, marginBottom: 16, width: '100%' },
   receiptRow: { fontSize: 13, color: c.text, marginBottom: 4 },
@@ -1429,9 +1507,8 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   receiptRowTotal: { fontSize: 14, color: '#085041', fontWeight: '700', marginTop: 4, borderTopWidth: 1, borderTopColor: '#C6F6E4', paddingTop: 4 },
   receiptTotal: { color: '#1D9E75' },
   starsRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-  star: { fontSize: 44, color: c.border },
-  starSelected: { color: '#FFD60A' },
-  ratingLabel: { fontSize: 14, color: c.textSecondary, marginBottom: 20, height: 20 },
+  ratingLabel: { fontSize: 14, color: c.textSecondary, marginBottom: 12, height: 20 },
+  ratingCommentInput: { borderWidth: 1, borderColor: c.inputBorder, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, color: c.text, backgroundColor: c.input, width: '100%', minHeight: 70, textAlignVertical: 'top', marginBottom: 16 },
   submitRatingButton: { backgroundColor: '#1D9E75', paddingVertical: 14, paddingHorizontal: 40, borderRadius: 10, alignItems: 'center', width: '100%', marginBottom: 10 },
   submitRatingText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   skipRatingButton: { paddingVertical: 10 },
