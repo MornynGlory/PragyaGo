@@ -112,6 +112,7 @@ export default function RiderHomeScreen() {
   const [finalFare, setFinalFare] = useState<number | null>(null);
   const [showFareAcceptModal, setShowFareAcceptModal] = useState(false);
   const rideSubscription = useRef<any>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const driverLocationSubscription = useRef<any>(null);
   const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
   const currentRideRef = useRef<any>(null);
@@ -186,6 +187,7 @@ export default function RiderHomeScreen() {
       clearInterval(interval);
       if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
       if (driverLocationSubscription.current) supabase.removeChannel(driverLocationSubscription.current);
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       if (pulseLoopRef.current) pulseLoopRef.current.stop();
       if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
       if (stopDebounceRef.current) clearTimeout(stopDebounceRef.current);
@@ -554,14 +556,17 @@ export default function RiderHomeScreen() {
   const subscribeToRideUpdates = async (rideId: string) => {
     if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
     const channel = supabase
-      .channel(`ride-updates-${rideId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides', filter: `id=eq.${rideId}` },
+      .channel(`ride-update-${rideId}-${Date.now()}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides' },
         async (payload) => {
+          console.log('Ride UPDATE received:', JSON.stringify(payload.new));
           const ride = payload.new;
+          if (ride.id !== rideId) return;
           setCurrentRide(ride);
           setRideStatus(ride.status);
 
           if (ride.status === 'accepted' && ride.driver_id) {
+            Alert.alert('Driver Found!', 'Your Pragya driver is on the way!');
             await fetchDriverInfo(ride.driver_id);
             await subscribeToDriverLocation(ride.driver_id);
           } else if (ride.status === 'arrived_pickup') {
@@ -620,8 +625,10 @@ export default function RiderHomeScreen() {
             setFinalFare(null);
             if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
             if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
+            if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
             stopDriverTracking();
           } else if (ride.status === 'cancelled') {
+            Alert.alert('Ride Cancelled', 'Your ride was cancelled.');
             setShowArrivedBanner(false);
             setShowDriverCard(false);
             setShowFareAcceptModal(false);
@@ -632,11 +639,23 @@ export default function RiderHomeScreen() {
             setFinalFare(null);
             if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
             if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
+            if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
             stopDriverTracking();
           }
         });
-    channel.subscribe();
+    channel.subscribe((status) => {
+      console.log('Rider subscription status:', status);
+    });
     rideSubscription.current = channel;
+  };
+
+  const pollRideStatus = async (rideId: string) => {
+    const { data: ride } = await supabase.from('rides').select('*').eq('id', rideId).single();
+    if (ride && ride.status !== rideStatusRef.current) {
+      console.log('Poll detected ride status change:', ride.status);
+      setCurrentRide(ride);
+      setRideStatus(ride.status);
+    }
   };
 
   const confirmPickup = async (rideId: string) => {
@@ -725,6 +744,8 @@ export default function RiderHomeScreen() {
       else {
         setCurrentRide(ride); setRideStatus('requested');
         await subscribeToRideUpdates(ride.id);
+        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = setInterval(() => pollRideStatus(ride.id), 5000);
         await Promise.all(
           nearbyDrivers.map(async (driver: any) => {
             const driverToken = await getDriverToken(driver.id);
@@ -753,6 +774,7 @@ export default function RiderHomeScreen() {
     setShowDriverCard(false); setEta(null); setFinalFare(null);
     if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
     if (driverLocationSubscription.current) { await supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
+    if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
     stopDriverTracking();
     Alert.alert('Ride Cancelled', 'Your ride has been cancelled.');
   };

@@ -36,6 +36,8 @@ export default function DriverHome() {
   const theme = useTheme()
   const router = useRouter()
   const mapRef = useRef<MapView>(null)
+  const rideRequestChannelRef = useRef<any>(null)
+  const activeRideRef = useRef<any>(null)
 
   const [driverName, setDriverName] = useState('Driver')
   const [userLat, setUserLat] = useState<number | null>(null)
@@ -55,9 +57,14 @@ export default function DriverHome() {
   const [rideRequest, setRideRequest] = useState<any>(null)
   const [chatUnreadCount, setChatUnreadCount] = useState(0)
 
+  useEffect(() => { activeRideRef.current = activeRide }, [activeRide])
+
   useEffect(() => {
     fetchDriverData()
     requestLocationPermission()
+    return () => {
+      if (rideRequestChannelRef.current) supabase.removeChannel(rideRequestChannelRef.current)
+    }
   }, [])
 
   useFocusEffect(
@@ -84,8 +91,13 @@ export default function DriverHome() {
 
   async function fetchDriverData() {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
+      const { data: sessionData } = await supabase.auth.getSession()
+      const user = sessionData?.session?.user
+      console.log('Session user:', user?.id)
+      if (!user) {
+        router.replace('/')
+        return
+      }
       const { data: profile } = await supabase
         .from('profiles')
         .select('full_name')
@@ -133,7 +145,8 @@ export default function DriverHome() {
 
   const fetchChatUnreadCount = async (rideId: string) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: sessionData } = await supabase.auth.getSession()
+      const user = sessionData?.session?.user
       if (!user) return
       const { count } = await supabase
         .from('ride_messages')
@@ -182,9 +195,14 @@ export default function DriverHome() {
 
     const newStatus = !isOnline
 
-    const { data: { user } } = await supabase.auth.getUser()
-    console.log('User ID:', user?.id)
-    if (!user) return
+    const { data: sessionData } = await supabase.auth.getSession()
+    const user = sessionData?.session?.user
+    console.log('Toggle - Session user:', user?.id)
+    if (!user) {
+      Alert.alert('Session expired', 'Please log in again.')
+      router.replace('/')
+      return
+    }
 
     const { data: driver, error: driverError } = await supabase
       .from('drivers')
@@ -211,8 +229,44 @@ export default function DriverHome() {
       return
     }
 
+    if (newStatus) {
+      console.log('Going online, subscribing to ride requests...')
+      await subscribeToRideRequests(driver.id)
+      Alert.alert('You are Online!', 'You will now receive ride requests.')
+    } else {
+      if (rideRequestChannelRef.current) {
+        supabase.removeChannel(rideRequestChannelRef.current)
+        rideRequestChannelRef.current = null
+      }
+    }
+
     setIsOnline(newStatus)
   }
+
+  async function subscribeToRideRequests(driverId: string) {
+    console.log('Setting up ride request subscription for driver:', driverId)
+    if (rideRequestChannelRef.current) {
+      await supabase.removeChannel(rideRequestChannelRef.current)
+    }
+    const channel = supabase
+      .channel(`ride-requests-${driverId}-${Date.now()}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'rides',
+      }, (payload) => {
+        console.log('New ride INSERT received:', JSON.stringify(payload.new))
+        const ride = payload.new as any
+        if (ride.status === 'requested' && !activeRideRef.current) {
+          setRideRequest(ride)
+        }
+      })
+      .subscribe((status) => {
+        console.log('Driver subscription status:', status)
+      })
+    rideRequestChannelRef.current = channel
+  }
+
   function acceptRide() { setRideRequest(null) }
   function declineRide() { setRideRequest(null) }
   function arrivePickup() {}
@@ -400,10 +454,39 @@ export default function DriverHome() {
         <View style={styles.modalOverlay}>
           <View style={[styles.modalCard, { backgroundColor: theme.card }]}> 
             <Text style={[styles.modalTitle, { color: theme.text }]}>🛺 New Ride Request!</Text>
-            <Text style={[styles.modalFare, { color: theme.green }]}>GHS {rideRequest?.fare ?? '0.00'}</Text>
-            <View style={styles.modalAddresses}>
-              <Text style={{ color: theme.text }}>{rideRequest?.pickup ?? 'Pickup address'}</Text>
-              <Text style={{ color: theme.textSecondary }}>{rideRequest?.dropoff ?? 'Dropoff address'}</Text>
+
+            <View style={[styles.modalRouteCard, { backgroundColor: theme.background2 }]}>
+              <Text style={[styles.modalRouteLabel, { color: theme.textSecondary }]}>PICKUP</Text>
+              <Text style={[styles.modalRouteValue, { color: theme.text }]}>{rideRequest?.pickup_address || 'Loading...'}</Text>
+
+              <View style={[styles.modalDivider, { backgroundColor: theme.border }]} />
+
+              <Text style={[styles.modalRouteLabel, { color: theme.textSecondary }]}>DROPOFF</Text>
+              <Text style={[styles.modalRouteValue, { color: theme.text }]}>{rideRequest?.dropoff_address || 'Loading...'}</Text>
+
+              {rideRequest?.stops?.length > 0 && (
+                <>
+                  <View style={[styles.modalDivider, { backgroundColor: theme.border }]} />
+                  <Text style={[styles.modalRouteLabel, { color: theme.textSecondary }]}>STOPS</Text>
+                  <Text style={[styles.modalRouteValue, { color: theme.text }]}>
+                    {rideRequest.stops.map((s: any) => s.address).join(' → ')}
+                  </Text>
+                </>
+              )}
+
+              {rideRequest?.expected_distance_km ? (
+                <>
+                  <View style={[styles.modalDivider, { backgroundColor: theme.border }]} />
+                  <Text style={[styles.modalRouteLabel, { color: theme.textSecondary }]}>DISTANCE</Text>
+                  <Text style={[styles.modalRouteValue, { color: theme.text }]}>{rideRequest.expected_distance_km} km</Text>
+                </>
+              ) : null}
+            </View>
+
+            <View style={[styles.paymentBadge, { backgroundColor: theme.greenLight }]}>
+              <Text style={[styles.paymentBadgeText, { color: theme.green }]}>
+                {rideRequest?.payment_method?.toUpperCase() === 'MOMO' ? 'GO CASH' : (rideRequest?.payment_method?.toUpperCase() || 'CASH')}
+              </Text>
             </View>
 
             <View style={styles.modalActions}>
@@ -552,9 +635,13 @@ const styles = StyleSheet.create({
   riderActionBtn: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
   modalCard: { width: '85%', borderRadius: 12, padding: 16 },
-  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 8 },
-  modalFare: { fontSize: 22, fontWeight: '800', marginBottom: 12 },
-  modalAddresses: { backgroundColor: '#fff', padding: 12, borderRadius: 8, marginBottom: 12 },
+  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 12 },
+  modalRouteCard: { padding: 14, borderRadius: 10, marginBottom: 12 },
+  modalRouteLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, marginBottom: 4 },
+  modalRouteValue: { fontSize: 14, fontWeight: '500' },
+  modalDivider: { height: 1, marginVertical: 10 },
+  paymentBadge: { alignSelf: 'flex-start', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, marginBottom: 16 },
+  paymentBadgeText: { fontSize: 12, fontWeight: '700' },
   modalActions: { flexDirection: 'row', justifyContent: 'space-between' },
   declineButton: { flex: 1, padding: 12, borderRadius: 8, backgroundColor: '#eee', alignItems: 'center', marginRight: 8 },
   acceptButton: { flex: 1, padding: 12, borderRadius: 8, alignItems: 'center' },
