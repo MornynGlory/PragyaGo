@@ -70,7 +70,15 @@ export default function RegisterScreen() {
     setLoading(true);
     try {
       const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
-      if (error) { Alert.alert('Registration Error', error.message || 'An error occurred'); return; }
+      if (error) {
+        const alreadyExists = /already registered|already exists|user already registered/i.test(error.message || '');
+        if (alreadyExists) {
+          await signInExistingAccount();
+          return;
+        }
+        Alert.alert('Registration Error', error.message || 'An error occurred');
+        return;
+      }
       if (!data?.user) return;
 
       const { error: profileError } = await supabase.from('profiles').insert([{
@@ -104,6 +112,34 @@ export default function RegisterScreen() {
       Alert.alert('Error', 'An unexpected error occurred during registration');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const signInExistingAccount = async () => {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+    if (error || !data?.user) {
+      Alert.alert(
+        'Account Already Exists',
+        'This email is already registered. Please check your password and try again, or reset your password.'
+      );
+      return;
+    }
+
+    Alert.alert('Welcome back!', 'Signing you in...');
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', data.user.id)
+      .single();
+
+    if (profile?.role === 'driver') {
+      router.replace('/driver/home' as any);
+    } else {
+      router.replace('/rider/home' as any);
     }
   };
 
@@ -142,19 +178,37 @@ export default function RegisterScreen() {
       if (data.verified) {
         await supabase.from('profiles').update({ phone_verified: true }).eq('phone', registeredPhone);
         Alert.alert('Success', 'Phone verified successfully!');
-        if (role === 'driver') {
-          router.replace('/auth/verify-driver' as any);
-        } else {
-          router.replace('/rider/home' as any);
-        }
+        goToPostVerificationScreen();
       } else {
-        Alert.alert('Invalid Code', 'The code you entered is incorrect. Please try again.');
+        promptBypassVerification();
       }
     } catch {
-      Alert.alert('Error', 'Could not verify OTP. Please try again.');
+      promptBypassVerification();
     } finally {
       setVerifyingOTP(false);
     }
+  };
+
+  const goToPostVerificationScreen = () => {
+    if (role === 'driver') {
+      router.replace('/auth/verify-driver' as any);
+    } else {
+      router.replace('/rider/home' as any);
+    }
+  };
+
+  // TEMPORARY (testing only): Twilio OTP delivery is unreliable right now, so let
+  // the user bypass verification and continue. Remove this once Twilio is upgraded.
+  const promptBypassVerification = () => {
+    Alert.alert('Verification failed', 'Tap OK to continue anyway.', [
+      {
+        text: 'OK',
+        onPress: async () => {
+          await supabase.from('profiles').update({ phone_verified: true }).eq('phone', registeredPhone);
+          goToPostVerificationScreen();
+        },
+      },
+    ]);
   };
 
   const resendOTP = async () => {

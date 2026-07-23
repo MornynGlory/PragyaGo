@@ -181,7 +181,7 @@ export default function RiderHomeScreen() {
           if (zoneId) initZoneData(zoneId);
         });
     });
-    const interval = setInterval(fetchNearbyDrivers, 10000);
+    const interval = setInterval(fetchNearbyDrivers, 5000);
     return () => {
       clearInterval(interval);
       if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
@@ -191,6 +191,41 @@ export default function RiderHomeScreen() {
       if (stopDebounceRef.current) clearTimeout(stopDebounceRef.current);
       if (pickupDebounceRef.current) clearTimeout(pickupDebounceRef.current);
     };
+  }, []);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('driver-locations')
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'drivers',
+        filter: 'is_online=eq.true'
+      }, (payload) => {
+        const updated = payload.new as any;
+        if (updated.current_lat && updated.current_lng) {
+          setNearbyDrivers(prev => {
+            const exists = prev.find(d => d.id === updated.id);
+            if (exists) {
+              return prev.map(d => d.id === updated.id ? {
+                ...d,
+                current_lat: updated.current_lat,
+                current_lng: updated.current_lng
+              } : d);
+            } else if (updated.is_online) {
+              return [...prev, updated];
+            }
+            return prev;
+          });
+        }
+        // Remove driver if they go offline
+        if (!updated.is_online) {
+          setNearbyDrivers(prev => prev.filter(d => d.id !== updated.id));
+        }
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   const requestLocationPermission = async () => {
@@ -214,7 +249,13 @@ export default function RiderHomeScreen() {
 
   const fetchNearbyDrivers = async () => {
     try {
-      const { data: drivers } = await supabase.from('drivers').select('current_lat, current_lng, id').eq('is_online', true).not('current_lat', 'is', null);
+      const { data: drivers } = await supabase
+        .from('drivers')
+        .select('id, current_lat, current_lng')
+        .eq('is_online', true)
+        .not('current_lat', 'is', null)
+        .not('current_lng', 'is', null);
+      console.log('Nearby drivers fetched:', JSON.stringify(drivers));
       if (drivers) setNearbyDrivers(drivers);
     } catch (error) { console.error(error); }
   };
@@ -839,20 +880,26 @@ export default function RiderHomeScreen() {
             {nearbyDrivers.map((driver) => (
               <Marker
                 key={driver.id}
-                coordinate={{ latitude: driver.current_lat, longitude: driver.current_lng }}
+                coordinate={{
+                  latitude: parseFloat(driver.current_lat),
+                  longitude: parseFloat(driver.current_lng),
+                }}
                 anchor={{ x: 0.5, y: 0.5 }}
                 tracksViewChanges={false}
               >
                 <View style={{
-                  width: 36, height: 36, borderRadius: 18,
+                  width: 44, height: 44, borderRadius: 22,
                   backgroundColor: '#1D9E75',
-                  borderWidth: 2,
+                  borderWidth: 2.5,
                   borderColor: 'white',
                   justifyContent: 'center',
                   alignItems: 'center',
-                  elevation: 4,
+                  elevation: 6,
+                  shadowColor: '#1D9E75',
+                  shadowOpacity: 0.4,
+                  shadowRadius: 6,
                 }}>
-                  <Text style={{ fontSize: 18 }}>🛺</Text>
+                  <Text style={{ fontSize: 22 }}>🛺</Text>
                 </View>
               </Marker>
             ))}
@@ -1014,6 +1061,7 @@ export default function RiderHomeScreen() {
             scrollEnabled={true}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingBottom: 20 }}
           >
           <Text style={styles.panelTitle}>Where do you want to go?</Text>
           <Text style={styles.driversCount}>

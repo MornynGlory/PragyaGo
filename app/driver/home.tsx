@@ -48,6 +48,7 @@ export default function DriverHome() {
   const [vehicleVerified, setVehicleVerified] = useState<boolean | null>(null)
   const [unreadCount, setUnreadCount] = useState<number>(0)
   const [isOnline, setIsOnline] = useState<boolean>(false)
+  console.log('Driver home rendered, isOnline:', isOnline)
   const [activeRide, setActiveRide] = useState<any>(null)
   const [rideStatus, setRideStatus] = useState('')
   const [riderInfo, setRiderInfo] = useState<any>(null)
@@ -100,9 +101,7 @@ export default function DriverHome() {
       if (driverRecord) {
         const dbCommission = driverRecord.commission_owed ?? 0
         setCommissionOwed(dbCommission)
-        if (dbCommission > 0) {
-          setShowCommissionModal(true)
-        }
+        setShowCommissionModal(dbCommission > 0)
         setVehicleVerified(!!driverRecord.vehicle_verified)
 
         const { data: activeRideData } = await supabase
@@ -175,12 +174,44 @@ export default function DriverHome() {
     }
   }
 
-  function toggleOnline() {
+  async function toggleOnline() {
     if (vehicleVerified === false) {
       Alert.alert('Verification Required', 'Complete vehicle verification first')
       return
     }
-    setIsOnline((v) => !v)
+
+    const newStatus = !isOnline
+
+    const { data: { user } } = await supabase.auth.getUser()
+    console.log('User ID:', user?.id)
+    if (!user) return
+
+    const { data: driver, error: driverError } = await supabase
+      .from('drivers')
+      .select('id')
+      .eq('profile_id', user.id)
+      .single()
+
+    console.log('Driver found:', JSON.stringify(driver))
+    console.log('Driver error:', JSON.stringify(driverError))
+    if (!driver) return
+
+    const { error: updateError } = await supabase
+      .from('drivers')
+      .update({
+        is_online: newStatus,
+        current_lat: userLat,
+        current_lng: userLng,
+      })
+      .eq('id', driver.id)
+
+    console.log('Update error:', JSON.stringify(updateError))
+    if (updateError) {
+      Alert.alert('Error', 'Could not update online status. Please try again.')
+      return
+    }
+
+    setIsOnline(newStatus)
   }
   function acceptRide() { setRideRequest(null) }
   function declineRide() { setRideRequest(null) }
@@ -315,7 +346,10 @@ export default function DriverHome() {
                 { backgroundColor: isOnline ? '#d9534f' : theme.green },
                 vehicleVerified === false && styles.fullButtonDisabled,
               ]}
-              onPress={toggleOnline}
+              onPress={() => {
+                console.log('Go Online button tapped!')
+                toggleOnline()
+              }}
             >
               <Text style={styles.fullButtonText}>{isOnline ? 'Go Offline' : 'Go Online'}</Text>
             </TouchableOpacity>
