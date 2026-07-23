@@ -1,5 +1,5 @@
-import { supabase } from '@/lib/supabase';
 import { MoMoProvider, PROVIDER_COLORS, PROVIDER_LABELS } from '@/lib/paystack';
+import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/theme';
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -15,8 +15,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { PaystackProvider, usePaystack } from 'react-native-paystack-webview';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const COMMISSION_RATE = 0.15;
 const PAYSTACK_PUBLIC_KEY = process.env.EXPO_PUBLIC_PAYSTACK_PUBLIC_KEY ?? '';

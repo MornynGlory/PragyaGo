@@ -37,7 +37,9 @@ export default function DriverHome() {
   const router = useRouter()
   const mapRef = useRef<MapView>(null)
   const rideRequestChannelRef = useRef<any>(null)
+  const driverRideUpdatesChannelRef = useRef<any>(null)
   const activeRideRef = useRef<any>(null)
+  const driverIdRef = useRef<string | null>(null)
 
   const [driverName, setDriverName] = useState('Driver')
   const [userLat, setUserLat] = useState<number | null>(null)
@@ -64,6 +66,7 @@ export default function DriverHome() {
     requestLocationPermission()
     return () => {
       if (rideRequestChannelRef.current) supabase.removeChannel(rideRequestChannelRef.current)
+      if (driverRideUpdatesChannelRef.current) supabase.removeChannel(driverRideUpdatesChannelRef.current)
     }
   }, [])
 
@@ -111,6 +114,7 @@ export default function DriverHome() {
         .eq('profile_id', user.id)
         .single()
       if (driverRecord) {
+        driverIdRef.current = driverRecord.id
         const dbCommission = driverRecord.commission_owed ?? 0
         setCommissionOwed(dbCommission)
         setShowCommissionModal(dbCommission > 0)
@@ -238,6 +242,10 @@ export default function DriverHome() {
         supabase.removeChannel(rideRequestChannelRef.current)
         rideRequestChannelRef.current = null
       }
+      if (driverRideUpdatesChannelRef.current) {
+        supabase.removeChannel(driverRideUpdatesChannelRef.current)
+        driverRideUpdatesChannelRef.current = null
+      }
     }
 
     setIsOnline(newStatus)
@@ -265,9 +273,61 @@ export default function DriverHome() {
         console.log('Driver subscription status:', status)
       })
     rideRequestChannelRef.current = channel
+
+    if (driverRideUpdatesChannelRef.current) {
+      await supabase.removeChannel(driverRideUpdatesChannelRef.current)
+    }
+    const driverRideChannel = supabase
+      .channel(`driver-ride-updates-${driverId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'rides',
+        filter: `driver_id=eq.${driverId}`
+      }, (payload) => {
+        console.log('Driver ride update:', JSON.stringify(payload.new))
+        const ride = payload.new as any
+        setActiveRide(ride)
+        setRideStatus(ride.status)
+
+        if (ride.status === 'completed') {
+          setActiveRide(null)
+          setRideStatus('')
+          setEarnings(prev => prev + (ride.final_fare_ghs || ride.fare_ghs))
+          setRidesCount(prev => prev + 1)
+          Alert.alert('Ride Complete!', `GHS ${ride.final_fare_ghs || ride.fare_ghs} earned!`)
+        }
+        if (ride.status === 'cancelled') {
+          setActiveRide(null)
+          setRideStatus('')
+          Alert.alert('Ride Cancelled', 'The rider cancelled the ride.')
+        }
+      })
+      .subscribe()
+    driverRideUpdatesChannelRef.current = driverRideChannel
   }
 
-  function acceptRide() { setRideRequest(null) }
+  async function acceptRide() {
+    if (!rideRequest) return
+    console.log('Accepting ride:', rideRequest?.id)
+    console.log('Driver ID for accept:', driverIdRef.current)
+    if (!driverIdRef.current) return
+
+    const { error } = await supabase
+      .from('rides')
+      .update({ status: 'accepted', driver_id: driverIdRef.current })
+      .eq('id', rideRequest.id)
+
+    console.log('Accept update error:', JSON.stringify(error))
+    if (error) {
+      Alert.alert('Error', 'Could not accept ride. Please try again.')
+      return
+    }
+
+    setActiveRide(rideRequest)
+    setRideStatus('accepted')
+    setRideRequest(null)
+  }
   function declineRide() { setRideRequest(null) }
   function arrivePickup() {}
   function completeRide() {}

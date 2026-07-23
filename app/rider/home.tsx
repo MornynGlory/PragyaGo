@@ -1276,22 +1276,6 @@ export default function RiderHomeScreen() {
         </View>
       ) : null}
 
-      {/* Floating chat button — shown during active ride */}
-      {currentRide && ['accepted', 'arrived_pickup', 'in_progress', 'payment_pending'].includes(rideStatus) ? (
-        <TouchableOpacity
-          style={[styles.chatFab, { backgroundColor: theme.green }]}
-          onPress={() => { setChatUnreadCount(0); router.push(`/chat/${currentRide.id}` as any); }}
-          activeOpacity={0.85}
-        >
-          <Feather name="message-circle" size={24} color="#fff" />
-          {chatUnreadCount > 0 && (
-            <View style={styles.chatFabBadge}>
-              <Text style={styles.chatFabBadgeText}>{chatUnreadCount}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      ) : null}
-
       {/* Fare Accept Modal */}
       <Modal visible={showFareAcceptModal} transparent animationType="slide">
         <View style={[styles.modalOverlay, { paddingTop: insets.top }]}>
@@ -1623,8 +1607,5 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   locateMeBtn: { position: 'absolute', right: 16, bottom: 16, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 6 },
   bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },
   bellBadgeText: { color: '#fff', fontSize: 9, fontWeight: 'bold' },
-  chatFab: { position: 'absolute', right: 16, bottom: 100, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 6, elevation: 8, zIndex: 20 },
-  chatFabBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 10, minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
-  chatFabBadgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
   });
 }
