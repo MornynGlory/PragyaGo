@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   Alert,
   View,
@@ -8,13 +8,17 @@ import {
   TouchableOpacity,
   Modal,
   Pressable,
+  ScrollView,
 } from 'react-native'
 import { useFocusEffect, useRouter } from 'expo-router'
 import * as Location from 'expo-location'
 import MapView, { Marker } from 'react-native-maps'
+import MapViewDirections from 'react-native-maps-directions'
 import { Feather } from '@expo/vector-icons'
 import { useTheme } from '@/lib/theme'
 import { supabase } from '@/lib/supabase'
+
+const GOOGLE_API_KEY = (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k') ?? ''
 
 const customMapStyle = [
   { elementType: 'geometry', stylers: [{ color: '#f0ede6' }] },
@@ -35,11 +39,13 @@ const customMapStyle = [
 export default function DriverHome() {
   const theme = useTheme()
   const router = useRouter()
+  const insets = useSafeAreaInsets()
   const mapRef = useRef<MapView>(null)
   const rideRequestChannelRef = useRef<any>(null)
   const driverRideUpdatesChannelRef = useRef<any>(null)
   const activeRideRef = useRef<any>(null)
   const driverIdRef = useRef<string | null>(null)
+  const locationIntervalRef = useRef<any>(null)
 
   const [driverName, setDriverName] = useState('Driver')
   const [userLat, setUserLat] = useState<number | null>(null)
@@ -67,6 +73,10 @@ export default function DriverHome() {
     return () => {
       if (rideRequestChannelRef.current) supabase.removeChannel(rideRequestChannelRef.current)
       if (driverRideUpdatesChannelRef.current) supabase.removeChannel(driverRideUpdatesChannelRef.current)
+      if (locationIntervalRef.current) {
+        clearInterval(locationIntervalRef.current)
+        locationIntervalRef.current = null
+      }
     }
   }, [])
 
@@ -236,6 +246,31 @@ export default function DriverHome() {
     if (newStatus) {
       console.log('Going online, subscribing to ride requests...')
       await subscribeToRideRequests(driver.id)
+
+      if (locationIntervalRef.current) clearInterval(locationIntervalRef.current)
+      locationIntervalRef.current = setInterval(async () => {
+        try {
+          const loc = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.High
+          })
+          const { latitude, longitude } = loc.coords
+          setUserLat(latitude)
+          setUserLng(longitude)
+
+          await supabase
+            .from('drivers')
+            .update({
+              current_lat: latitude,
+              current_lng: longitude
+            })
+            .eq('id', driverIdRef.current)
+
+          console.log('Driver location updated:', latitude, longitude)
+        } catch (e) {
+          console.log('Location update error:', e)
+        }
+      }, 5000)
+
       Alert.alert('You are Online!', 'You will now receive ride requests.')
     } else {
       if (rideRequestChannelRef.current) {
@@ -245,6 +280,10 @@ export default function DriverHome() {
       if (driverRideUpdatesChannelRef.current) {
         supabase.removeChannel(driverRideUpdatesChannelRef.current)
         driverRideUpdatesChannelRef.current = null
+      }
+      if (locationIntervalRef.current) {
+        clearInterval(locationIntervalRef.current)
+        locationIntervalRef.current = null
       }
     }
 
@@ -300,7 +339,8 @@ export default function DriverHome() {
         if (ride.status === 'cancelled') {
           setActiveRide(null)
           setRideStatus('')
-          Alert.alert('Ride Cancelled', 'The rider cancelled the ride.')
+          setRideRequest(null)
+          Alert.alert('Ride Cancelled', 'The rider has cancelled this ride.')
         }
       })
       .subscribe()
@@ -329,11 +369,38 @@ export default function DriverHome() {
     setRideRequest(null)
   }
   function declineRide() { setRideRequest(null) }
-  function arrivePickup() {}
+  async function handleArrived() {
+    if (!activeRide) return
+    try {
+      const { error } = await supabase
+        .from('rides')
+        .update({ status: 'arrived_pickup' })
+        .eq('id', activeRide.id)
+
+      console.log('Arrived update error:', JSON.stringify(error))
+
+      if (!error) {
+        setRideStatus('arrived_pickup')
+        Alert.alert('Arrived!', 'You have arrived at the pickup location. Waiting for rider.')
+      } else {
+        Alert.alert('Error', 'Could not update status. Please try again.')
+      }
+    } catch (e) {
+      console.log('Arrived error:', e)
+      Alert.alert('Error', 'Something went wrong. Please try again.')
+    }
+  }
   function completeRide() {}
 
   const riderInitials = (riderInfo?.full_name || '')
     .split(' ').map((n: string) => n[0]).filter(Boolean).join('').toUpperCase().slice(0, 2) || '?'
+
+  const targetLat = activeRide
+    ? (rideStatus === 'in_progress' ? parseFloat(activeRide.dropoff_lat) : parseFloat(activeRide.pickup_lat)) || 7.3349
+    : 7.3349
+  const targetLng = activeRide
+    ? (rideStatus === 'in_progress' ? parseFloat(activeRide.dropoff_lng) : parseFloat(activeRide.pickup_lng)) || -2.3123
+    : -2.3123
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -409,6 +476,46 @@ export default function DriverHome() {
               <Text style={{ fontSize: 24 }}>🛺</Text>
             </View>
           </Marker>
+
+          {activeRide ? (
+            <Marker
+              coordinate={{
+                latitude: targetLat,
+                longitude: targetLng,
+              }}
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <View style={{
+                width: 44, height: 44, borderRadius: 22,
+                backgroundColor: '#185FA5',
+                borderWidth: 2.5, borderColor: 'white',
+                justifyContent: 'center', alignItems: 'center',
+                elevation: 6,
+              }}>
+                <Feather name="user" size={20} color="white" />
+              </View>
+            </Marker>
+          ) : null}
+
+          {activeRide && userLat != null && userLng != null ? (
+            <MapViewDirections
+              origin={{
+                latitude: userLat,
+                longitude: userLng,
+              }}
+              destination={{
+                latitude: targetLat,
+                longitude: targetLng,
+              }}
+              apikey={GOOGLE_API_KEY}
+              strokeWidth={4}
+              strokeColor="#1D9E75"
+              onReady={(result) => {
+                console.log('Distance:', result.distance)
+                console.log('Duration:', result.duration)
+              }}
+            />
+          ) : null}
         </MapView>
         {userLat != null && userLng != null ? (
           <TouchableOpacity
@@ -427,22 +534,7 @@ export default function DriverHome() {
         ) : null}
       </View>
 
-      {activeRide && rideStatus !== 'payment_pending' ? (
-        <TouchableOpacity
-          style={[styles.chatFab, { backgroundColor: theme.green }]}
-          onPress={() => { setChatUnreadCount(0); router.push(`/chat/${activeRide.id}` as any) }}
-          activeOpacity={0.85}
-        >
-          <Feather name="message-circle" size={24} color="#fff" />
-          {chatUnreadCount > 0 && (
-            <View style={styles.chatFabBadge}>
-              <Text style={styles.chatFabBadgeText}>{chatUnreadCount}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      ) : null}
-
-      <View style={[styles.bottomSheet, { backgroundColor: theme.card, borderColor: theme.border }]}>
+      <View style={[styles.bottomSheet, { backgroundColor: theme.card, borderColor: theme.border, paddingBottom: Math.max(insets.bottom, 16) }]}>
         {vehicleVerified === false ? (
           <View style={styles.vehicleBanner}>
             <Feather name="alert-circle" size={20} color="#B45309" />
@@ -469,7 +561,7 @@ export default function DriverHome() {
             </TouchableOpacity>
           </View>
         ) : (
-          <View>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
             <View style={styles.rowBetween}>
               <Text style={[styles.rideStatus, { color: theme.text }]}>{getStatusLabel()}</Text>
               <View style={styles.fareBadge}><Text style={{ color: '#fff' }}>GHS {activeRide.fare ?? '0.00'}</Text></View>
@@ -498,15 +590,25 @@ export default function DriverHome() {
               </View>
             ) : null}
 
-            <View style={styles.rideRow}><Feather name="map-pin" size={18} color={theme.textSecondary} /><Text style={[styles.rideText, { color: theme.text }]}>{activeRide.pickup ?? 'Pickup address'}</Text></View>
-            <View style={styles.rideRow}><Feather name="flag" size={18} color={theme.textSecondary} /><Text style={[styles.rideText, { color: theme.text }]}>{activeRide.dropoff ?? 'Dropoff address'}</Text></View>
+            <View style={styles.rideRow}>
+              <Feather name="map-pin" size={18} color={theme.textSecondary} />
+              <Text style={[styles.rideText, { color: theme.text }]} numberOfLines={2}>
+                {activeRide.pickup_address === 'Current Location'
+                  ? 'Near ' + (activeRide.dropoff_address?.split(',')[1]?.trim() || activeRide.pickup_address)
+                  : (activeRide.pickup_address || 'Pickup address')}
+              </Text>
+            </View>
+            <View style={styles.rideRow}>
+              <Feather name="flag" size={18} color={theme.textSecondary} />
+              <Text style={[styles.rideText, { color: theme.text }]} numberOfLines={2}>{activeRide.dropoff_address || 'Dropoff address'}</Text>
+            </View>
 
-            <TouchableOpacity style={styles.fullButton} onPress={arrivePickup}><Text style={styles.fullButtonText}>Arrived</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.fullButton} onPress={handleArrived}><Text style={styles.fullButtonText}>Arrived</Text></TouchableOpacity>
 
             {activeRide.status === 'in_progress' && (
               <TouchableOpacity style={[styles.outlinedButton, { borderColor: '#d9534f' }]}><Text style={{ color: '#d9534f' }}>Report Breakdown</Text></TouchableOpacity>
             )}
-          </View>
+          </ScrollView>
         )}
       </View>
 
@@ -670,7 +772,10 @@ const styles = StyleSheet.create({
   mapContainer: { flex: 1 },
   map: { flex: 1 },
   locateMeBtn: { position: 'absolute', right: 16, bottom: 16, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 6 },
-  bottomSheet: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 16, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  bottomSheet: {
+    paddingHorizontal: 20, paddingTop: 16, paddingBottom: 16, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.1, shadowRadius: 12,
+  },
   fullButton: { width: '100%', paddingVertical: 14, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1D9E75', marginBottom: 12 },
   fullButtonDisabled: { opacity: 0.5 },
   fullButtonText: { color: '#fff', fontWeight: '700' },
@@ -705,7 +810,4 @@ const styles = StyleSheet.create({
   modalActions: { flexDirection: 'row', justifyContent: 'space-between' },
   declineButton: { flex: 1, padding: 12, borderRadius: 8, backgroundColor: '#eee', alignItems: 'center', marginRight: 8 },
   acceptButton: { flex: 1, padding: 12, borderRadius: 8, alignItems: 'center' },
-  chatFab: { position: 'absolute', right: 16, bottom: 140, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 6, elevation: 8, zIndex: 20 },
-  chatFabBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 10, minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
-  chatFabBadgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
 })

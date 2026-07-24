@@ -15,7 +15,7 @@ export default function DriverLayout() {
           borderTopColor: theme.tabBarBorder,
           borderTopWidth: 0.5,
           height: 60 + insets.bottom,
-          paddingBottom: insets.bottom + 6,
+          paddingBottom: insets.bottom + 4,
           paddingTop: 8,
           elevation: 0,
         },

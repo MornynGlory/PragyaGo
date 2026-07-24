@@ -1,3 +1,6 @@
+// Run in Supabase SQL:
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by TEXT;
+
 import { applyDiscount, DiscountResult, recordDiscountUse } from '@/lib/discounts';
 import { useTheme } from '@/lib/theme';
 import { calculateZoneFare, FareResult, getFareSuggestions } from '@/lib/fares';
@@ -29,6 +32,21 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 const GOOGLE_API_KEY = (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k') ?? '';
 
+const reverseGeocode = async (lat: number, lng: number): Promise<string> => {
+  try {
+    const response = await fetch(
+      `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_API_KEY}`
+    );
+    const data = await response.json();
+    if (data.results && data.results.length > 0) {
+      return data.results[0].formatted_address;
+    }
+    return 'Current Location';
+  } catch (e) {
+    return 'Current Location';
+  }
+};
+
 function decodePolyline(encoded: string): { latitude: number; longitude: number }[] {
   const points: { latitude: number; longitude: number }[] = [];
   let index = 0, lat = 0, lng = 0;
@@ -58,6 +76,15 @@ const customMapStyle = [
   { featureType: 'administrative', elementType: 'labels', stylers: [{ visibility: 'on' }] },
   { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'on' }] },
   { featureType: 'road', elementType: 'labels', stylers: [{ visibility: 'on' }] },
+];
+
+const CANCEL_REASONS = [
+  'Driver is taking too long',
+  'I ordered by mistake',
+  'Change of plans',
+  'Driver asked me to cancel',
+  'Found another ride',
+  'Other reason',
 ];
 
 const PRAGYA_COLOR_MAP: { [key: string]: string } = {
@@ -111,6 +138,10 @@ export default function RiderHomeScreen() {
   const [riderConfirmedPayment, setRiderConfirmedPayment] = useState(false);
   const [finalFare, setFinalFare] = useState<number | null>(null);
   const [showFareAcceptModal, setShowFareAcceptModal] = useState(false);
+  const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [otherCancelReason, setOtherCancelReason] = useState('');
+  const [cancellingRide, setCancellingRide] = useState(false);
   const rideSubscription = useRef<any>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const driverLocationSubscription = useRef<any>(null);
@@ -712,18 +743,30 @@ export default function RiderHomeScreen() {
     if (!destination.trim()) { Alert.alert('Enter Destination', 'Please enter your final destination.'); return; }
     if (!location) { Alert.alert('Location Error', 'Could not get your location.'); return; }
     if (!fareEstimate) { Alert.alert('Estimate Fare', 'Please estimate fare first.'); return; }
+    if (selectedDestCoords && userLat != null && userLng != null) {
+      const distanceDiff = Math.abs(selectedDestCoords.lat - userLat) + Math.abs(selectedDestCoords.lng - userLng);
+      if (distanceDiff < 0.001) {
+        Alert.alert('Invalid destination', 'Your destination cannot be the same as your current location.');
+        return;
+      }
+    }
     setRequesting(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { Alert.alert('Error', 'Please login first.'); setRequesting(false); return; }
       const allStops = stops.map((stop, index) => ({ order: index + 1, address: stop, completed: false }));
+      const resolvedPickupLat = pickupLat ?? location.latitude;
+      const resolvedPickupLng = pickupLng ?? location.longitude;
+      const pickupAddress = pickupLocation === 'My Current Location'
+        ? await reverseGeocode(resolvedPickupLat, resolvedPickupLng)
+        : pickupLocation;
       const { data: ride, error } = await supabase
         .from('rides')
         .insert([{
           rider_id: user.id,
-          pickup_lat: pickupLat ?? location.latitude,
-          pickup_lng: pickupLng ?? location.longitude,
-          pickup_address: pickupLat ? pickupLocation : 'Current Location',
+          pickup_lat: resolvedPickupLat,
+          pickup_lng: resolvedPickupLng,
+          pickup_address: pickupAddress,
           dropoff_lat: selectedDestCoords?.lat ?? location.latitude + 0.01,
           dropoff_lng: selectedDestCoords?.lng ?? location.longitude + 0.01,
           dropoff_address: destination,
@@ -767,16 +810,51 @@ export default function RiderHomeScreen() {
     finally { setRequesting(false); }
   };
 
-  const cancelRide = async () => {
+  const handleCancelRide = () => {
+    setShowCancelReasonModal(true);
+  };
+
+  const cancelRide = async (reason: string) => {
     if (!currentRide) return;
-    await supabase.from('rides').update({ status: 'cancelled' }).eq('id', currentRide.id);
+    setCancellingRide(true);
+    const { data, error } = await supabase
+      .from('rides')
+      .update({ status: 'cancelled', cancellation_reason: reason, cancelled_by: 'rider' })
+      .eq('id', currentRide.id)
+      .select();
+
+    console.log('Cancel update error:', JSON.stringify(error));
+    console.log('Cancel update data:', JSON.stringify(data));
     setCurrentRide(null); setRideStatus(''); setDriverInfo(null);
     setShowDriverCard(false); setEta(null); setFinalFare(null);
     if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
     if (driverLocationSubscription.current) { await supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
     if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
     stopDriverTracking();
+    setCancellingRide(false);
+    setShowCancelReasonModal(false);
+    setCancelReason('');
+    setOtherCancelReason('');
     Alert.alert('Ride Cancelled', 'Your ride has been cancelled.');
+  };
+
+  const confirmCancelRide = () => {
+    console.log('Confirming cancellation...');
+    console.log('Active ride ID:', currentRide?.id);
+    console.log('Cancel reason:', cancelReason);
+    console.log('Custom reason:', otherCancelReason);
+
+    if (!currentRide?.id) {
+      Alert.alert('Error', 'No active ride found');
+      return;
+    }
+    if (!cancelReason) { Alert.alert('Select a reason', 'Please choose why you are cancelling.'); return; }
+    if (cancelReason === 'Other reason' && !otherCancelReason.trim()) {
+      Alert.alert('Enter a reason', 'Please describe your reason for cancelling.');
+      return;
+    }
+    const finalReason = cancelReason === 'Other reason' ? otherCancelReason.trim() : cancelReason;
+    cancelRide(finalReason);
   };
 
   const submitRating = async () => {
@@ -862,6 +940,49 @@ export default function RiderHomeScreen() {
             </View>
           ) : null}
         </TouchableOpacity>
+
+        {currentRide && eta && ['accepted', 'arrived_pickup', 'in_progress'].includes(rideStatus) ? (
+          <View style={{
+            position: 'absolute',
+            top: 64,
+            left: 16,
+            right: 16,
+            zIndex: 15,
+            backgroundColor: theme.card,
+            borderRadius: 14,
+            padding: 14,
+            flexDirection: 'row',
+            alignItems: 'center',
+            elevation: 8,
+            shadowColor: '#000',
+            shadowOpacity: 0.15,
+            shadowRadius: 8,
+          }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 13, color: theme.textSecondary }}>
+                {rideStatus === 'accepted' ? 'Driver arriving in' :
+                 rideStatus === 'arrived_pickup' ? 'Driver is waiting' :
+                 'Ride in progress'}
+              </Text>
+              <Text style={{ fontSize: 22, fontWeight: '800', color: theme.text }}>
+                {rideStatus === 'arrived_pickup' ? 'Board your Pragya' : eta}
+              </Text>
+              {routeDistance && rideStatus === 'accepted' ? (
+                <Text style={{ fontSize: 13, color: theme.textSecondary, marginTop: 2 }}>
+                  {routeDistance} away
+                </Text>
+              ) : null}
+            </View>
+            <View style={{
+              width: 48, height: 48, borderRadius: 24,
+              backgroundColor: theme.green,
+              justifyContent: 'center', alignItems: 'center',
+            }}>
+              <Text style={{ fontSize: 24 }}>🛺</Text>
+            </View>
+          </View>
+        ) : null}
+
         {loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#2563eb" />
@@ -990,7 +1111,24 @@ export default function RiderHomeScreen() {
         </View>
       )}
 
-      {currentRide && driverInfo && ['accepted', 'arrived_pickup', 'in_progress'].includes(rideStatus) ? (
+      {currentRide ? (
+        <View
+          style={{
+            backgroundColor: theme.card,
+            borderTopLeftRadius: 24,
+            borderTopRightRadius: 24,
+            paddingHorizontal: 20,
+            paddingTop: 16,
+            paddingBottom: Math.max(insets.bottom, 16),
+            elevation: 8,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: -4 },
+            shadowOpacity: 0.1,
+            shadowRadius: 12,
+          }}
+        >
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
+          {driverInfo && ['accepted', 'arrived_pickup', 'in_progress'].includes(rideStatus) ? (
         <View style={styles.driverInlineCard}>
           <View style={styles.driverInlineTopRow}>
             <View style={styles.driverInlineAvatar}>
@@ -1031,7 +1169,6 @@ export default function RiderHomeScreen() {
         </View>
       ) : null}
 
-      {currentRide ? (
         <View style={styles.rideStatusBanner}>
           <Text style={styles.rideStatusText}>{getRideStatusLabel()}</Text>
           <Text style={styles.rideStatusSub}>To: {currentRide.dropoff_address}</Text>
@@ -1046,7 +1183,7 @@ export default function RiderHomeScreen() {
           </View>
           <View style={styles.rideActions}>
             {rideStatus === 'requested' ? (
-              <TouchableOpacity style={styles.cancelButton} onPress={cancelRide}>
+              <TouchableOpacity style={styles.cancelButton} onPress={() => setShowCancelReasonModal(true)}>
                 <Text style={styles.cancelButtonText}>Cancel Ride</Text>
               </TouchableOpacity>
             ) : null}
@@ -1063,6 +1200,26 @@ export default function RiderHomeScreen() {
               </TouchableOpacity>
             ) : null}
           </View>
+
+          {rideStatus === 'accepted' || rideStatus === 'arrived_pickup' ? (
+            <TouchableOpacity
+              onPress={handleCancelRide}
+              style={{
+                borderWidth: 1,
+                borderColor: theme.red,
+                borderRadius: 12,
+                paddingVertical: 12,
+                alignItems: 'center',
+                marginTop: 8,
+              }}
+            >
+              <Text style={{ color: theme.red, fontSize: 15, fontWeight: '600' }}>
+                Cancel Ride
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+          </ScrollView>
         </View>
       ) : null}
 
@@ -1074,7 +1231,7 @@ export default function RiderHomeScreen() {
             borderTopRightRadius: keyboardVisible ? 0 : 24,
             paddingHorizontal: 20,
             paddingTop: 16,
-            paddingBottom: 16,
+            paddingBottom: Math.max(insets.bottom, 16),
             flex: keyboardVisible ? 1 : undefined,
             elevation: 8,
           }}
@@ -1276,6 +1433,55 @@ export default function RiderHomeScreen() {
         </View>
       ) : null}
 
+      {/* Cancellation Reason Modal */}
+      <Modal visible={showCancelReasonModal} transparent animationType="slide">
+        <View style={[styles.modalOverlay, { paddingTop: insets.top }]}>
+          <View style={[styles.cancelReasonCard, { paddingBottom: insets.bottom + 16 }]}>
+            <Text style={styles.cancelReasonTitle}>Why are you cancelling?</Text>
+            {CANCEL_REASONS.map((reason) => (
+              <TouchableOpacity
+                key={reason}
+                style={styles.cancelReasonRow}
+                onPress={() => setCancelReason(reason)}
+              >
+                <View style={[styles.radioOuter, cancelReason === reason && styles.radioOuterActive]}>
+                  {cancelReason === reason ? <View style={styles.radioInner} /> : null}
+                </View>
+                <Text style={styles.cancelReasonText}>{reason}</Text>
+              </TouchableOpacity>
+            ))}
+            {cancelReason === 'Other reason' ? (
+              <TextInput
+                style={styles.cancelReasonInput}
+                placeholder="Please describe your reason..."
+                placeholderTextColor={theme.placeholder}
+                value={otherCancelReason}
+                onChangeText={setOtherCancelReason}
+                multiline
+              />
+            ) : null}
+            <View style={styles.cancelReasonActions}>
+              <TouchableOpacity
+                style={styles.cancelReasonCancelBtn}
+                onPress={() => { setShowCancelReasonModal(false); setCancelReason(''); setOtherCancelReason(''); }}
+                disabled={cancellingRide}
+              >
+                <Text style={styles.cancelReasonCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.cancelReasonConfirmBtn, cancellingRide && styles.buttonDisabled]}
+                onPress={confirmCancelRide}
+                disabled={cancellingRide}
+              >
+                {cancellingRide
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={styles.cancelReasonConfirmBtnText}>Confirm Cancellation</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Fare Accept Modal */}
       <Modal visible={showFareAcceptModal} transparent animationType="slide">
         <View style={[styles.modalOverlay, { paddingTop: insets.top }]}>
@@ -1419,8 +1625,8 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   map: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: 14, color: c.textSecondary },
-  rideStatusBanner: { backgroundColor: '#185FA5', padding: 16, margin: 10, borderRadius: 10 },
-  driverInlineCard: { backgroundColor: c.card, borderLeftWidth: 4, borderLeftColor: c.green, borderRadius: 16, padding: 16, marginHorizontal: 10, marginTop: 10 },
+  rideStatusBanner: { backgroundColor: '#185FA5', padding: 16, borderRadius: 10 },
+  driverInlineCard: { backgroundColor: c.card, borderLeftWidth: 4, borderLeftColor: c.green, borderRadius: 16, padding: 16, marginBottom: 12 },
   driverInlineTopRow: { flexDirection: 'row', alignItems: 'center' },
   driverInlineAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: c.green, justifyContent: 'center', alignItems: 'center' },
   driverInlineAvatarText: { fontSize: 16, fontWeight: '700', color: '#fff' },
@@ -1516,6 +1722,19 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   requestButtonText: { color: 'white', fontSize: 17, fontWeight: '700' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   fareAcceptCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24 },
+  cancelReasonCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, width: '100%' },
+  cancelReasonTitle: { fontSize: 18, fontWeight: '700', color: c.text, marginBottom: 16 },
+  cancelReasonRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 12 },
+  radioOuter: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: c.border, justifyContent: 'center', alignItems: 'center' },
+  radioOuterActive: { borderColor: '#1D9E75' },
+  radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#1D9E75' },
+  cancelReasonText: { fontSize: 14, color: c.text, flex: 1 },
+  cancelReasonInput: { borderWidth: 1, borderColor: c.inputBorder, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, color: c.text, backgroundColor: c.input, minHeight: 70, textAlignVertical: 'top', marginTop: 8 },
+  cancelReasonActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
+  cancelReasonCancelBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', backgroundColor: c.background2 },
+  cancelReasonCancelBtnText: { fontSize: 15, fontWeight: '600', color: c.textSecondary },
+  cancelReasonConfirmBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', backgroundColor: '#FF3B30' },
+  cancelReasonConfirmBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
   fareAcceptTitle: { fontSize: 20, fontWeight: 'bold', color: c.text, textAlign: 'center', marginBottom: 8 },
   fareAcceptSubtitle: { fontSize: 14, color: c.textSecondary, textAlign: 'center', marginBottom: 20 },
   fareCompare: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 16, marginBottom: 12 },
