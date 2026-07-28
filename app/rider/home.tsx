@@ -20,6 +20,7 @@ import {
   Modal,
   Platform,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -133,6 +134,7 @@ export default function RiderHomeScreen() {
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [selectedRating, setSelectedRating] = useState(0);
   const [completedRide, setCompletedRide] = useState<any>(null);
+  const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [ratingComment, setRatingComment] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
   const [riderConfirmedPayment, setRiderConfirmedPayment] = useState(false);
@@ -181,11 +183,19 @@ export default function RiderHomeScreen() {
   const [editingPickup, setEditingPickup] = useState(false);
   const [loadingPickupSuggestions, setLoadingPickupSuggestions] = useState(false);
   const pickupDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
 
   useEffect(() => {
-    const showSub = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
-    const hideSub = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    const showSub = Keyboard.addListener('keyboardDidShow', () => {
+      setKeyboardVisible(true);
+    });
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardVisible(false);
+      setTimeout(() => {
+        scrollViewRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    });
     return () => { showSub.remove(); hideSub.remove(); };
   }, []);
 
@@ -295,7 +305,7 @@ export default function RiderHomeScreen() {
 
   const fetchDriverInfo = async (driverId: string) => {
     try {
-      const { data: driver } = await supabase.from('drivers').select('*, profiles(full_name, phone)').eq('id', driverId).single();
+      const { data: driver } = await supabase.from('drivers').select('*, profiles(full_name, phone, email)').eq('id', driverId).single();
       if (driver) {
         setDriverInfo(driver);
         if (location && driver.current_lat && driver.current_lng) {
@@ -600,7 +610,31 @@ export default function RiderHomeScreen() {
             Alert.alert('Driver Found!', 'Your Pragya driver is on the way!');
             await fetchDriverInfo(ride.driver_id);
             await subscribeToDriverLocation(ride.driver_id);
-          } else if (ride.status === 'arrived_pickup') {
+
+            // Start tracking immediately rather than waiting for the driver's next location ping
+            const { data: driverRow } = await supabase
+              .from('drivers')
+              .select('current_lat, current_lng')
+              .eq('id', ride.driver_id)
+              .single();
+            if (driverRow?.current_lat && driverRow?.current_lng) {
+              const driverCoords = { latitude: driverRow.current_lat, longitude: driverRow.current_lng };
+              setDriverLocation(driverCoords);
+              driverLocationAnim.timing({
+                ...driverCoords,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
+                duration: 500,
+                useNativeDriver: false,
+              } as any).start();
+              const pickupTarget = ride.pickup_lat
+                ? { latitude: ride.pickup_lat, longitude: ride.pickup_lng }
+                : locationRef.current;
+              if (pickupTarget) {
+                await fetchRoute(driverCoords.latitude, driverCoords.longitude, pickupTarget.latitude, pickupTarget.longitude);
+              }
+            }
+          } else if (ride.status === 'rider_boarding') {
             setShowDriverCard(false);
             // Fetch driver name fresh — avoids stale closure from driverInfo state
             let bannerName = 'Your driver';
@@ -619,7 +653,13 @@ export default function RiderHomeScreen() {
             setShowArrivedBanner(false);
             setShowDriverCard(false);
             Alert.alert('Ride Started! 🎉', 'You are now on your way.');
-          } else if (ride.status === 'payment_pending') {
+          } else if (ride.status === 'arrived_destination' || ride.status === 'payment_pending') {
+            // Driver has reached the destination — stop live route/pulse tracking,
+            // but leave the driver marker visible at its last known position.
+            if (pulseLoopRef.current) { pulseLoopRef.current.stop(); pulseLoopRef.current = null; }
+            pulseAnim.setValue(0);
+            setRoutePoints([]);
+            setRouteDistance(null);
             const newFare = ride.final_fare_ghs || ride.fare_ghs;
             setFinalFare(newFare);
             if (ride.final_fare_ghs && Math.abs(ride.final_fare_ghs - ride.fare_ghs) > 0.5) {
@@ -649,7 +689,8 @@ export default function RiderHomeScreen() {
             setShowDriverCard(false);
             setShowFareAcceptModal(false);
             setCompletedRide(ride);
-            setShowRatingModal(true);
+            setShowReceiptModal(true);
+            sendReceiptEmail(ride);
             setCurrentRide(null);
             setRideStatus('');
             setRiderConfirmedPayment(false);
@@ -689,16 +730,17 @@ export default function RiderHomeScreen() {
     }
   };
 
-  const confirmPickup = async (rideId: string) => {
-    const { error } = await supabase.from('rides').update({ status: 'in_progress' }).eq('id', rideId);
+  const confirmBoarding = async (rideId: string) => {
+    const { error } = await supabase.from('rides').update({ rider_confirmed_boarding: true }).eq('id', rideId);
     if (error) { Alert.alert('Error', error.message); return; }
+    if (currentRide) setCurrentRide({ ...currentRide, rider_confirmed_boarding: true });
     if (currentRide?.driver_id) {
       const driverToken = await getDriverToken(currentRide.driver_id);
       if (driverToken) {
         await sendPushNotification(
           driverToken,
-          '✅ Rider Confirmed Pickup!',
-          'The rider has confirmed pickup. Ride has started!'
+          '✅ Rider Confirmed Boarding!',
+          'The rider has confirmed they are on board. You can start the ride.'
         );
       }
     }
@@ -716,6 +758,39 @@ export default function RiderHomeScreen() {
         { text: currentRide.payment_method === 'cash' ? 'Cash Sent' : 'Confirm Payment', onPress: () => confirmPayment(currentRide, finalFare!) }
       ]
     );
+  };
+
+  const sendReceiptEmail = async (ride: any) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const riderEmail = user?.email;
+      const driverEmail = driverInfo?.profiles?.email;
+      const recipients = [riderEmail, driverEmail].filter(Boolean);
+      if (recipients.length === 0) return;
+      const finalFareValue = ride.final_fare_ghs || ride.fare_ghs;
+
+      await fetch('https://admin.pragyago.com/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: recipients,
+          subject: `PragyaGo Ride Receipt - GHS ${finalFareValue}`,
+          message: `
+            Ride Receipt
+            Date: ${new Date().toLocaleDateString()}
+            From: ${ride.pickup_address}
+            To: ${ride.dropoff_address}
+            Fare: GHS ${finalFareValue}
+            Payment: ${ride.payment_method}
+            Driver: ${driverInfo?.profiles?.full_name || 'Your Driver'}
+            Thank you for riding with PragyaGo!
+          `,
+          fromEmail: 'noreply@pragyago.com'
+        })
+      });
+    } catch (e) {
+      console.log('Receipt email error:', e);
+    }
   };
 
   const confirmPayment = async (ride: any, fare: number) => {
@@ -915,10 +990,11 @@ export default function RiderHomeScreen() {
       const parts = [routeDistance, eta ? `ETA: ${eta}` : null].filter(Boolean).join('  ·  ');
       return `🛺 Driver on the way!${parts ? `  ${parts}` : ''}`;
     }
-    if (rideStatus === 'arrived_pickup') return '🛺 Driver has arrived!';
+    if (rideStatus === 'rider_boarding') return '🛺 Driver has arrived!';
     if (rideStatus === 'in_progress') {
       return `🎉 Ride in progress${routeDistance ? `  ·  ${routeDistance} to go` : ''}${eta ? `  ·  ${eta}` : ''}`;
     }
+    if (rideStatus === 'arrived_destination') return '📍 Arrived at destination';
     if (rideStatus === 'payment_pending') return '💰 Confirm payment';
     return '';
   };
@@ -941,7 +1017,7 @@ export default function RiderHomeScreen() {
           ) : null}
         </TouchableOpacity>
 
-        {currentRide && eta && ['accepted', 'arrived_pickup', 'in_progress'].includes(rideStatus) ? (
+        {currentRide && eta && ['accepted', 'rider_boarding', 'in_progress'].includes(rideStatus) ? (
           <View style={{
             position: 'absolute',
             top: 64,
@@ -961,11 +1037,11 @@ export default function RiderHomeScreen() {
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 13, color: theme.textSecondary }}>
                 {rideStatus === 'accepted' ? 'Driver arriving in' :
-                 rideStatus === 'arrived_pickup' ? 'Driver is waiting' :
-                 'Ride in progress'}
+                 rideStatus === 'rider_boarding' ? 'Driver is waiting' :
+                 'Arriving at destination in'}
               </Text>
               <Text style={{ fontSize: 22, fontWeight: '800', color: theme.text }}>
-                {rideStatus === 'arrived_pickup' ? 'Board your Pragya' : eta}
+                {rideStatus === 'rider_boarding' ? 'Board your Pragya' : eta}
               </Text>
               {routeDistance && rideStatus === 'accepted' ? (
                 <Text style={{ fontSize: 13, color: theme.textSecondary, marginTop: 2 }}>
@@ -980,6 +1056,29 @@ export default function RiderHomeScreen() {
             }}>
               <Text style={{ fontSize: 24 }}>🛺</Text>
             </View>
+          </View>
+        ) : null}
+
+        {currentRide && ['arrived_destination', 'payment_pending'].includes(rideStatus) ? (
+          <View style={{
+            position: 'absolute',
+            top: 64,
+            left: 16,
+            right: 16,
+            zIndex: 15,
+            backgroundColor: theme.card,
+            borderRadius: 14,
+            padding: 14,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 10,
+            elevation: 8,
+            shadowColor: '#000',
+            shadowOpacity: 0.15,
+            shadowRadius: 8,
+          }}>
+            <Feather name="check-circle" size={22} color={theme.green} />
+            <Text style={{ fontSize: 16, fontWeight: '700', color: theme.text }}>You have arrived!</Text>
           </View>
         ) : null}
 
@@ -1099,10 +1198,10 @@ export default function RiderHomeScreen() {
               style={styles.arrivedConfirmBtn}
               onPress={() => {
                 setShowArrivedBanner(false);
-                if (currentRide) confirmPickup(currentRide.id);
+                if (currentRide) confirmBoarding(currentRide.id);
               }}
             >
-              <Text style={styles.arrivedConfirmText}>Confirm Pickup</Text>
+              <Text style={styles.arrivedConfirmText}>I'm Boarding</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.arrivedDismissBtn} onPress={() => setShowArrivedBanner(false)}>
               <Text style={styles.arrivedDismissText}>✕ Dismiss</Text>
@@ -1128,7 +1227,7 @@ export default function RiderHomeScreen() {
           }}
         >
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
-          {driverInfo && ['accepted', 'arrived_pickup', 'in_progress'].includes(rideStatus) ? (
+          {driverInfo && ['accepted', 'rider_boarding', 'in_progress'].includes(rideStatus) ? (
         <View style={styles.driverInlineCard}>
           <View style={styles.driverInlineTopRow}>
             <View style={styles.driverInlineAvatar}>
@@ -1154,7 +1253,7 @@ export default function RiderHomeScreen() {
             </View>
           </View>
           <Text style={styles.driverInlineStatus}>
-            {rideStatus === 'arrived_pickup' ? 'Driver has arrived' : 'Your driver is on the way'}
+            {rideStatus === 'rider_boarding' ? 'Driver has arrived' : 'Your driver is on the way'}
           </Text>
           <View style={styles.driverInlineActions}>
             <TouchableOpacity style={styles.driverInlineChatBtn} onPress={() => router.push(('/chat/' + currentRide.id) as any)}>
@@ -1166,6 +1265,38 @@ export default function RiderHomeScreen() {
               <Text style={styles.driverInlineCallBtnText}>Call</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      ) : null}
+
+      {currentRide && rideStatus === 'rider_boarding' ? (
+        <View style={styles.boardingPanel}>
+          <Feather name="check-circle" size={32} color={theme.green} />
+          <Text style={styles.boardingTitle}>Your driver has arrived!</Text>
+          <Text style={styles.boardingSubtitle}>Confirm once you're on board to start your ride.</Text>
+          {currentRide.rider_confirmed_boarding ? (
+            <Text style={styles.boardingWaitingText}>Waiting for driver to start the ride...</Text>
+          ) : (
+            <TouchableOpacity style={styles.boardingButton} onPress={() => confirmBoarding(currentRide.id)}>
+              <Text style={styles.boardingButtonText}>I'm Boarding</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      ) : null}
+
+      {currentRide && ['arrived_destination', 'payment_pending'].includes(rideStatus) ? (
+        <View style={styles.paymentPanel}>
+          <Text style={styles.paymentPanelLabel}>Amount Due</Text>
+          <Text style={styles.paymentPanelFare}>GHS {displayFare}</Text>
+          <Text style={styles.paymentPanelMethod}>
+            {currentRide.payment_method === 'cash' ? 'Cash' : 'Go Cash'}
+          </Text>
+          {!riderConfirmedPayment ? (
+            <TouchableOpacity style={styles.paymentPanelButton} onPress={() => confirmPayment(currentRide, displayFare)}>
+              <Text style={styles.paymentPanelButtonText}>I've Paid</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={styles.boardingWaitingText}>Payment confirmed! Waiting for driver to verify...</Text>
+          )}
         </View>
       ) : null}
 
@@ -1187,21 +1318,14 @@ export default function RiderHomeScreen() {
                 <Text style={styles.cancelButtonText}>Cancel Ride</Text>
               </TouchableOpacity>
             ) : null}
-            {rideStatus === 'payment_pending' && !riderConfirmedPayment ? (
-              <TouchableOpacity style={styles.confirmPaymentButton} onPress={() => confirmPayment(currentRide, displayFare)}>
-                <Text style={styles.confirmPaymentText}>
-                  {currentRide.payment_method === 'cash' ? 'Cash Sent' : 'Confirm Payment'}
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-            {driverInfo && (rideStatus === 'accepted' || rideStatus === 'arrived_pickup') ? (
+            {driverInfo && (rideStatus === 'accepted' || rideStatus === 'rider_boarding') ? (
               <TouchableOpacity style={styles.viewDriverButton} onPress={() => setShowDriverCard(true)}>
                 <Text style={styles.viewDriverButtonText}>View Driver</Text>
               </TouchableOpacity>
             ) : null}
           </View>
 
-          {rideStatus === 'accepted' || rideStatus === 'arrived_pickup' ? (
+          {rideStatus === 'accepted' || rideStatus === 'rider_boarding' ? (
             <TouchableOpacity
               onPress={handleCancelRide}
               style={{
@@ -1225,22 +1349,28 @@ export default function RiderHomeScreen() {
 
       {!currentRide ? (
         <View
-          style={{
-            backgroundColor: theme.card,
-            borderTopLeftRadius: keyboardVisible ? 0 : 24,
-            borderTopRightRadius: keyboardVisible ? 0 : 24,
-            paddingHorizontal: 20,
-            paddingTop: 16,
-            paddingBottom: Math.max(insets.bottom, 16),
-            flex: keyboardVisible ? 1 : undefined,
-            elevation: 8,
-          }}
+          style={[
+            {
+              backgroundColor: theme.card,
+              borderTopLeftRadius: keyboardVisible ? 0 : 24,
+              borderTopRightRadius: keyboardVisible ? 0 : 24,
+              paddingTop: 16,
+              paddingBottom: Math.max(insets.bottom, 16),
+              elevation: 8,
+            },
+            keyboardVisible ? { flex: 1 } : { maxHeight: '65%' }
+          ]}
         >
           <ScrollView
-            scrollEnabled={true}
+            ref={scrollViewRef}
+            keyboardShouldPersistTaps="always"
+            keyboardDismissMode="none"
             showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ paddingBottom: 20 }}
+            bounces={false}
+            contentContainerStyle={{
+              paddingHorizontal: 20,
+              paddingBottom: 16,
+            }}
           >
           <Text style={styles.panelTitle}>Where do you want to go?</Text>
           <Text style={styles.driversCount}>
@@ -1562,11 +1692,85 @@ export default function RiderHomeScreen() {
         </View>
       </Modal>
 
+      {/* Receipt Modal */}
+      <Modal visible={showReceiptModal} transparent animationType="slide">
+        <View style={[styles.modalOverlay, { paddingTop: insets.top }]}>
+          <View style={[styles.receiptCard, { paddingBottom: insets.bottom + 16 }]}>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View style={{ alignItems: 'center' }}>
+                <Image source={require('@/assets/images/icon.png')} style={styles.receiptLogo} resizeMode="contain" />
+                <Text style={styles.receiptTitle}>Ride Receipt</Text>
+                <Text style={styles.receiptDate}>
+                  {new Date().toLocaleDateString()} · {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+              </View>
+
+              <View style={styles.receiptDivider} />
+
+              <View style={styles.receiptDetailRow}>
+                <Text style={styles.receiptDetailLabel}>From</Text>
+                <Text style={styles.receiptDetailValue} numberOfLines={2}>{completedRide?.pickup_address}</Text>
+              </View>
+              <View style={styles.receiptDetailRow}>
+                <Text style={styles.receiptDetailLabel}>To</Text>
+                <Text style={styles.receiptDetailValue} numberOfLines={2}>{completedRide?.dropoff_address}</Text>
+              </View>
+              <View style={styles.receiptDetailRow}>
+                <Text style={styles.receiptDetailLabel}>Driver</Text>
+                <Text style={styles.receiptDetailValue}>
+                  {driverInfo?.profiles?.full_name || 'Your Driver'}{driverInfo?.plate_number ? ` · ${driverInfo.plate_number}` : ''}
+                </Text>
+              </View>
+              {completedRide?.actual_distance_km || completedRide?.expected_distance_km ? (
+                <View style={styles.receiptDetailRow}>
+                  <Text style={styles.receiptDetailLabel}>Distance</Text>
+                  <Text style={styles.receiptDetailValue}>
+                    {Number(completedRide?.actual_distance_km || completedRide?.expected_distance_km).toFixed(1)} km
+                  </Text>
+                </View>
+              ) : null}
+              <View style={styles.receiptDetailRow}>
+                <Text style={styles.receiptDetailLabel}>Payment</Text>
+                <Text style={styles.receiptDetailValue}>
+                  {completedRide?.payment_method === 'cash' ? 'Cash' : 'Go Cash'}
+                </Text>
+              </View>
+
+              <View style={styles.receiptDivider} />
+
+              <View style={{ alignItems: 'center' }}>
+                <Text style={styles.receiptFareLabel}>Fare</Text>
+                <Text style={styles.receiptFareAmount}>GHS {completedRide?.final_fare_ghs || completedRide?.fare_ghs}</Text>
+                <Text style={styles.receiptThanks}>Thank you for riding with PragyaGo! 🛺</Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.receiptShareBtn}
+                onPress={() => Share.share({
+                  message: `PragyaGo Ride Receipt\nFrom: ${completedRide?.pickup_address}\nTo: ${completedRide?.dropoff_address}\nFare: GHS ${completedRide?.final_fare_ghs || completedRide?.fare_ghs}`
+                })}
+              >
+                <Feather name="share-2" size={18} color={theme.green} />
+                <Text style={styles.receiptShareBtnText}>Share Receipt</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.receiptDoneBtn}
+                onPress={() => { setShowReceiptModal(false); setShowRatingModal(true); }}
+              >
+                <Text style={styles.receiptDoneBtnText}>Done</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       {/* Rating Modal */}
       <Modal visible={showRatingModal} transparent animationType="slide">
         <View style={[styles.modalOverlay, { paddingTop: insets.top }]}>
           <View style={[styles.ratingCard, { paddingBottom: insets.bottom + 16 }]}>
-            <Text style={styles.ratingTitle}>Rate Your Ride</Text>
+            <Text style={styles.ratingTitle}>Ride Complete!</Text>
+            <Text style={styles.ratingTopFare}>GHS {completedRide?.final_fare_ghs || completedRide?.fare_ghs}</Text>
             <Text style={styles.ratingSubtitle}>How was your experience?</Text>
             {driverInfo?.photo_url ? (
               <Image source={{ uri: driverInfo.photo_url }} style={styles.ratingDriverPhoto} />
@@ -1655,8 +1859,18 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   rideActions: { flexDirection: 'row', gap: 10 },
   cancelButton: { flex: 1, backgroundColor: '#FF3B30', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
   cancelButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
-  confirmPaymentButton: { flex: 1, backgroundColor: '#1D9E75', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
-  confirmPaymentText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+  boardingPanel: { backgroundColor: c.card, alignItems: 'center', padding: 20, gap: 4 },
+  boardingTitle: { fontSize: 18, fontWeight: '700', color: c.text, marginTop: 8 },
+  boardingSubtitle: { fontSize: 13, color: c.textSecondary, textAlign: 'center', marginBottom: 12 },
+  boardingButton: { backgroundColor: c.green, borderRadius: 14, paddingVertical: 16, width: '100%', alignItems: 'center' },
+  boardingButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  boardingWaitingText: { fontSize: 13, color: c.textSecondary, fontStyle: 'italic', marginTop: 4 },
+  paymentPanel: { backgroundColor: c.card, alignItems: 'center', padding: 20 },
+  paymentPanelLabel: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
+  paymentPanelFare: { fontSize: 36, fontWeight: '900', color: c.green, marginVertical: 4 },
+  paymentPanelMethod: { fontSize: 13, color: c.textSecondary, marginBottom: 16 },
+  paymentPanelButton: { backgroundColor: c.green, borderRadius: 14, paddingVertical: 16, width: '100%', alignItems: 'center' },
+  paymentPanelButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   viewDriverButton: { flex: 1, backgroundColor: '#fff', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
   viewDriverButtonText: { color: '#185FA5', fontWeight: 'bold', fontSize: 14 },
   panelTitle: { fontSize: 18, fontWeight: 'bold', color: c.text, marginBottom: 4 },
@@ -1722,6 +1936,21 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   requestButtonText: { color: 'white', fontSize: 17, fontWeight: '700' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   fareAcceptCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24 },
+  receiptCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '85%' },
+  receiptLogo: { width: 56, height: 56, borderRadius: 14, marginBottom: 8 },
+  receiptTitle: { fontSize: 20, fontWeight: '700', color: c.text },
+  receiptDate: { fontSize: 13, color: c.textSecondary, marginTop: 4 },
+  receiptDivider: { height: 1, backgroundColor: c.border, marginVertical: 16 },
+  receiptDetailRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  receiptDetailLabel: { fontSize: 13, color: c.textSecondary, width: 80 },
+  receiptDetailValue: { fontSize: 13, color: c.text, fontWeight: '600', flex: 1, textAlign: 'right' },
+  receiptFareLabel: { fontSize: 13, color: c.textSecondary },
+  receiptFareAmount: { fontSize: 32, fontWeight: '900', color: c.green, marginVertical: 4 },
+  receiptThanks: { fontSize: 13, color: c.textSecondary, marginTop: 8, textAlign: 'center' },
+  receiptShareBtn: { flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: c.green, borderRadius: 14, paddingVertical: 14, marginTop: 20 },
+  receiptShareBtnText: { fontSize: 15, fontWeight: '700', color: c.green },
+  receiptDoneBtn: { backgroundColor: c.green, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 10 },
+  receiptDoneBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   cancelReasonCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, width: '100%' },
   cancelReasonTitle: { fontSize: 18, fontWeight: '700', color: c.text, marginBottom: 16 },
   cancelReasonRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 12 },
@@ -1767,7 +1996,8 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   closeCardButton: { backgroundColor: '#1D9E75', paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
   closeCardButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   ratingCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, alignItems: 'center' },
-  ratingTitle: { fontSize: 22, fontWeight: 'bold', color: c.text, marginBottom: 8 },
+  ratingTitle: { fontSize: 22, fontWeight: 'bold', color: c.text, marginBottom: 4 },
+  ratingTopFare: { fontSize: 32, fontWeight: '900', color: c.green, marginBottom: 8 },
   ratingSubtitle: { fontSize: 14, color: c.textSecondary, textAlign: 'center', marginBottom: 16 },
   ratingDriverPhoto: { width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: '#1D9E75', marginBottom: 8 },
   ratingDriverPhotoPlaceholder: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#E1F5EE', justifyContent: 'center', alignItems: 'center', marginBottom: 8 },

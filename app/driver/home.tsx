@@ -1,3 +1,43 @@
+// Run in Supabase SQL:
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS final_fare_ghs NUMERIC(10,2);
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS actual_distance_km NUMERIC(10,2);
+//
+// CREATE OR REPLACE FUNCTION increment_commission(driver_id UUID, amount NUMERIC)
+// RETURNS void AS $$
+//   UPDATE drivers SET commission_owed = commission_owed + amount WHERE id = driver_id;
+// $$ LANGUAGE sql;
+//
+// CREATE OR REPLACE FUNCTION increment_wallet(driver_id UUID, amount NUMERIC)
+// RETURNS void AS $$
+//   UPDATE drivers SET wallet_balance = COALESCE(wallet_balance, 0) + amount WHERE id = driver_id;
+// $$ LANGUAGE sql;
+//
+// --- Ride handshake flow (Feature 2) ---
+// If rides.status is the ride_status ENUM (older schema.sql only defines
+// 'requested','accepted','in_progress','completed','cancelled' — 'arrived_pickup' and
+// 'payment_pending' must already have been added out-of-band since they're in production use):
+// ALTER TYPE ride_status ADD VALUE IF NOT EXISTS 'rider_boarding';
+// ALTER TYPE ride_status ADD VALUE IF NOT EXISTS 'arrived_destination';
+// If status is a plain TEXT column with a CHECK constraint, that constraint will reject
+// 'rider_boarding' / 'arrived_destination' — drop it (this is what breaks "Arrived at Pickup"):
+// ALTER TABLE rides DROP CONSTRAINT IF EXISTS rides_status_check;
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS rider_confirmed_boarding BOOLEAN DEFAULT false;
+//
+// --- Zone driver limit + queue (Feature 1) ---
+// drivers has no zone_id column in the known schema — riders/drivers both get zone_id via
+// profiles.zone_id, so this feature reads zone through profiles, not drivers.zone_id directly.
+// ALTER TABLE zone_settings ADD COLUMN IF NOT EXISTS max_active_drivers INTEGER DEFAULT 20;
+// CREATE TABLE IF NOT EXISTS driver_queue (
+//   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+//   driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+//   zone_id UUID NOT NULL,
+//   status TEXT NOT NULL DEFAULT 'waiting',
+//   queued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+//   activated_at TIMESTAMPTZ
+// );
+
 import React, { useEffect, useRef, useState } from 'react'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
@@ -17,6 +57,7 @@ import MapViewDirections from 'react-native-maps-directions'
 import { Feather } from '@expo/vector-icons'
 import { useTheme } from '@/lib/theme'
 import { supabase } from '@/lib/supabase'
+import { getDriverToken, sendPushNotification } from '@/lib/notifications'
 
 const GOOGLE_API_KEY = (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k') ?? ''
 
@@ -46,8 +87,11 @@ export default function DriverHome() {
   const activeRideRef = useRef<any>(null)
   const driverIdRef = useRef<string | null>(null)
   const locationIntervalRef = useRef<any>(null)
+  const queueChannelRef = useRef<any>(null)
 
   const [driverName, setDriverName] = useState('Driver')
+  const [inQueue, setInQueue] = useState(false)
+  const [queuePosition, setQueuePosition] = useState<number | null>(null)
   const [userLat, setUserLat] = useState<number | null>(null)
   const [userLng, setUserLng] = useState<number | null>(null)
   const [earnings, setEarnings] = useState<number>(0)
@@ -73,6 +117,7 @@ export default function DriverHome() {
     return () => {
       if (rideRequestChannelRef.current) supabase.removeChannel(rideRequestChannelRef.current)
       if (driverRideUpdatesChannelRef.current) supabase.removeChannel(driverRideUpdatesChannelRef.current)
+      if (queueChannelRef.current) supabase.removeChannel(queueChannelRef.current)
       if (locationIntervalRef.current) {
         clearInterval(locationIntervalRef.current)
         locationIntervalRef.current = null
@@ -134,7 +179,7 @@ export default function DriverHome() {
           .from('rides')
           .select('*')
           .eq('driver_id', driverRecord.id)
-          .in('status', ['accepted', 'arrived_pickup', 'in_progress', 'payment_pending'])
+          .in('status', ['accepted', 'rider_boarding', 'in_progress', 'arrived_destination', 'payment_pending'])
           .maybeSingle()
         if (activeRideData) {
           setActiveRide(activeRideData)
@@ -151,8 +196,9 @@ export default function DriverHome() {
 
   const getStatusLabel = () => {
     if (rideStatus === 'accepted') return 'Heading to Pickup'
-    if (rideStatus === 'arrived_pickup') return 'Waiting for Rider'
+    if (rideStatus === 'rider_boarding') return 'Waiting for Rider to Board'
     if (rideStatus === 'in_progress') return 'Ride in Progress'
+    if (rideStatus === 'arrived_destination') return 'Arrived at Destination'
     if (rideStatus === 'payment_pending') return 'Confirm Payment'
     return 'Active Ride'
   }
@@ -201,6 +247,105 @@ export default function DriverHome() {
     }
   }
 
+  function startLocationTracking() {
+    if (locationIntervalRef.current) clearInterval(locationIntervalRef.current)
+    locationIntervalRef.current = setInterval(async () => {
+      try {
+        const loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High
+        })
+        const { latitude, longitude } = loc.coords
+        setUserLat(latitude)
+        setUserLng(longitude)
+
+        await supabase
+          .from('drivers')
+          .update({
+            current_lat: latitude,
+            current_lng: longitude
+          })
+          .eq('id', driverIdRef.current)
+
+        console.log('Driver location updated:', latitude, longitude)
+      } catch (e) {
+        console.log('Location update error:', e)
+      }
+    }, 5000)
+  }
+
+  function stopLocationTracking() {
+    if (locationIntervalRef.current) {
+      clearInterval(locationIntervalRef.current)
+      locationIntervalRef.current = null
+    }
+  }
+
+  async function leaveQueue() {
+    if (!driverIdRef.current) return
+    await supabase.from('driver_queue').delete().eq('driver_id', driverIdRef.current).eq('status', 'waiting')
+    setInQueue(false)
+    setQueuePosition(null)
+    if (queueChannelRef.current) {
+      supabase.removeChannel(queueChannelRef.current)
+      queueChannelRef.current = null
+    }
+  }
+
+  // Feature 1: zone driver limit + queue. Listens for this driver's own queue
+  // entry being activated (i.e. a slot opened up while they were waiting).
+  function subscribeToQueueUpdates(driverId: string) {
+    if (queueChannelRef.current) supabase.removeChannel(queueChannelRef.current)
+    const channel = supabase
+      .channel(`driver-queue-${driverId}-${Date.now()}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'driver_queue',
+        filter: `driver_id=eq.${driverId}`,
+      }, async (payload) => {
+        const updated = payload.new as any
+        if (updated.status === 'activated') {
+          setInQueue(false)
+          setQueuePosition(null)
+          setIsOnline(true)
+          startLocationTracking()
+          await subscribeToRideRequests(driverId)
+          Alert.alert('Slot Available!', 'A slot is now available! You are now online.')
+          if (queueChannelRef.current) {
+            supabase.removeChannel(queueChannelRef.current)
+            queueChannelRef.current = null
+          }
+        }
+      })
+      .subscribe()
+    queueChannelRef.current = channel
+  }
+
+  // Activate whichever driver has been waiting longest in this zone's queue.
+  async function activateNextInQueue(zoneId: string) {
+    const { data: nextInLine } = await supabase
+      .from('driver_queue')
+      .select('*')
+      .eq('zone_id', zoneId)
+      .eq('status', 'waiting')
+      .order('queued_at', { ascending: true })
+      .limit(1)
+      .single()
+
+    if (!nextInLine) return
+
+    await supabase.from('drivers').update({ is_online: true }).eq('id', nextInLine.driver_id)
+    await supabase
+      .from('driver_queue')
+      .update({ status: 'activated', activated_at: new Date().toISOString() })
+      .eq('id', nextInLine.id)
+
+    const token = await getDriverToken(nextInLine.driver_id)
+    if (token) {
+      await sendPushNotification(token, 'A slot is now available!', 'You are now online.')
+    }
+  }
+
   async function toggleOnline() {
     if (vehicleVerified === false) {
       Alert.alert('Verification Required', 'Complete vehicle verification first')
@@ -228,6 +373,55 @@ export default function DriverHome() {
     console.log('Driver error:', JSON.stringify(driverError))
     if (!driver) return
 
+    // Zone-id lives on profiles (drivers has no zone_id column in the known schema);
+    // keep drivers.zone_id in sync so the zone-scoped online-count query below can
+    // filter on it directly, matching the shape of driver_queue's own zone_id column.
+    const { data: profile } = await supabase.from('profiles').select('zone_id').eq('id', user.id).single()
+    const zoneId = profile?.zone_id ?? null
+    if (zoneId) await supabase.from('drivers').update({ zone_id: zoneId }).eq('id', driver.id)
+
+    if (newStatus && zoneId) {
+      const { count } = await supabase
+        .from('drivers')
+        .select('*', { count: 'exact', head: true })
+        .eq('zone_id', zoneId)
+        .eq('is_online', true)
+
+      const { data: zoneSettings } = await supabase
+        .from('zone_settings')
+        .select('max_active_drivers')
+        .eq('zone_id', zoneId)
+        .single()
+
+      const limit = zoneSettings?.max_active_drivers || 20
+
+      if ((count ?? 0) >= limit) {
+        const { data: queueEntry } = await supabase
+          .from('driver_queue')
+          .insert({ driver_id: driver.id, zone_id: zoneId, status: 'waiting' })
+          .select()
+          .single()
+
+        Alert.alert(
+          'Zone Full',
+          'Your zone is currently full. You have been added to the waiting queue. You will be notified when a slot becomes available.'
+        )
+
+        if (queueEntry) {
+          const { count: aheadCount } = await supabase
+            .from('driver_queue')
+            .select('*', { count: 'exact', head: true })
+            .eq('zone_id', zoneId)
+            .eq('status', 'waiting')
+            .lt('queued_at', queueEntry.queued_at)
+          setQueuePosition((aheadCount ?? 0) + 1)
+          setInQueue(true)
+          subscribeToQueueUpdates(driver.id)
+        }
+        return
+      }
+    }
+
     const { error: updateError } = await supabase
       .from('drivers')
       .update({
@@ -246,31 +440,7 @@ export default function DriverHome() {
     if (newStatus) {
       console.log('Going online, subscribing to ride requests...')
       await subscribeToRideRequests(driver.id)
-
-      if (locationIntervalRef.current) clearInterval(locationIntervalRef.current)
-      locationIntervalRef.current = setInterval(async () => {
-        try {
-          const loc = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.High
-          })
-          const { latitude, longitude } = loc.coords
-          setUserLat(latitude)
-          setUserLng(longitude)
-
-          await supabase
-            .from('drivers')
-            .update({
-              current_lat: latitude,
-              current_lng: longitude
-            })
-            .eq('id', driverIdRef.current)
-
-          console.log('Driver location updated:', latitude, longitude)
-        } catch (e) {
-          console.log('Location update error:', e)
-        }
-      }, 5000)
-
+      startLocationTracking()
       Alert.alert('You are Online!', 'You will now receive ride requests.')
     } else {
       if (rideRequestChannelRef.current) {
@@ -281,10 +451,18 @@ export default function DriverHome() {
         supabase.removeChannel(driverRideUpdatesChannelRef.current)
         driverRideUpdatesChannelRef.current = null
       }
-      if (locationIntervalRef.current) {
-        clearInterval(locationIntervalRef.current)
-        locationIntervalRef.current = null
+      stopLocationTracking()
+
+      // Remove this driver from the queue if they were waiting, then let the
+      // next-longest-waiting driver in this zone take the freed-up slot.
+      await supabase.from('driver_queue').delete().eq('driver_id', driver.id).eq('status', 'waiting')
+      setInQueue(false)
+      setQueuePosition(null)
+      if (queueChannelRef.current) {
+        supabase.removeChannel(queueChannelRef.current)
+        queueChannelRef.current = null
       }
+      if (zoneId) await activateNextInQueue(zoneId)
     }
 
     setIsOnline(newStatus)
@@ -326,21 +504,25 @@ export default function DriverHome() {
       }, (payload) => {
         console.log('Driver ride update:', JSON.stringify(payload.new))
         const ride = payload.new as any
+        // Keep local state in lockstep with the row so handlers never act on a stale ride.
         setActiveRide(ride)
         setRideStatus(ride.status)
 
         if (ride.status === 'completed') {
-          setActiveRide(null)
-          setRideStatus('')
           setEarnings(prev => prev + (ride.final_fare_ghs || ride.fare_ghs))
           setRidesCount(prev => prev + 1)
           Alert.alert('Ride Complete!', `GHS ${ride.final_fare_ghs || ride.fare_ghs} earned!`)
         }
         if (ride.status === 'cancelled') {
-          setActiveRide(null)
-          setRideStatus('')
           setRideRequest(null)
           Alert.alert('Ride Cancelled', 'The rider has cancelled this ride.')
+        }
+        // Terminal states clear the active ride; every other status
+        // ('accepted' | 'rider_boarding' | 'in_progress' | 'arrived_destination' |
+        // 'payment_pending') keeps it and just re-renders the action button.
+        if (ride.status === 'completed' || ride.status === 'cancelled') {
+          setActiveRide(null)
+          setRideStatus('')
         }
       })
       .subscribe()
@@ -369,37 +551,154 @@ export default function DriverHome() {
     setRideRequest(null)
   }
   function declineRide() { setRideRequest(null) }
-  async function handleArrived() {
-    if (!activeRide) return
-    try {
-      const { error } = await supabase
-        .from('rides')
-        .update({ status: 'arrived_pickup' })
-        .eq('id', activeRide.id)
 
+  const handleArrivedAtPickup = async () => {
+    try {
+      console.log('Arrived at pickup - ride ID:', activeRide?.id)
+      console.log('Current ride status:', rideStatus)
+
+      if (!activeRide?.id) {
+        Alert.alert('Error', 'No active ride found. Please try again.')
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('rides')
+        .update({ status: 'rider_boarding' })
+        .eq('id', activeRide.id)
+        .select()
+
+      console.log('Arrived update result:', JSON.stringify(data))
       console.log('Arrived update error:', JSON.stringify(error))
 
-      if (!error) {
-        setRideStatus('arrived_pickup')
-        Alert.alert('Arrived!', 'You have arrived at the pickup location. Waiting for rider.')
-      } else {
-        Alert.alert('Error', 'Could not update status. Please try again.')
+      if (error) {
+        Alert.alert('Error', `Status update failed: ${error.message}`)
+        return
       }
-    } catch (e) {
-      console.log('Arrived error:', e)
+
+      setRideStatus('rider_boarding')
+      setActiveRide({ ...activeRide, status: 'rider_boarding' })
+      Alert.alert('Arrived!', 'Waiting for rider to confirm boarding.')
+    } catch (e: any) {
+      console.log('Arrived catch error:', e)
       Alert.alert('Error', 'Something went wrong. Please try again.')
     }
   }
-  function completeRide() {}
+
+  async function handleStartRide() {
+    if (!activeRide) return
+    if (!activeRide?.rider_confirmed_boarding) {
+      Alert.alert('Waiting', 'Please wait for the rider to confirm they have boarded.')
+      return
+    }
+    const { error } = await supabase
+      .from('rides')
+      .update({
+        status: 'in_progress',
+        started_at: new Date().toISOString()
+      })
+      .eq('id', activeRide.id)
+    if (!error) {
+      setRideStatus('in_progress')
+    } else {
+      Alert.alert('Error', 'Could not start ride. Please try again.')
+    }
+  }
+
+  async function handleArrivedAtDestination() {
+    if (!activeRide) return
+    const estimatedFare = parseFloat(activeRide?.fare_ghs || '0')
+    const { error } = await supabase
+      .from('rides')
+      .update({ status: 'payment_pending' })
+      .eq('id', activeRide.id)
+    if (!error) {
+      setRideStatus('payment_pending')
+      Alert.alert(
+        'Arrived at Destination!',
+        `Fare: GHS ${estimatedFare.toFixed(2)}\nPlease wait for the rider to confirm payment.`
+      )
+    } else {
+      Alert.alert('Error', 'Could not update status. Please try again.')
+    }
+  }
+
+  async function handleConfirmPayment() {
+    if (!activeRide) return
+    if (!activeRide?.rider_confirmed_payment) {
+      Alert.alert('Waiting', 'Please wait for the rider to confirm payment.')
+      return
+    }
+
+    const finalFare = parseFloat(activeRide?.fare_ghs || '0')
+    const commission = Math.round(finalFare * 0.15 * 100) / 100
+    const driverEarnings = Math.round((finalFare - commission) * 100) / 100
+
+    const { error } = await supabase
+      .from('rides')
+      .update({
+        status: 'completed',
+        driver_confirmed_payment: true,
+        final_fare_ghs: finalFare,
+        completed_at: new Date().toISOString()
+      })
+      .eq('id', activeRide.id)
+
+    if (!error) {
+      await supabase.rpc('increment_commission', { driver_id: driverIdRef.current, amount: commission })
+      await supabase.rpc('increment_wallet', { driver_id: driverIdRef.current, amount: driverEarnings })
+
+      setRideStatus('')
+      setActiveRide(null)
+      Alert.alert(
+        '🎉 Ride Complete!',
+        `Fare: GHS ${finalFare}\nYour earnings: GHS ${driverEarnings}\nCommission: GHS ${commission}`
+      )
+    } else {
+      Alert.alert('Error', 'Could not confirm payment. Please try again.')
+    }
+  }
+
+  function getActionButton(): { label: string; color: string; action: () => void; disabled?: boolean; disabledText?: string } | null {
+    if (rideStatus === 'accepted') {
+      return { label: 'Arrived at Pickup', color: theme.green, action: handleArrivedAtPickup }
+    }
+    if (rideStatus === 'rider_boarding') {
+      return {
+        label: 'Start Ride',
+        color: theme.blue,
+        action: handleStartRide,
+        disabled: !activeRide?.rider_confirmed_boarding,
+        disabledText: 'Waiting for rider to confirm boarding...'
+      }
+    }
+    if (rideStatus === 'in_progress') {
+      return { label: 'Arrived at Destination', color: theme.green, action: handleArrivedAtDestination }
+    }
+    if (rideStatus === 'arrived_destination' || rideStatus === 'payment_pending') {
+      return {
+        label: 'Waiting for Payment...',
+        color: theme.amber,
+        disabled: !activeRide?.rider_confirmed_payment,
+        disabledText: 'Waiting for rider to confirm payment...',
+        action: handleConfirmPayment
+      }
+    }
+    return null
+  }
 
   const riderInitials = (riderInfo?.full_name || '')
     .split(' ').map((n: string) => n[0]).filter(Boolean).join('').toUpperCase().slice(0, 2) || '?'
 
+  const actionButton = getActionButton()
+
+  // Once the ride is underway the map should point at the dropoff, not the pickup.
+  const headingToDropoff = ['in_progress', 'arrived_destination', 'payment_pending'].includes(rideStatus)
   const targetLat = activeRide
-    ? (rideStatus === 'in_progress' ? parseFloat(activeRide.dropoff_lat) : parseFloat(activeRide.pickup_lat)) || 7.3349
+    ? (headingToDropoff ? parseFloat(activeRide.dropoff_lat) : parseFloat(activeRide.pickup_lat)) || 7.3349
     : 7.3349
   const targetLng = activeRide
-    ? (rideStatus === 'in_progress' ? parseFloat(activeRide.dropoff_lng) : parseFloat(activeRide.pickup_lng)) || -2.3123
+    ? (headingToDropoff ? parseFloat(activeRide.dropoff_lng) : parseFloat(activeRide.pickup_lng)) || -2.3123
     : -2.3123
 
   return (
@@ -546,19 +845,36 @@ export default function DriverHome() {
         ) : null}
         {!activeRide ? (
           <View>
-            <TouchableOpacity
-              style={[
-                styles.fullButton,
-                { backgroundColor: isOnline ? '#d9534f' : theme.green },
-                vehicleVerified === false && styles.fullButtonDisabled,
-              ]}
-              onPress={() => {
-                console.log('Go Online button tapped!')
-                toggleOnline()
-              }}
-            >
-              <Text style={styles.fullButtonText}>{isOnline ? 'Go Offline' : 'Go Online'}</Text>
-            </TouchableOpacity>
+            {inQueue ? (
+              <>
+                <View style={styles.queueBanner}>
+                  <Feather name="clock" size={20} color={theme.blue} />
+                  <Text style={styles.queueBannerText}>
+                    Your zone is full. You are #{queuePosition} in the queue.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.fullButton, { backgroundColor: '#d9534f' }]}
+                  onPress={leaveQueue}
+                >
+                  <Text style={styles.fullButtonText}>Leave Queue</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <TouchableOpacity
+                style={[
+                  styles.fullButton,
+                  { backgroundColor: isOnline ? '#d9534f' : theme.green },
+                  vehicleVerified === false && styles.fullButtonDisabled,
+                ]}
+                onPress={() => {
+                  console.log('Go Online button tapped!')
+                  toggleOnline()
+                }}
+              >
+                <Text style={styles.fullButtonText}>{isOnline ? 'Go Offline' : 'Go Online'}</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
@@ -567,7 +883,7 @@ export default function DriverHome() {
               <View style={styles.fareBadge}><Text style={{ color: '#fff' }}>GHS {activeRide.fare ?? '0.00'}</Text></View>
             </View>
 
-            {riderInfo && (rideStatus === 'accepted' || rideStatus === 'in_progress') ? (
+            {riderInfo && ['accepted', 'rider_boarding', 'in_progress', 'arrived_destination', 'payment_pending'].includes(rideStatus) ? (
               <View style={[styles.riderInfoRow, { borderColor: theme.border }]}>
                 <View style={[styles.riderAvatarCircle, { backgroundColor: theme.green }]}>
                   <Text style={styles.riderAvatarText}>{riderInitials}</Text>
@@ -603,9 +919,28 @@ export default function DriverHome() {
               <Text style={[styles.rideText, { color: theme.text }]} numberOfLines={2}>{activeRide.dropoff_address || 'Dropoff address'}</Text>
             </View>
 
-            <TouchableOpacity style={styles.fullButton} onPress={handleArrived}><Text style={styles.fullButtonText}>Arrived</Text></TouchableOpacity>
+            {actionButton ? (
+              <>
+                <TouchableOpacity
+                  style={[
+                    styles.fullButton,
+                    { backgroundColor: actionButton.color },
+                    actionButton.disabled && styles.fullButtonDisabled,
+                  ]}
+                  onPress={actionButton.action}
+                  disabled={actionButton.disabled}
+                >
+                  <Text style={styles.fullButtonText}>{actionButton.label}</Text>
+                </TouchableOpacity>
+                {actionButton.disabled && actionButton.disabledText ? (
+                  <Text style={{ fontSize: 12, color: theme.textSecondary, textAlign: 'center', marginTop: -6, marginBottom: 12 }}>
+                    {actionButton.disabledText}
+                  </Text>
+                ) : null}
+              </>
+            ) : null}
 
-            {activeRide.status === 'in_progress' && (
+            {rideStatus === 'in_progress' && (
               <TouchableOpacity style={[styles.outlinedButton, { borderColor: '#d9534f' }]}><Text style={{ color: '#d9534f' }}>Report Breakdown</Text></TouchableOpacity>
             )}
           </ScrollView>
@@ -783,6 +1118,8 @@ const styles = StyleSheet.create({
   vehicleBannerText: { flex: 1, fontSize: 12, fontWeight: '600', color: '#92400E', lineHeight: 17 },
   vehicleBannerBtn: { backgroundColor: '#B45309', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
   vehicleBannerBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  queueBanner: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#E6F1FB', borderRadius: 12, padding: 14, marginBottom: 14 },
+  queueBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: '#185FA5', lineHeight: 18 },
   quickActionsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
   quickAction: { flex: 1, padding: 12, borderRadius: 8, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', marginHorizontal: 4 },
   quickActionText: { marginLeft: 8, fontWeight: '600' },
