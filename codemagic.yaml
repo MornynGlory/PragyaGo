@@ -1,0 +1,49 @@
+workflows:
+  ios-release:
+    name: PragyaGo iOS Release
+    max_build_duration: 120
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.mornynglory.pragyago
+      vars:
+        EXPO_PUBLIC_SUPABASE_URL: $EXPO_PUBLIC_SUPABASE_URL
+        EXPO_PUBLIC_SUPABASE_ANON_KEY: $EXPO_PUBLIC_SUPABASE_ANON_KEY
+        EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: $EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
+        EXPO_PUBLIC_PAYSTACK_PUBLIC_KEY: $EXPO_PUBLIC_PAYSTACK_PUBLIC_KEY
+        EXPO_PUBLIC_SENTRY_DSN: $EXPO_PUBLIC_SENTRY_DSN
+      node: latest
+    scripts:
+      - name: Install dependencies
+        script: |
+          npm install
+      - name: Set up .env file
+        script: |
+          cat >> .env << EOF
+          EXPO_PUBLIC_SUPABASE_URL=$EXPO_PUBLIC_SUPABASE_URL
+          EXPO_PUBLIC_SUPABASE_ANON_KEY=$EXPO_PUBLIC_SUPABASE_ANON_KEY
+          EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=$EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
+          EXPO_PUBLIC_PAYSTACK_PUBLIC_KEY=$EXPO_PUBLIC_PAYSTACK_PUBLIC_KEY
+          EXPO_PUBLIC_SENTRY_DSN=$EXPO_PUBLIC_SENTRY_DSN
+          EOF
+      - name: Expo prebuild
+        script: |
+          npx expo prebuild --clean --platform ios
+      - name: Install CocoaPods
+        script: |
+          cd ios
+          pod install
+      - name: Build iOS
+        script: |
+          xcode-project build-ipa \
+            --workspace "ios/PragyaGo.xcworkspace" \
+            --scheme "PragyaGo" \
+            --config "Release"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        submit_to_app_store: false
