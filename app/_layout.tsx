@@ -2,7 +2,7 @@ import * as Notifications from 'expo-notifications'
 import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { useEffect, useRef } from 'react'
-import { useColorScheme } from 'react-native'
+import { Platform, useColorScheme } from 'react-native'
 import 'react-native-reanimated'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { registerForPushNotifications } from '@/lib/notifications'
@@ -14,6 +14,16 @@ export default function RootLayout() {
 
   useEffect(() => {
     registerForPushNotifications()
+    if (Platform.OS === 'android') {
+      Notifications.setNotificationChannelAsync('ride-requests', {
+        name: 'Ride Requests',
+        importance: Notifications.AndroidImportance.MAX,
+        sound: 'default',
+        enableVibrate: true,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#1D9E75',
+      })
+    }
     notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
       console.log('Notification received:', notification)
     })

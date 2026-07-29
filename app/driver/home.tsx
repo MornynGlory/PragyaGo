@@ -37,17 +37,46 @@
 //   queued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 //   activated_at TIMESTAMPTZ
 // );
+//
+// --- Atomic ride acceptance (prevents two drivers accepting the same ride) ---
+// CREATE OR REPLACE FUNCTION accept_ride(
+//   p_ride_id UUID,
+//   p_driver_id UUID,
+//   p_profile_id UUID
+// ) RETURNS JSON AS $$
+// DECLARE
+//   v_updated_rows INT;
+// BEGIN
+//   IF NOT EXISTS (SELECT 1 FROM drivers WHERE id = p_driver_id AND profile_id = p_profile_id) THEN
+//     RETURN json_build_object('success', false, 'reason', 'not_your_driver_record');
+//   END IF;
+//
+//   UPDATE rides
+//   SET status = 'accepted', driver_id = p_driver_id
+//   WHERE id = p_ride_id AND status = 'requested';
+//
+//   GET DIAGNOSTICS v_updated_rows = ROW_COUNT;
+//
+//   IF v_updated_rows = 0 THEN
+//     RETURN json_build_object('success', false, 'reason', 'already_taken');
+//   END IF;
+//
+//   RETURN json_build_object('success', true);
+// END;
+// $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 import React, { useEffect, useRef, useState } from 'react'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
+  ActivityIndicator,
   Alert,
   AppState,
   AppStateStatus,
   View,
   Text,
   StyleSheet,
+  TextInput,
   TouchableOpacity,
   Modal,
   Pressable,
@@ -76,6 +105,17 @@ function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
+const BREAKDOWN_REASONS = [
+  { label: 'Accident', exemptFromCommission: true },
+  { label: 'Rider assault or threatening behavior', exemptFromCommission: true },
+  { label: 'Flat tyre', exemptFromCommission: false },
+  { label: 'Engine problem', exemptFromCommission: false },
+  { label: 'Fuel finished', exemptFromCommission: false },
+  { label: 'Overheating', exemptFromCommission: false },
+  { label: 'Personal reasons', exemptFromCommission: false },
+  { label: 'Other', exemptFromCommission: false },
+]
+
 const customMapStyle = [
   { elementType: 'geometry', stylers: [{ color: '#f0ede6' }] },
   { elementType: 'labels.text.fill', stylers: [{ color: '#4a4a4a' }] },
@@ -101,6 +141,7 @@ export default function DriverHome() {
   const driverRideUpdatesChannelRef = useRef<any>(null)
   const activeRideRef = useRef<any>(null)
   const driverIdRef = useRef<string | null>(null)
+  const currentUserIdRef = useRef<string | null>(null)
   const locationIntervalRef = useRef<any>(null)
   const queueChannelRef = useRef<any>(null)
   const lastSentLocationRef = useRef<{ lat: number; lng: number }>({ lat: 0, lng: 0 })
@@ -124,6 +165,10 @@ export default function DriverHome() {
   const [riderInfo, setRiderInfo] = useState<any>(null)
   const [rideRequest, setRideRequest] = useState<any>(null)
   const [chatUnreadCount, setChatUnreadCount] = useState(0)
+  const [showBreakdownModal, setShowBreakdownModal] = useState(false)
+  const [breakdownReason, setBreakdownReason] = useState('')
+  const [otherBreakdownReason, setOtherBreakdownReason] = useState('')
+  const [reportingBreakdown, setReportingBreakdown] = useState(false)
 
   useEffect(() => { activeRideRef.current = activeRide }, [activeRide])
 
@@ -202,6 +247,7 @@ export default function DriverHome() {
         router.replace('/')
         return
       }
+      currentUserIdRef.current = user.id
       const { data: profile } = await supabase
         .from('profiles')
         .select('full_name')
@@ -245,6 +291,7 @@ export default function DriverHome() {
       const { data: sessionData } = await supabase.auth.getSession()
       const user = sessionData?.session?.user
       if (!user) return
+      currentUserIdRef.current = user.id
 
       const { data: driver } = await supabase
         .from('drivers')
@@ -567,6 +614,28 @@ export default function DriverHome() {
     setIsOnline(newStatus)
   }
 
+  const sendRideRequestNotification = async (ride: any) => {
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('push_token')
+        .eq('id', currentUserIdRef.current)
+        .single()
+
+      if (!profile?.push_token) return
+
+      await sendPushNotification(
+        profile.push_token,
+        '🛺 New Ride Request!',
+        `Pickup: ${ride.pickup_address}\nDropoff: ${ride.dropoff_address}`,
+        { type: 'ride_request', rideId: ride.id },
+        'ride-requests'
+      )
+    } catch (e) {
+      console.log('Push notification error:', e)
+    }
+  }
+
   async function subscribeToRideRequests(driverId: string) {
     console.log('Setting up ride request subscription for driver:', driverId)
     if (rideRequestChannelRef.current) {
@@ -578,11 +647,12 @@ export default function DriverHome() {
         event: 'INSERT',
         schema: 'public',
         table: 'rides',
-      }, (payload) => {
+      }, async (payload) => {
         console.log('New ride INSERT received:', JSON.stringify(payload.new))
         const ride = payload.new as any
         if (ride.status === 'requested' && !activeRideRef.current) {
           setRideRequest(ride)
+          await sendRideRequestNotification(ride)
         }
       })
       .subscribe((status) => {
@@ -628,26 +698,46 @@ export default function DriverHome() {
     driverRideUpdatesChannelRef.current = driverRideChannel
   }
 
-  async function acceptRide() {
+  const acceptRide = async () => {
     if (!rideRequest) return
-    console.log('Accepting ride:', rideRequest?.id)
-    console.log('Driver ID for accept:', driverIdRef.current)
-    if (!driverIdRef.current) return
 
-    const { error } = await supabase
-      .from('rides')
-      .update({ status: 'accepted', driver_id: driverIdRef.current })
-      .eq('id', rideRequest.id)
+    try {
+      console.log('Attempting to accept ride:', rideRequest.id)
+      console.log('Driver ID:', driverIdRef.current)
 
-    console.log('Accept update error:', JSON.stringify(error))
-    if (error) {
-      Alert.alert('Error', 'Could not accept ride. Please try again.')
-      return
+      // Use atomic function to prevent race conditions
+      const { data, error } = await supabase.rpc('accept_ride', {
+        p_ride_id: rideRequest.id,
+        p_driver_id: driverIdRef.current,
+        p_profile_id: driverIdRef.current
+      })
+
+      console.log('Accept ride result:', JSON.stringify(data))
+      console.log('Accept ride error:', JSON.stringify(error))
+
+      if (error) {
+        Alert.alert('Error', 'Could not accept ride. Please try again.')
+        setRideRequest(null)
+        return
+      }
+
+      if (!data.success) {
+        // Ride was taken by another driver
+        Alert.alert('Ride Unavailable', 'This ride has already been taken by another driver.')
+        setRideRequest(null)
+        return
+      }
+
+      // Successfully accepted
+      setActiveRide({ ...rideRequest, status: 'accepted', driver_id: driverIdRef.current })
+      setRideStatus('accepted')
+      setRideRequest(null)
+
+    } catch (e: any) {
+      console.log('Accept ride catch:', e)
+      Alert.alert('Error', 'Something went wrong. Please try again.')
+      setRideRequest(null)
     }
-
-    setActiveRide(rideRequest)
-    setRideStatus('accepted')
-    setRideRequest(null)
   }
   function declineRide() { setRideRequest(null) }
 
@@ -728,6 +818,11 @@ export default function DriverHome() {
       Alert.alert('Waiting', 'Please wait for the rider to confirm payment.')
       return
     }
+    await handleCompleteRide()
+  }
+
+  async function handleCompleteRide() {
+    if (!activeRide) return
 
     const finalFare = parseFloat(activeRide?.fare_ghs || '0')
     const commission = Math.round(finalFare * 0.15 * 100) / 100
@@ -744,17 +839,83 @@ export default function DriverHome() {
       .eq('id', activeRide.id)
 
     if (!error) {
+      // Deduct commission from wallet, credit the driver's share
       await supabase.rpc('increment_commission', { driver_id: driverIdRef.current, amount: commission })
       await supabase.rpc('increment_wallet', { driver_id: driverIdRef.current, amount: driverEarnings })
 
-      setRideStatus('')
+      // Reset ride state — isOnline is untouched, so the driver stays online automatically
       setActiveRide(null)
+      setRideStatus('')
       Alert.alert(
         '🎉 Ride Complete!',
         `Fare: GHS ${finalFare}\nYour earnings: GHS ${driverEarnings}\nCommission: GHS ${commission}`
       )
     } else {
       Alert.alert('Error', 'Could not confirm payment. Please try again.')
+    }
+  }
+
+  async function confirmBreakdown() {
+    if (!breakdownReason) {
+      Alert.alert('Select a reason', 'Please choose a reason for the breakdown.')
+      return
+    }
+    if (breakdownReason === 'Other' && !otherBreakdownReason.trim()) {
+      Alert.alert('Enter a reason', 'Please describe the issue.')
+      return
+    }
+    if (!activeRide) return
+
+    const finalReason = breakdownReason === 'Other' ? otherBreakdownReason.trim() : breakdownReason
+    const selectedReason = BREAKDOWN_REASONS.find(r => r.label === breakdownReason)
+    const exemptFromCommission = selectedReason?.exemptFromCommission || false
+
+    setReportingBreakdown(true)
+    try {
+      if (!exemptFromCommission) {
+        // Calculate commission on fare_ghs and add it to the driver's commission_owed
+        const fare = parseFloat(activeRide.fare_ghs || '0')
+        const commission = Math.round(fare * 0.15 * 100) / 100
+        await supabase.rpc('increment_commission', { driver_id: driverIdRef.current, amount: commission })
+      }
+      // If exempt, no commission is charged — status stays 'pending_review' until admin decides
+
+      const { error } = await supabase.from('driver_breakdowns').insert({
+        ride_id: activeRide.id,
+        driver_id: driverIdRef.current,
+        rider_id: activeRide.rider_id,
+        notes: finalReason,
+        status: exemptFromCommission ? 'pending_review' : 'confirmed',
+        commission_charged: !exemptFromCommission,
+      })
+
+      if (error) {
+        Alert.alert('Error', 'Could not report breakdown. Please try again.')
+        return
+      }
+
+      if (isOnline) await toggleOnline()
+
+      setShowBreakdownModal(false)
+      setBreakdownReason('')
+      setOtherBreakdownReason('')
+
+      if (exemptFromCommission) {
+        Alert.alert(
+          'Breakdown Reported',
+          'Your breakdown has been reported for admin review. Commission will not be charged until a decision is made. You have been set to Offline.'
+        )
+      } else {
+        Alert.alert(
+          'Breakdown Reported',
+          'You have been set to Offline. Commission has been charged for this incomplete ride. Please resolve the issue before going online again.'
+        )
+      }
+    } catch (e) {
+      console.log('Breakdown report error:', e)
+      Alert.alert('Error', 'Something went wrong. Please try again.')
+    } finally {
+      setReportingBreakdown(false)
     }
   }
 
@@ -775,10 +936,13 @@ export default function DriverHome() {
       return { label: 'Arrived at Destination', color: theme.green, action: handleArrivedAtDestination }
     }
     if (rideStatus === 'arrived_destination' || rideStatus === 'payment_pending') {
+      if (activeRide?.rider_confirmed_payment) {
+        return { label: 'Payment Confirmed', color: theme.green, action: handleCompleteRide }
+      }
       return {
         label: 'Waiting for Payment...',
         color: theme.amber,
-        disabled: !activeRide?.rider_confirmed_payment,
+        disabled: true,
         disabledText: 'Waiting for rider to confirm payment...',
         action: handleConfirmPayment
       }
@@ -1018,6 +1182,13 @@ export default function DriverHome() {
               <Text style={[styles.rideText, { color: theme.text }]} numberOfLines={2}>{activeRide.dropoff_address || 'Dropoff address'}</Text>
             </View>
 
+            {(rideStatus === 'arrived_destination' || rideStatus === 'payment_pending') && activeRide?.rider_confirmed_payment ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <Feather name="check-circle" size={20} color={theme.green} />
+                <Text style={{ color: theme.green, fontWeight: '700', fontSize: 15 }}>Payment Confirmed!</Text>
+              </View>
+            ) : null}
+
             {actionButton ? (
               <>
                 <TouchableOpacity
@@ -1040,7 +1211,12 @@ export default function DriverHome() {
             ) : null}
 
             {rideStatus === 'in_progress' && (
-              <TouchableOpacity style={[styles.outlinedButton, { borderColor: '#d9534f' }]}><Text style={{ color: '#d9534f' }}>Report Breakdown</Text></TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.outlinedButton, { borderColor: '#d9534f' }]}
+                onPress={() => setShowBreakdownModal(true)}
+              >
+                <Text style={{ color: '#d9534f' }}>Report Breakdown</Text>
+              </TouchableOpacity>
             )}
           </ScrollView>
         )}
@@ -1182,6 +1358,104 @@ export default function DriverHome() {
               </Text>
             </TouchableOpacity>
 
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showBreakdownModal} transparent animationType="fade">
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 24,
+        }}>
+          <View style={{
+            backgroundColor: theme.card,
+            borderRadius: 16,
+            padding: 20,
+            width: '100%',
+            maxHeight: '85%',
+          }}>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: theme.text, marginBottom: 4 }}>
+              Report Breakdown
+            </Text>
+            <Text style={{ fontSize: 13, color: theme.textSecondary, marginBottom: 16 }}>
+              Select the reason that best describes what happened.
+            </Text>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 320 }}>
+              {BREAKDOWN_REASONS.map((reason) => (
+                <TouchableOpacity
+                  key={reason.label}
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 12 }}
+                  onPress={() => setBreakdownReason(reason.label)}
+                >
+                  <View style={{
+                    width: 20, height: 20, borderRadius: 10,
+                    borderWidth: 2,
+                    borderColor: breakdownReason === reason.label ? theme.green : theme.border,
+                    justifyContent: 'center', alignItems: 'center',
+                  }}>
+                    {breakdownReason === reason.label ? (
+                      <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.green }} />
+                    ) : null}
+                  </View>
+                  <Text style={{ fontSize: 14, color: theme.text, flex: 1 }}>{reason.label}</Text>
+                </TouchableOpacity>
+              ))}
+
+              {breakdownReason ? (
+                BREAKDOWN_REASONS.find(r => r.label === breakdownReason)?.exemptFromCommission ? (
+                  <Text style={{ color: theme.green, fontSize: 13, marginTop: 8 }}>
+                    ✓ Commission may be waived subject to admin review
+                  </Text>
+                ) : (
+                  <Text style={{ color: theme.red, fontSize: 13, marginTop: 8 }}>
+                    ✗ Commission will be charged for this breakdown
+                  </Text>
+                )
+              ) : null}
+
+              {breakdownReason === 'Other' ? (
+                <TextInput
+                  style={{
+                    borderWidth: 1, borderColor: theme.border, borderRadius: 10,
+                    paddingHorizontal: 14, paddingVertical: 12, fontSize: 14,
+                    color: theme.text, backgroundColor: theme.background2,
+                    minHeight: 70, textAlignVertical: 'top', marginTop: 12,
+                  }}
+                  placeholder="Describe what happened..."
+                  placeholderTextColor={theme.textMuted}
+                  value={otherBreakdownReason}
+                  onChangeText={setOtherBreakdownReason}
+                  multiline
+                />
+              ) : null}
+            </ScrollView>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
+              <TouchableOpacity
+                style={{ flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', backgroundColor: theme.background2 }}
+                onPress={() => {
+                  setShowBreakdownModal(false)
+                  setBreakdownReason('')
+                  setOtherBreakdownReason('')
+                }}
+                disabled={reportingBreakdown}
+              >
+                <Text style={{ fontSize: 15, fontWeight: '600', color: theme.textSecondary }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', backgroundColor: '#d9534f' }}
+                onPress={confirmBreakdown}
+                disabled={reportingBreakdown}
+              >
+                {reportingBreakdown
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={{ fontSize: 15, fontWeight: '700', color: '#fff' }}>Report Breakdown</Text>}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>

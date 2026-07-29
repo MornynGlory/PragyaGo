@@ -65,7 +65,8 @@ export const sendPushNotification = async (
   expoPushToken: string | null | undefined,
   title: string,
   body: string,
-  data?: Record<string, unknown>
+  data?: Record<string, unknown>,
+  channelId?: string
 ): Promise<void> => {
   if (!expoPushToken) return;
   try {
@@ -83,6 +84,7 @@ export const sendPushNotification = async (
         data: data ?? {},
         sound: 'default',
         priority: 'high',
+        ...(channelId ? { channelId } : {}),
       }),
     });
   } catch {

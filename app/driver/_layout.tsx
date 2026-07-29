@@ -25,9 +25,8 @@ export default function DriverLayout() {
       }}
     >
       <Tabs.Screen name="home" options={{ title: 'Home', tabBarIcon: ({ color, size }) => <Feather name="map" size={size} color={color} /> }} />
-      <Tabs.Screen name="earnings" options={{ title: 'Earnings', tabBarIcon: ({ color, size }) => <Feather name="trending-up" size={size} color={color} /> }} />
+      <Tabs.Screen name="earnings" options={{ title: 'Reports', tabBarIcon: ({ color, size }) => <Feather name="file-text" size={size} color={color} /> }} />
       <Tabs.Screen name="profile" options={{ title: 'Settings', tabBarIcon: ({ color, size }) => <Feather name="settings" size={size} color={color} /> }} />
-      <Tabs.Screen name="report" options={{ href: null }} />
       <Tabs.Screen name="wallet" options={{ href: null }} />
       <Tabs.Screen name="edit-profile" options={{ href: null }} />
       <Tabs.Screen name="notifications" options={{ href: null }} />

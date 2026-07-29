@@ -36,6 +36,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 const GOOGLE_API_KEY = (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k') ?? '';
 
+const REQUEST_COOLDOWN = 10000; // 10 seconds between ride requests
+
 const reverseGeocode = async (lat: number, lng: number): Promise<string> => {
   try {
     const response = await fetch(
@@ -129,6 +131,7 @@ export default function RiderHomeScreen() {
   const [fareBreakdown, setFareBreakdown] = useState<FareResult | null>(null);
   const [calculatingFare, setCalculatingFare] = useState(false);
   const [requesting, setRequesting] = useState(false);
+  const [lastRequestTime, setLastRequestTime] = useState(0);
   const [currentRide, setCurrentRide] = useState<any>(null);
   const [rideStatus, setRideStatus] = useState('');
   const [driverInfo, setDriverInfo] = useState<any>(null);
@@ -149,8 +152,10 @@ export default function RiderHomeScreen() {
   const [cancellingRide, setCancellingRide] = useState(false);
   const rideSubscription = useRef<any>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const requestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const driverLocationSubscription = useRef<any>(null);
   const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const locationWatcherRef = useRef<Location.LocationSubscription | null>(null);
   const currentRideRef = useRef<any>(null);
   const rideStatusRef = useRef<string>('');
   const pulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -330,6 +335,8 @@ export default function RiderHomeScreen() {
       if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
       if (stopDebounceRef.current) clearTimeout(stopDebounceRef.current);
       if (pickupDebounceRef.current) clearTimeout(pickupDebounceRef.current);
+      if (requestTimeoutRef.current) clearTimeout(requestTimeoutRef.current);
+      locationWatcherRef.current?.remove();
     };
   }, []);
 
@@ -372,6 +379,27 @@ export default function RiderHomeScreen() {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') { Alert.alert('Permission Denied', 'Location permission is required.'); return; }
     getCurrentLocation();
+    startLocationWatcher();
+  };
+
+  // Keeps userLat/userLng/location current for the whole session — not gated on
+  // ride status, so it keeps running after a ride completes instead of going stale.
+  const startLocationWatcher = async () => {
+    if (locationWatcherRef.current) return;
+    try {
+      locationWatcherRef.current = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
+        (loc) => {
+          const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+          setUserLat(coords.latitude);
+          setUserLng(coords.longitude);
+          setLocation(coords);
+          locationRef.current = coords;
+        }
+      );
+    } catch (e) {
+      console.log('Location watcher error:', e);
+    }
   };
 
   const getCurrentLocation = async () => {
@@ -384,6 +412,9 @@ export default function RiderHomeScreen() {
       locationRef.current = coords;
       setLoading(false);
       mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.05, longitudeDelta: 0.05 });
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) detectAndAssignZone(coords.latitude, coords.longitude, user.id);
     } catch { setLoading(false); }
   };
 
@@ -428,6 +459,33 @@ export default function RiderHomeScreen() {
     setDriverLocation(null);
     setRoutePoints([]);
     setRouteDistance(null);
+  };
+
+  // Runs after a ride completes — currentRide/rideStatus/driverLocation are already
+  // cleared by the 'completed' branch in subscribeToRideUpdates; this just resets the
+  // request form and re-centers the map on a fresh GPS fix so it doesn't jump back to
+  // wherever the map camera was left (e.g. the dropoff point) once the ride sheet closes.
+  const resetAfterRide = async () => {
+    setDestination('');
+    setFareEstimate(0);
+    setPickupLocation('My Current Location');
+
+    try {
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+      setUserLat(coords.latitude);
+      setUserLng(coords.longitude);
+      setLocation(coords);
+      locationRef.current = coords;
+
+      mapRef.current?.animateToRegion({
+        ...coords,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }, 1000);
+    } catch (e) {
+      console.log('Location reset error:', e);
+    }
   };
 
   const fetchRoute = async (originLat: number, originLng: number, destLat: number, destLng: number) => {
@@ -489,6 +547,45 @@ export default function RiderHomeScreen() {
         });
     channel.subscribe();
     driverLocationSubscription.current = channel;
+  };
+
+  const detectAndAssignZone = async (lat: number, lng: number, userId: string) => {
+    try {
+      // Use find_nearest_driver logic in reverse - find which zone the rider is in
+      // by checking which zone's drivers are closest
+      const { data: zones } = await supabase
+        .from('zones')
+        .select('id, name');
+
+      if (!zones || zones.length === 0) return;
+
+      // For now assign based on closest zone centroid
+      // Get zone settings which have zone boundaries
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('zone_id')
+        .eq('id', userId)
+        .single();
+
+      if (!profile?.zone_id) {
+        // Assign first available zone if none set
+        // In future this will use GPS boundary detection
+        const { data: defaultZone } = await supabase
+          .from('zones')
+          .select('id')
+          .limit(1)
+          .single();
+
+        if (defaultZone) {
+          await supabase
+            .from('profiles')
+            .update({ zone_id: defaultZone.id })
+            .eq('id', userId);
+        }
+      }
+    } catch (e) {
+      console.log('Zone detection error:', e);
+    }
   };
 
   const initZoneData = async (riderZoneId: string) => {
@@ -704,6 +801,10 @@ export default function RiderHomeScreen() {
           setRideStatus(ride.status);
 
           if (ride.status === 'accepted' && ride.driver_id) {
+            if (requestTimeoutRef.current) {
+              clearTimeout(requestTimeoutRef.current);
+              requestTimeoutRef.current = null;
+            }
             Alert.alert('Driver Found!', 'Your Pragya driver is on the way!');
             await fetchDriverInfo(ride.driver_id);
             await subscribeToDriverLocation(ride.driver_id);
@@ -796,6 +897,7 @@ export default function RiderHomeScreen() {
             if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
             if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
             stopDriverTracking();
+            await resetAfterRide();
           } else if (ride.status === 'cancelled') {
             Alert.alert('Ride Cancelled', 'Your ride was cancelled.');
             setShowArrivedBanner(false);
@@ -922,6 +1024,15 @@ export default function RiderHomeScreen() {
         return;
       }
     }
+
+    // Rate limit check
+    const now = Date.now();
+    if (lastRequestTime > 0 && now - lastRequestTime < REQUEST_COOLDOWN) {
+      const secondsLeft = Math.ceil((REQUEST_COOLDOWN - (now - lastRequestTime)) / 1000);
+      Alert.alert('Please wait', `You can request another ride in ${secondsLeft} seconds.`);
+      return;
+    }
+
     setRequesting(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -932,6 +1043,18 @@ export default function RiderHomeScreen() {
       const pickupAddress = pickupLocation === 'My Current Location'
         ? await reverseGeocode(resolvedPickupLat, resolvedPickupLng)
         : pickupLocation;
+
+      let zoneId = zoneIdRef.current;
+      if (!zoneId) {
+        const { data: nearestZone } = await supabase
+          .from('zones')
+          .select('id, name')
+          .limit(1)
+          .single();
+
+        zoneId = nearestZone?.id || null;
+      }
+
       const { data: ride, error } = await supabase
         .from('rides')
         .insert([{
@@ -947,6 +1070,7 @@ export default function RiderHomeScreen() {
           estimated_fare: fareEstimate,
           expected_distance_km: fareBreakdown?.expectedDistanceKm ?? null,
           payment_method: paymentMethod,
+          zone_id: zoneId,
           created_at: new Date().toISOString(),
           ...(discountResult?.discount ? {
             discount_id: discountResult.discount.id,
@@ -955,12 +1079,37 @@ export default function RiderHomeScreen() {
           } : {}),
         }])
         .select().single();
-      if (error) { Alert.alert('Error', error.message); }
+      if (error || !ride) { Alert.alert('Error', error?.message ?? 'Could not create ride request. Please try again.'); }
       else {
         setCurrentRide(ride); setRideStatus('requested');
+        setLastRequestTime(Date.now());
         await subscribeToRideUpdates(ride.id);
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = setInterval(() => pollRideStatus(ride.id), 5000);
+
+        // Auto-cancel if no driver accepts within 60 seconds
+        if (requestTimeoutRef.current) clearTimeout(requestTimeoutRef.current);
+        requestTimeoutRef.current = setTimeout(async () => {
+          const { data: latestRide } = await supabase
+            .from('rides')
+            .select('status')
+            .eq('id', ride.id)
+            .single();
+
+          if (latestRide?.status === 'requested') {
+            await supabase
+              .from('rides')
+              .update({ status: 'cancelled', cancellation_reason: 'No driver available' })
+              .eq('id', ride.id);
+
+            setCurrentRide(null);
+            setRideStatus('');
+            if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
+            Alert.alert('No Drivers Available', 'No drivers accepted your ride request. Please try again.');
+          }
+          requestTimeoutRef.current = null;
+        }, 60000);
+
         await Promise.all(
           nearbyDrivers.map(async (driver: any) => {
             const driverToken = await getDriverToken(driver.id);
@@ -1179,14 +1328,14 @@ export default function RiderHomeScreen() {
           </View>
         ) : null}
 
-        {loading ? (
+        {loading || !location ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#2563eb" />
             <Text style={styles.loadingText}>Getting your location...</Text>
           </View>
         ) : (
           <MapView ref={mapRef} style={styles.map} customMapStyle={customMapStyle} mapType="standard" zoomEnabled={true} scrollEnabled={true}
-            initialRegion={{ latitude: location?.latitude || 7.3349, longitude: location?.longitude || -2.3123, latitudeDelta: 0.05, longitudeDelta: 0.05 }}>
+            initialRegion={{ latitude: location.latitude, longitude: location.longitude, latitudeDelta: 0.05, longitudeDelta: 0.05 }}>
             {userLat != null && userLng != null ? (
               <Marker coordinate={{ latitude: userLat, longitude: userLng }} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
                 <View style={{ alignItems: 'center', justifyContent: 'center', width: 60, height: 60 }}>
