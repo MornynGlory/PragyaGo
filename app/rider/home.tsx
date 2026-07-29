@@ -1,6 +1,7 @@
 // Run in Supabase SQL:
 // ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by TEXT;
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { applyDiscount, DiscountResult, recordDiscountUse } from '@/lib/discounts';
 import { useTheme } from '@/lib/theme';
 import { calculateZoneFare, FareResult, getFareSuggestions } from '@/lib/fares';
@@ -8,12 +9,14 @@ import { getDriverToken, sendPushNotification } from '@/lib/notifications';
 import { supabase } from '@/lib/supabase';
 import { Feather } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
+  AppStateStatus,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -208,6 +211,100 @@ export default function RiderHomeScreen() {
       setChatUnreadCount(0);
     }
   }, [currentRide?.id]);
+
+  useEffect(() => {
+    if (currentRide) {
+      AsyncStorage.setItem('activeRide', JSON.stringify(currentRide));
+      AsyncStorage.setItem('rideStatus', rideStatus);
+    } else {
+      AsyncStorage.removeItem('activeRide');
+      AsyncStorage.removeItem('rideStatus');
+    }
+  }, [currentRide, rideStatus]);
+
+  const restoreActiveRide = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Check Supabase for active ride first (most reliable)
+      const { data: activeRideData } = await supabase
+        .from('rides')
+        .select('*')
+        .eq('rider_id', user.id)
+        .in('status', ['requested', 'accepted', 'rider_boarding', 'in_progress', 'arrived_destination', 'payment_pending'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (activeRideData) {
+        console.log('Restored active ride from Supabase:', activeRideData.id);
+        setCurrentRide(activeRideData);
+        setRideStatus(activeRideData.status);
+
+        subscribeToRideUpdates(activeRideData.id);
+
+        if (activeRideData.driver_id) {
+          await fetchDriverInfo(activeRideData.driver_id);
+
+          const { data: driverData } = await supabase
+            .from('drivers')
+            .select('id, current_lat, current_lng')
+            .eq('id', activeRideData.driver_id)
+            .single();
+
+          if (driverData?.current_lat) {
+            setDriverLocation({
+              latitude: parseFloat(driverData.current_lat),
+              longitude: parseFloat(driverData.current_lng),
+            });
+            subscribeToDriverLocation(driverData.id);
+          }
+        }
+      }
+    } catch (e) {
+      console.log('Restore ride error:', e);
+    }
+  };
+
+  useEffect(() => {
+    restoreActiveRide();
+  }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      // Re-check for active ride when tab is focused
+      if (!currentRide) {
+        restoreActiveRide();
+      }
+    }, [currentRide])
+  );
+
+  const appStateRef = useRef(AppState.currentState);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', async (nextAppState: AppStateStatus) => {
+      if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
+        console.log('App came to foreground - restoring ride state');
+
+        if (currentRide?.id) {
+          const { data: ride } = await supabase
+            .from('rides')
+            .select('*')
+            .eq('id', currentRide.id)
+            .single();
+
+          if (ride) {
+            setCurrentRide(ride);
+            setRideStatus(ride.status);
+          }
+        }
+      }
+      appStateRef.current = nextAppState;
+    });
+
+    return () => subscription.remove();
+  }, [currentRide]);
 
   useEffect(() => {
     requestLocationPermission();

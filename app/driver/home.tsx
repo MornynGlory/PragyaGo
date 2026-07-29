@@ -40,8 +40,11 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
   Alert,
+  AppState,
+  AppStateStatus,
   View,
   Text,
   StyleSheet,
@@ -60,6 +63,18 @@ import { supabase } from '@/lib/supabase'
 import { getDriverToken, sendPushNotification } from '@/lib/notifications'
 
 const GOOGLE_API_KEY = (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k') ?? ''
+
+const MIN_DISTANCE_METERS = 5
+
+function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 6371000
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLng = (lng2 - lng1) * Math.PI / 180
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2)
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
 
 const customMapStyle = [
   { elementType: 'geometry', stylers: [{ color: '#f0ede6' }] },
@@ -88,6 +103,7 @@ export default function DriverHome() {
   const driverIdRef = useRef<string | null>(null)
   const locationIntervalRef = useRef<any>(null)
   const queueChannelRef = useRef<any>(null)
+  const lastSentLocationRef = useRef<{ lat: number; lng: number }>({ lat: 0, lng: 0 })
 
   const [driverName, setDriverName] = useState('Driver')
   const [inQueue, setInQueue] = useState(false)
@@ -112,7 +128,18 @@ export default function DriverHome() {
   useEffect(() => { activeRideRef.current = activeRide }, [activeRide])
 
   useEffect(() => {
+    if (activeRide) {
+      AsyncStorage.setItem('driverActiveRide', JSON.stringify(activeRide))
+      AsyncStorage.setItem('driverRideStatus', rideStatus)
+    } else {
+      AsyncStorage.removeItem('driverActiveRide')
+      AsyncStorage.removeItem('driverRideStatus')
+    }
+  }, [activeRide, rideStatus])
+
+  useEffect(() => {
     fetchDriverData()
+    restoreDriverState()
     requestLocationPermission()
     return () => {
       if (rideRequestChannelRef.current) supabase.removeChannel(rideRequestChannelRef.current)
@@ -125,9 +152,28 @@ export default function DriverHome() {
     }
   }, [])
 
+  const appStateRef = useRef(AppState.currentState)
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', async (nextAppState: AppStateStatus) => {
+      if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
+        console.log('Driver app came to foreground')
+        restoreDriverState()
+      }
+      appStateRef.current = nextAppState
+    })
+    return () => subscription.remove()
+  }, [])
+
   useFocusEffect(
     React.useCallback(() => {
       fetchDriverData()
+    }, [])
+  )
+
+  useFocusEffect(
+    React.useCallback(() => {
+      restoreDriverState()
     }, [])
   )
 
@@ -194,6 +240,49 @@ export default function DriverHome() {
     }
   }
 
+  async function restoreDriverState() {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const user = sessionData?.session?.user
+      if (!user) return
+
+      const { data: driver } = await supabase
+        .from('drivers')
+        .select('id, is_online, commission_owed, wallet_balance, rating, zone_id')
+        .eq('profile_id', user.id)
+        .single()
+
+      if (!driver) return
+      driverIdRef.current = driver.id
+
+      // Check for active ride
+      const { data: activeRideData } = await supabase
+        .from('rides')
+        .select('*')
+        .eq('driver_id', driver.id)
+        .in('status', ['accepted', 'rider_boarding', 'in_progress', 'arrived_destination', 'payment_pending'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (activeRideData) {
+        console.log('Restored driver active ride:', activeRideData.id)
+        setActiveRide(activeRideData)
+        setRideStatus(activeRideData.status)
+        setIsOnline(true)
+      }
+
+      // Restore online status
+      if (driver.is_online) {
+        setIsOnline(true)
+        subscribeToRideRequests(driver.id)
+        startLocationTracking()
+      }
+    } catch (e) {
+      console.log('Driver restore error:', e)
+    }
+  }
+
   const getStatusLabel = () => {
     if (rideStatus === 'accepted') return 'Heading to Pickup'
     if (rideStatus === 'rider_boarding') return 'Waiting for Rider to Board'
@@ -252,25 +341,35 @@ export default function DriverHome() {
     locationIntervalRef.current = setInterval(async () => {
       try {
         const loc = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High
+          accuracy: Location.Accuracy.BestForNavigation
         })
         const { latitude, longitude } = loc.coords
         setUserLat(latitude)
         setUserLng(longitude)
 
-        await supabase
-          .from('drivers')
-          .update({
-            current_lat: latitude,
-            current_lng: longitude
-          })
-          .eq('id', driverIdRef.current)
+        const distance = calculateDistance(
+          lastSentLocationRef.current.lat,
+          lastSentLocationRef.current.lng,
+          latitude,
+          longitude
+        )
 
-        console.log('Driver location updated:', latitude, longitude)
+        if (distance > MIN_DISTANCE_METERS) {
+          await supabase
+            .from('drivers')
+            .update({
+              current_lat: latitude,
+              current_lng: longitude
+            })
+            .eq('id', driverIdRef.current)
+
+          lastSentLocationRef.current = { lat: latitude, lng: longitude }
+          console.log('Driver location updated:', latitude, longitude)
+        }
       } catch (e) {
         console.log('Location update error:', e)
       }
-    }, 5000)
+    }, 2000)
   }
 
   function stopLocationTracking() {
