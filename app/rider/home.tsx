@@ -590,6 +590,58 @@ export default function RiderHomeScreen() {
     }
   };
 
+  const detectZoneFromCoordinates = async (lat: number, lng: number): Promise<string | null> => {
+    try {
+      // Find nearest zone by comparing pickup coordinates to driver locations in each zone
+      const { data: zones } = await supabase
+        .from('zones')
+        .select('id, name');
+
+      if (!zones || zones.length === 0) return null;
+
+      // Find which zone has the most online drivers near the pickup point
+      // This is a simple approach - find nearest online driver and use their zone
+      const { data: nearestDriver } = await supabase
+        .from('drivers')
+        .select('zone_id, current_lat, current_lng')
+        .eq('is_online', true)
+        .not('current_lat', 'is', null)
+        .not('current_lng', 'is', null)
+        .limit(10);
+
+      if (nearestDriver && nearestDriver.length > 0) {
+        // Find closest driver
+        let closestDriver = nearestDriver[0];
+        let minDistance = Infinity;
+
+        nearestDriver.forEach((driver: any) => {
+          const distance = Math.sqrt(
+            Math.pow(parseFloat(driver.current_lat) - lat, 2) +
+            Math.pow(parseFloat(driver.current_lng) - lng, 2)
+          );
+          if (distance < minDistance) {
+            minDistance = distance;
+            closestDriver = driver;
+          }
+        });
+
+        return closestDriver.zone_id;
+      }
+
+      // Fallback: use rider's profile zone_id
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('zone_id')
+        .eq('id', userIdRef.current)
+        .single();
+
+      return profile?.zone_id || null;
+    } catch (e) {
+      console.log('Zone detection error:', e);
+      return null;
+    }
+  };
+
   const initZoneData = async (riderZoneId: string) => {
     try {
       const { data: riderZone } = await supabase
@@ -1062,16 +1114,7 @@ export default function RiderHomeScreen() {
         ? await reverseGeocode(resolvedPickupLat, resolvedPickupLng)
         : pickupLocation;
 
-      let zoneId = zoneIdRef.current;
-      if (!zoneId) {
-        const { data: nearestZone } = await supabase
-          .from('zones')
-          .select('id, name')
-          .limit(1)
-          .single();
-
-        zoneId = nearestZone?.id || null;
-      }
+      let zoneId = await detectZoneFromCoordinates(resolvedPickupLat, resolvedPickupLng);
 
       const { data: ride, error } = await supabase
         .from('rides')

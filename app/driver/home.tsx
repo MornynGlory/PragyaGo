@@ -64,6 +64,18 @@
 //   RETURN json_build_object('success', true);
 // END;
 // $$ LANGUAGE plpgsql SECURITY DEFINER;
+//
+// --- Commission payment log ---
+// CREATE TABLE IF NOT EXISTS commission_payments (
+//   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+//   driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+//   ride_id UUID NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+//   amount NUMERIC(10,2) NOT NULL,
+//   status TEXT NOT NULL DEFAULT 'paid',
+//   paid_at TIMESTAMPTZ,
+//   payment_method TEXT,
+//   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+// );
 
 import React, { useEffect, useRef, useState } from 'react'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -850,6 +862,18 @@ export default function DriverHome() {
       // Deduct commission from wallet, credit the driver's share
       await supabase.rpc('increment_commission', { driver_id: driverIdRef.current, amount: commission })
       await supabase.rpc('increment_wallet', { driver_id: driverIdRef.current, amount: driverEarnings })
+
+      // Log commission payment
+      await supabase
+        .from('commission_payments')
+        .insert({
+          driver_id: driverIdRef.current,
+          ride_id: activeRide.id,
+          amount: commission,
+          status: 'paid',
+          paid_at: new Date().toISOString(),
+          payment_method: 'auto_deduction'
+        })
 
       // Reset ride state — isOnline is untouched, so the driver stays online automatically
       setActiveRide(null)
