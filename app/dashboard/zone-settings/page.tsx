@@ -100,7 +100,7 @@ export default function ZoneSettingsPage() {
         <View style={styles.formulaCard}>
           <Text style={styles.formulaTitle}>Fare Formula</Text>
           <Text style={styles.formulaLine}>Rider pays: Base fare × 4 + 85%</Text>
-          <Text style={styles.formulaExample}>Example: GHS 5 base → GHS 20 × 1.85 = GHS 37.00</Text>
+          <Text style={styles.formulaExample}>Example: GH₵ 5 base → GH₵ 20 × 1.85 = GH₵ 37.00</Text>
           <Text style={styles.formulaNote}>
             The base fare is set per route in Zone Fares. The formula applies automatically — no platform percentage field needed.
           </Text>
@@ -116,7 +116,7 @@ export default function ZoneSettingsPage() {
               <View key={zone.id} style={styles.zoneCard}>
                 <Text style={styles.zoneName}>{zone.name}</Text>
 
-                <Text style={styles.fieldLabel}>Stop Fee (GHS per stop)</Text>
+                <Text style={styles.fieldLabel}>Stop Fee (GH₵ per stop)</Text>
                 <TextInput
                   style={styles.input}
                   value={edit.stop_fee}
@@ -126,7 +126,7 @@ export default function ZoneSettingsPage() {
                   placeholderTextColor={theme.placeholder}
                 />
 
-                <Text style={styles.fieldLabel}>Fallback Rate (GHS/km, when no zone fare matched)</Text>
+                <Text style={styles.fieldLabel}>Fallback Rate (GH₵/km, when no zone fare matched)</Text>
                 <TextInput
                   style={styles.input}
                   value={edit.fallback_per_km}

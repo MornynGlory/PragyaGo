@@ -182,8 +182,8 @@ export default function RiderHomeScreen() {
   const [loadingStopSuggestions, setLoadingStopSuggestions] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
-  const [showArrivedBanner, setShowArrivedBanner] = useState(false);
-  const [arrivedBannerDriverName, setArrivedBannerDriverName] = useState('');
+  const [hasBoarded, setHasBoarded] = useState(false);
+  const [boardingLoading, setBoardingLoading] = useState(false);
   const [pickupLocation, setPickupLocation] = useState('My Current Location');
   const [pickupLat, setPickupLat] = useState<number | null>(null);
   const [pickupLng, setPickupLng] = useState<number | null>(null);
@@ -246,6 +246,8 @@ export default function RiderHomeScreen() {
         console.log('Restored active ride from Supabase:', activeRideData.id);
         setCurrentRide(activeRideData);
         setRideStatus(activeRideData.status);
+        setHasBoarded(false);
+        setBoardingLoading(false);
 
         subscribeToRideUpdates(activeRideData.id);
 
@@ -834,21 +836,8 @@ export default function RiderHomeScreen() {
             }
           } else if (ride.status === 'rider_boarding') {
             setShowDriverCard(false);
-            // Fetch driver name fresh — avoids stale closure from driverInfo state
-            let bannerName = 'Your driver';
-            if (ride.driver_id) {
-              const { data: driverData } = await supabase
-                .from('drivers')
-                .select('profiles(full_name)')
-                .eq('id', ride.driver_id)
-                .single();
-              bannerName = (driverData?.profiles as any)?.full_name ?? 'Your driver';
-            }
-            setArrivedBannerDriverName(bannerName);
-            setShowArrivedBanner(true);
             Vibration.vibrate([0, 400, 150, 400]);
           } else if (ride.status === 'in_progress') {
-            setShowArrivedBanner(false);
             setShowDriverCard(false);
             Alert.alert('Ride Started! 🎉', 'You are now on your way.');
           } else if (ride.status === 'arrived_destination' || ride.status === 'payment_pending') {
@@ -867,11 +856,11 @@ export default function RiderHomeScreen() {
               const diff = Math.round(Math.abs(newFare - baseFare) * 100) / 100;
               let fareMsg: string;
               if (diff > 0.5 && newFare > baseFare) {
-                fareMsg = `Fare adjusted: +GHS ${diff.toFixed(2)} (longer route)\nFinal fare: GHS ${newFare.toFixed(2)}`;
+                fareMsg = `Fare adjusted: +GH₵ ${diff.toFixed(2)} (longer route)\nFinal fare: GH₵ ${newFare.toFixed(2)}`;
               } else if (diff > 0.5 && newFare < baseFare) {
-                fareMsg = `Fare reduced: -GHS ${diff.toFixed(2)} (shorter route)\nFinal fare: GHS ${newFare.toFixed(2)}`;
+                fareMsg = `Fare reduced: -GH₵ ${diff.toFixed(2)} (shorter route)\nFinal fare: GH₵ ${newFare.toFixed(2)}`;
               } else {
-                fareMsg = `Fare unchanged: GHS ${newFare.toFixed(2)}`;
+                fareMsg = `Fare unchanged: GH₵ ${newFare.toFixed(2)}`;
               }
               Alert.alert(
                 'Reached Destination!',
@@ -883,7 +872,6 @@ export default function RiderHomeScreen() {
               );
             }
           } else if (ride.status === 'completed') {
-            setShowArrivedBanner(false);
             setShowDriverCard(false);
             setShowFareAcceptModal(false);
             setCompletedRide(ride);
@@ -893,6 +881,7 @@ export default function RiderHomeScreen() {
             setRideStatus('');
             setRiderConfirmedPayment(false);
             setFinalFare(null);
+            setHasBoarded(false);
             if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
             if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
             if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
@@ -900,7 +889,6 @@ export default function RiderHomeScreen() {
             await resetAfterRide();
           } else if (ride.status === 'cancelled') {
             Alert.alert('Ride Cancelled', 'Your ride was cancelled.');
-            setShowArrivedBanner(false);
             setShowDriverCard(false);
             setShowFareAcceptModal(false);
             setCurrentRide(null);
@@ -908,6 +896,7 @@ export default function RiderHomeScreen() {
             setDriverInfo(null);
             setEta(null);
             setFinalFare(null);
+            setHasBoarded(false);
             if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
             if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
             if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
@@ -930,18 +919,34 @@ export default function RiderHomeScreen() {
   };
 
   const confirmBoarding = async (rideId: string) => {
-    const { error } = await supabase.from('rides').update({ rider_confirmed_boarding: true }).eq('id', rideId);
-    if (error) { Alert.alert('Error', error.message); return; }
-    if (currentRide) setCurrentRide({ ...currentRide, rider_confirmed_boarding: true });
-    if (currentRide?.driver_id) {
-      const driverToken = await getDriverToken(currentRide.driver_id);
-      if (driverToken) {
-        await sendPushNotification(
-          driverToken,
-          '✅ Rider Confirmed Boarding!',
-          'The rider has confirmed they are on board. You can start the ride.'
-        );
+    if (boardingLoading) return; // prevent double tap
+    setBoardingLoading(true);
+    setHasBoarded(true); // optimistic — hides the button immediately, ahead of the DB round-trip
+    try {
+      const { error } = await supabase.from('rides').update({ rider_confirmed_boarding: true }).eq('id', rideId);
+      if (error) {
+        Alert.alert('Error', error.message);
+        setHasBoarded(false);
+        return;
       }
+      if (currentRide) setCurrentRide({ ...currentRide, rider_confirmed_boarding: true });
+      if (currentRide?.driver_id) {
+        const driverToken = await getDriverToken(currentRide.driver_id);
+        if (driverToken) {
+          await sendPushNotification(
+            driverToken,
+            '✅ Rider Confirmed Boarding!',
+            'The rider has confirmed they are on board. You can start the ride.',
+            { type: 'boarding_confirmed', rideId },
+            'ride-updates'
+          );
+        }
+      }
+    } catch (e) {
+      console.log('Boarding error:', e);
+      setHasBoarded(false);
+    } finally {
+      setBoardingLoading(false);
     }
   };
 
@@ -951,7 +956,7 @@ export default function RiderHomeScreen() {
     setShowFareAcceptModal(false);
     Alert.alert(
       'Fare Accepted!',
-      `New fare: GHS ${finalFare}. Please confirm payment.`,
+      `New fare: GH₵ ${finalFare}. Please confirm payment.`,
       [
         { text: 'Later', style: 'cancel' },
         { text: currentRide.payment_method === 'cash' ? 'Cash Sent' : 'Confirm Payment', onPress: () => confirmPayment(currentRide, finalFare!) }
@@ -973,13 +978,13 @@ export default function RiderHomeScreen() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: recipients,
-          subject: `PragyaGo Ride Receipt - GHS ${finalFareValue}`,
+          subject: `PragyaGo Ride Receipt - GH₵ ${finalFareValue}`,
           message: `
             Ride Receipt
             Date: ${new Date().toLocaleDateString()}
             From: ${ride.pickup_address}
             To: ${ride.dropoff_address}
-            Fare: GHS ${finalFareValue}
+            Fare: GH₵ ${finalFareValue}
             Payment: ${ride.payment_method}
             Driver: ${driverInfo?.profiles?.full_name || 'Your Driver'}
             Thank you for riding with PragyaGo!
@@ -996,9 +1001,20 @@ export default function RiderHomeScreen() {
     setRiderConfirmedPayment(true);
     const { data: currentRideData } = await supabase.from('rides').select('driver_confirmed_payment').eq('id', ride.id).single();
     if (currentRideData?.driver_confirmed_payment) {
-      await supabase.from('rides').update({ status: 'completed', completed_at: new Date().toISOString(), rider_confirmed_payment: true }).eq('id', ride.id);
+      const { error } = await supabase.from('rides').update({ status: 'completed', completed_at: new Date().toISOString(), rider_confirmed_payment: true }).eq('id', ride.id);
+      if (error) {
+        setRiderConfirmedPayment(false);
+        Alert.alert('Error', 'Could not confirm payment. Please try again.');
+        return;
+      }
+      // Status flips to 'completed' via the realtime subscription, which closes this panel automatically.
     } else {
-      await supabase.from('rides').update({ rider_confirmed_payment: true }).eq('id', ride.id);
+      const { error } = await supabase.from('rides').update({ rider_confirmed_payment: true }).eq('id', ride.id);
+      if (error) {
+        setRiderConfirmedPayment(false);
+        Alert.alert('Error', 'Could not confirm payment. Please try again.');
+        return;
+      }
       Alert.alert('Payment Confirmed!', 'Waiting for driver to confirm...');
     }
     if (ride.driver_id) {
@@ -1007,7 +1023,9 @@ export default function RiderHomeScreen() {
         await sendPushNotification(
           driverToken,
           '💰 Payment Confirmed!',
-          `Payment of GHS ${fare} confirmed via ${ride.payment_method === 'cash' ? 'Cash' : 'Go Cash'}.`
+          `Payment of GH₵ ${fare} confirmed via ${ride.payment_method === 'cash' ? 'Cash' : 'Go Cash'}.`,
+          { type: 'payment_confirmed', rideId: ride.id },
+          'ride-updates'
         );
       }
     }
@@ -1083,6 +1101,8 @@ export default function RiderHomeScreen() {
       else {
         setCurrentRide(ride); setRideStatus('requested');
         setLastRequestTime(Date.now());
+        setHasBoarded(false);
+        setBoardingLoading(false);
         await subscribeToRideUpdates(ride.id);
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = setInterval(() => pollRideStatus(ride.id), 5000);
@@ -1117,7 +1137,9 @@ export default function RiderHomeScreen() {
               await sendPushNotification(
                 driverToken,
                 '🛺 New Ride Request Near You!',
-                `Pickup: ${ride.pickup_address} → ${ride.dropoff_address} | GHS ${ride.fare_ghs}`
+                `Pickup: ${ride.pickup_address} → ${ride.dropoff_address} | GH₵ ${ride.fare_ghs}`,
+                { type: 'ride_request', rideId: ride.id },
+                'ride-requests'
               );
             }
           })
@@ -1432,30 +1454,6 @@ export default function RiderHomeScreen() {
       </View>
       )}
 
-      {/* Driver arrived banner — overlays the map, dismissible */}
-      {showArrivedBanner && (
-        <View style={styles.arrivedBanner}>
-          <Text style={styles.arrivedBannerTitle}>🛺 Your driver has arrived!</Text>
-          <Text style={styles.arrivedBannerSub}>
-            {arrivedBannerDriverName} is waiting at your pickup location. Please head out now!
-          </Text>
-          <View style={styles.arrivedBannerActions}>
-            <TouchableOpacity
-              style={styles.arrivedConfirmBtn}
-              onPress={() => {
-                setShowArrivedBanner(false);
-                if (currentRide) confirmBoarding(currentRide.id);
-              }}
-            >
-              <Text style={styles.arrivedConfirmText}>I'm Boarding</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.arrivedDismissBtn} onPress={() => setShowArrivedBanner(false)}>
-              <Text style={styles.arrivedDismissText}>✕ Dismiss</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
       {currentRide ? (
         <View
           style={{
@@ -1519,11 +1517,19 @@ export default function RiderHomeScreen() {
           <Feather name="check-circle" size={32} color={theme.green} />
           <Text style={styles.boardingTitle}>Your driver has arrived!</Text>
           <Text style={styles.boardingSubtitle}>Confirm once you're on board to start your ride.</Text>
-          {currentRide.rider_confirmed_boarding ? (
+          {hasBoarded || currentRide.rider_confirmed_boarding ? (
             <Text style={styles.boardingWaitingText}>Waiting for driver to start the ride...</Text>
           ) : (
-            <TouchableOpacity style={styles.boardingButton} onPress={() => confirmBoarding(currentRide.id)}>
-              <Text style={styles.boardingButtonText}>I'm Boarding</Text>
+            <TouchableOpacity
+              style={[styles.boardingButton, boardingLoading && { backgroundColor: theme.greenLight }]}
+              onPress={() => confirmBoarding(currentRide.id)}
+              disabled={boardingLoading}
+            >
+              {boardingLoading ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <Text style={styles.boardingButtonText}>I'm Boarding</Text>
+              )}
             </TouchableOpacity>
           )}
         </View>
@@ -1532,7 +1538,7 @@ export default function RiderHomeScreen() {
       {currentRide && ['arrived_destination', 'payment_pending'].includes(rideStatus) ? (
         <View style={styles.paymentPanel}>
           <Text style={styles.paymentPanelLabel}>Amount Due</Text>
-          <Text style={styles.paymentPanelFare}>GHS {displayFare}</Text>
+          <Text style={styles.paymentPanelFare}>GH₵ {displayFare}</Text>
           <Text style={styles.paymentPanelMethod}>
             {currentRide.payment_method === 'cash' ? 'Cash' : 'Go Cash'}
           </Text>
@@ -1553,9 +1559,9 @@ export default function RiderHomeScreen() {
             <Text style={styles.rideStatusStops}>{`Stops: ${currentRide.stops.map((s: any) => s.address).join(' → ')}`}</Text>
           ) : null}
           <View style={styles.fareRow}>
-            <Text style={styles.rideStatusFare}>GHS {displayFare}</Text>
+            <Text style={styles.rideStatusFare}>GH₵ {displayFare}</Text>
             {!!finalFare && finalFare !== currentRide.fare_ghs ? (
-              <Text style={styles.originalFare}>(est. GHS {currentRide.fare_ghs})</Text>
+              <Text style={styles.originalFare}>(est. GH₵ {currentRide.fare_ghs})</Text>
             ) : null}
           </View>
           <View style={styles.rideActions}>
@@ -1730,7 +1736,7 @@ export default function RiderHomeScreen() {
                       {item.source === 'zone' ? (
                         <View style={styles.suggestionRowZone}>
                           <Text style={styles.suggestionTextZone} numberOfLines={1}>📍 {item.label}</Text>
-                          <Text style={styles.suggestionFare}>GHS {item.fare}</Text>
+                          <Text style={styles.suggestionFare}>GH₵ {item.fare}</Text>
                         </View>
                       ) : (
                         <Text style={styles.suggestionText} numberOfLines={2}>🗺️ {item.label}</Text>
@@ -1786,7 +1792,7 @@ export default function RiderHomeScreen() {
           {fareEstimate ? (
             <View style={styles.fareBadgeWrapper}>
               <View style={styles.fareBadge}>
-                <Text style={styles.fareBadgeAmount}>GHS {fareEstimate.toFixed(2)}</Text>
+                <Text style={styles.fareBadgeAmount}>GH₵ {fareEstimate.toFixed(2)}</Text>
                 <Text style={styles.fareBadgeLabel}>Estimated Fare</Text>
               </View>
             </View>
@@ -1871,19 +1877,19 @@ export default function RiderHomeScreen() {
             <View style={styles.fareCompare}>
               <View style={styles.fareCompareItem}>
                 <Text style={styles.fareCompareLabel}>Estimated</Text>
-                <Text style={styles.fareCompareOld}>GHS {currentRide?.fare_ghs}</Text>
+                <Text style={styles.fareCompareOld}>GH₵ {currentRide?.fare_ghs}</Text>
               </View>
               <Text style={styles.fareArrow}>→</Text>
               <View style={styles.fareCompareItem}>
                 <Text style={styles.fareCompareLabel}>Final</Text>
-                <Text style={styles.fareCompareNew}>GHS {finalFare}</Text>
+                <Text style={styles.fareCompareNew}>GH₵ {finalFare}</Text>
               </View>
             </View>
             {currentRide?.actual_distance_km ? (
               <Text style={styles.fareDistance}>{`Actual distance: ${currentRide.actual_distance_km} km`}</Text>
             ) : null}
             <TouchableOpacity style={styles.acceptFareButton} onPress={acceptNewFare}>
-              <Text style={styles.acceptFareButtonText}>Accept & Pay GHS {finalFare}</Text>
+              <Text style={styles.acceptFareButtonText}>Accept & Pay GH₵ {finalFare}</Text>
             </TouchableOpacity>
             <Text style={styles.fareAcceptNote}>By accepting, you agree to pay the updated fare.</Text>
           </View>
@@ -1986,14 +1992,14 @@ export default function RiderHomeScreen() {
 
               <View style={{ alignItems: 'center' }}>
                 <Text style={styles.receiptFareLabel}>Fare</Text>
-                <Text style={styles.receiptFareAmount}>GHS {completedRide?.final_fare_ghs || completedRide?.fare_ghs}</Text>
+                <Text style={styles.receiptFareAmount}>GH₵ {completedRide?.final_fare_ghs || completedRide?.fare_ghs}</Text>
                 <Text style={styles.receiptThanks}>Thank you for riding with PragyaGo! 🛺</Text>
               </View>
 
               <TouchableOpacity
                 style={styles.receiptShareBtn}
                 onPress={() => Share.share({
-                  message: `PragyaGo Ride Receipt\nFrom: ${completedRide?.pickup_address}\nTo: ${completedRide?.dropoff_address}\nFare: GHS ${completedRide?.final_fare_ghs || completedRide?.fare_ghs}`
+                  message: `PragyaGo Ride Receipt\nFrom: ${completedRide?.pickup_address}\nTo: ${completedRide?.dropoff_address}\nFare: GH₵ ${completedRide?.final_fare_ghs || completedRide?.fare_ghs}`
                 })}
               >
                 <Feather name="share-2" size={18} color={theme.green} />
@@ -2016,7 +2022,7 @@ export default function RiderHomeScreen() {
         <View style={[styles.modalOverlay, { paddingTop: insets.top }]}>
           <View style={[styles.ratingCard, { paddingBottom: insets.bottom + 16 }]}>
             <Text style={styles.ratingTitle}>Ride Complete!</Text>
-            <Text style={styles.ratingTopFare}>GHS {completedRide?.final_fare_ghs || completedRide?.fare_ghs}</Text>
+            <Text style={styles.ratingTopFare}>GH₵ {completedRide?.final_fare_ghs || completedRide?.fare_ghs}</Text>
             <Text style={styles.ratingSubtitle}>How was your experience?</Text>
             {driverInfo?.photo_url ? (
               <Image source={{ uri: driverInfo.photo_url }} style={styles.ratingDriverPhoto} />
@@ -2028,12 +2034,12 @@ export default function RiderHomeScreen() {
             <Text style={styles.ratingDriverName}>{driverInfo?.profiles?.full_name || 'Your Driver'}</Text>
             {completedRide?.discount_amount > 0 ? (
               <View style={styles.receiptBox}>
-                <Text style={styles.receiptRow}>Original fare: <Text style={styles.receiptValue}>GHS {completedRide.final_fare_ghs || completedRide.fare_ghs}</Text></Text>
-                <Text style={styles.receiptRow}>Discount: <Text style={styles.receiptDiscount}>-GHS {completedRide.discount_amount}</Text></Text>
-                <Text style={styles.receiptRowTotal}>You paid: <Text style={styles.receiptTotal}>GHS {completedRide.discounted_fare ?? (completedRide.fare_ghs - completedRide.discount_amount)}</Text></Text>
+                <Text style={styles.receiptRow}>Original fare: <Text style={styles.receiptValue}>GH₵ {completedRide.final_fare_ghs || completedRide.fare_ghs}</Text></Text>
+                <Text style={styles.receiptRow}>Discount: <Text style={styles.receiptDiscount}>-GH₵ {completedRide.discount_amount}</Text></Text>
+                <Text style={styles.receiptRowTotal}>You paid: <Text style={styles.receiptTotal}>GH₵ {completedRide.discounted_fare ?? (completedRide.fare_ghs - completedRide.discount_amount)}</Text></Text>
               </View>
             ) : (
-              <Text style={styles.ratingFare}>Fare paid: GHS {completedRide?.final_fare_ghs || completedRide?.fare_ghs}</Text>
+              <Text style={styles.ratingFare}>Fare paid: GH₵ {completedRide?.final_fare_ghs || completedRide?.fare_ghs}</Text>
             )}
             <View style={styles.starsRow}>
               {[1, 2, 3, 4, 5].map((star) => (
@@ -2276,28 +2282,6 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   tricycleEmoji: { fontSize: 20 },
   trackingMarkerWrap: { width: 50, height: 50, justifyContent: 'center', alignItems: 'center' },
   pulseCircle: { position: 'absolute', width: 50, height: 50, borderRadius: 25, backgroundColor: '#1D9E75' },
-  arrivedBanner: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 20,
-    backgroundColor: '#1D9E75',
-    padding: 16,
-    paddingTop: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 12,
-  },
-  arrivedBannerTitle: { fontSize: 17, fontWeight: 'bold', color: '#fff', marginBottom: 4 },
-  arrivedBannerSub: { fontSize: 13, color: '#E1F5EE', lineHeight: 19, marginBottom: 12 },
-  arrivedBannerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  arrivedConfirmBtn: { flex: 1, backgroundColor: '#fff', paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
-  arrivedConfirmText: { color: '#1D9E75', fontWeight: 'bold', fontSize: 14 },
-  arrivedDismissBtn: { paddingVertical: 10, paddingHorizontal: 4 },
-  arrivedDismissText: { color: 'rgba(255,255,255,0.75)', fontSize: 13, fontWeight: '600' },
   bellBtn: { position: 'absolute', top: 12, right: 12, zIndex: 10, width: 40, height: 40, borderRadius: 20, backgroundColor: c.card, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 },
   locateMeBtn: { position: 'absolute', right: 16, bottom: 16, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 6 },
   bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },

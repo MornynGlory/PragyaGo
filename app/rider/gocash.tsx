@@ -90,7 +90,7 @@ export default function GoCashScreen() {
 
   const handleTopUp = () => {
     const amount = parseFloat(topUpAmount)
-    if (!amount || amount < 1) { Alert.alert('Invalid Amount', 'Please enter at least GHS 1.'); return }
+    if (!amount || amount < 1) { Alert.alert('Invalid Amount', 'Please enter at least GH₵ 1.'); return }
     if (!momoPhone.trim() || momoPhone.trim().length < 9) { Alert.alert('Phone Required', 'Please enter your Mobile Money number (at least 9 digits).'); return }
     if (!userEmailRef.current) { Alert.alert('Error', 'Could not get your email. Please log in again.'); return }
 
@@ -124,7 +124,7 @@ export default function GoCashScreen() {
           balanceRef.current = newBalance
           setBalance(newBalance)
           setTopUpAmount('')
-          Alert.alert('Top Up Successful!', `GHS ${capturedAmount.toFixed(2)} added to your Go Cash wallet.`)
+          Alert.alert('Top Up Successful!', `GH₵ ${capturedAmount.toFixed(2)} added to your Go Cash wallet.`)
           fetchWallet()
         } catch {
           Alert.alert('Balance Update Error', `Payment received (ref: ${txRef}) but balance update failed. Please contact support.`)
@@ -176,7 +176,7 @@ export default function GoCashScreen() {
         <View style={styles.walletCard}>
           <Feather name="dollar-sign" size={28} color="rgba(255,255,255,0.8)" style={{ marginBottom: 8 }} />
           <Text style={styles.walletLabel}>Go Cash Balance</Text>
-          <Text style={styles.walletBalance}>GHS {balance.toFixed(2)}</Text>
+          <Text style={styles.walletBalance}>GH₵ {balance.toFixed(2)}</Text>
           <Text style={styles.walletSub}>Available for rides</Text>
         </View>
 
@@ -209,7 +209,7 @@ export default function GoCashScreen() {
             placeholderTextColor={theme.placeholder}
           />
 
-          <Text style={styles.fieldLabel}>Amount (GHS)</Text>
+          <Text style={styles.fieldLabel}>Amount (GH₵)</Text>
           <TextInput
             style={styles.input}
             placeholder="Enter amount"
@@ -223,7 +223,7 @@ export default function GoCashScreen() {
             <View key={ri} style={[styles.quickAmounts, ri === 0 && { marginBottom: 8 }]}>
               {row.map((amt) => (
                 <TouchableOpacity key={amt} style={styles.quickAmount} onPress={() => setTopUpAmount(amt)}>
-                  <Text style={styles.quickAmountText}>GHS {amt}</Text>
+                  <Text style={styles.quickAmountText}>GH₵ {amt}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -237,7 +237,7 @@ export default function GoCashScreen() {
           >
             {processing
               ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.payButtonText}>Pay GHS {parseFloat(topUpAmount || '0').toFixed(2)} via {PROVIDER_LABELS[provider]}</Text>
+              : <Text style={styles.payButtonText}>Pay GH₵ {parseFloat(topUpAmount || '0').toFixed(2)} via {PROVIDER_LABELS[provider]}</Text>
             }
           </TouchableOpacity>
           <Text style={styles.paystackNote}>Secured by Paystack</Text>
@@ -266,7 +266,7 @@ export default function GoCashScreen() {
                     </Text>
                   </View>
                   <Text style={[styles.txnAmount, { color }]}>
-                    {txn.type === 'payment' ? '-' : '+'}GHS {Math.abs(txn.amount).toFixed(2)}
+                    {txn.type === 'payment' ? '-' : '+'}GH₵ {Math.abs(txn.amount).toFixed(2)}
                   </Text>
                 </View>
               )

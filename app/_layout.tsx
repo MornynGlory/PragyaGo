@@ -23,6 +23,11 @@ export default function RootLayout() {
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#1D9E75',
       })
+      Notifications.setNotificationChannelAsync('ride-updates', {
+        name: 'Ride Updates',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: 'default',
+      })
     }
     notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
       console.log('Notification received:', notification)

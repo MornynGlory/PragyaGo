@@ -67,7 +67,7 @@ export default function RiderHistoryScreen() {
 
         {/* Right */}
         <View style={styles.rideRight}>
-          <Text style={styles.rideFare}>GHS {Number(fare).toFixed(2)}</Text>
+          <Text style={styles.rideFare}>GH₵ {Number(fare).toFixed(2)}</Text>
           {isCompleted && (
             <View style={[styles.statusBadge, styles.statusBadgeGreen]}>
               <Text style={[styles.statusText, { color: theme.green }]}>Completed</Text>

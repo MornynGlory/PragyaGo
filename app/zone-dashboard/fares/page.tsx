@@ -135,7 +135,7 @@ export default function ZoneFaresPage() {
           />
           <TextInput
             style={styles.input}
-            placeholder="Base fare (GHS)"
+            placeholder="Base fare (GH₵)"
             placeholderTextColor={theme.placeholder}
             value={newBaseFare}
             onChangeText={setNewBaseFare}
@@ -144,9 +144,9 @@ export default function ZoneFaresPage() {
           {previewBase > 0 && (
             <View style={styles.preview}>
               <Text style={styles.previewTitle}>Fare Preview</Text>
-              <Text style={styles.previewRow}>Base fare: <Text style={styles.previewVal}>GHS {previewBase.toFixed(2)}</Text></Text>
-              <Text style={styles.previewRow}>After × 4: <Text style={styles.previewVal}>GHS {previewMultiplied.toFixed(2)}</Text></Text>
-              <Text style={styles.previewRow}>After + 85% <Text style={styles.previewHighlight}>(rider pays): GHS {previewRiderFare.toFixed(2)}</Text></Text>
+              <Text style={styles.previewRow}>Base fare: <Text style={styles.previewVal}>GH₵ {previewBase.toFixed(2)}</Text></Text>
+              <Text style={styles.previewRow}>After × 4: <Text style={styles.previewVal}>GH₵ {previewMultiplied.toFixed(2)}</Text></Text>
+              <Text style={styles.previewRow}>After + 85% <Text style={styles.previewHighlight}>(rider pays): GH₵ {previewRiderFare.toFixed(2)}</Text></Text>
             </View>
           )}
           <TouchableOpacity style={[styles.addBtn, saving && styles.btnDisabled]} onPress={addFare} disabled={saving}>

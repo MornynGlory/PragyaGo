@@ -235,17 +235,17 @@ export default function DriverDailyReportsScreen() {
             </View>
             <View style={[styles.summaryCard, { borderTopColor: theme.green }]}>
               <Feather name="dollar-sign" size={18} color={theme.green} />
-              <Text style={[styles.summaryValue, { color: theme.green }]}>GHS {totalEarned.toFixed(2)}</Text>
+              <Text style={[styles.summaryValue, { color: theme.green }]}>GH₵ {totalEarned.toFixed(2)}</Text>
               <Text style={styles.summaryLabel}>Total Earned</Text>
             </View>
             <View style={[styles.summaryCard, { borderTopColor: theme.red }]}>
               <Feather name="percent" size={18} color={theme.red} />
-              <Text style={[styles.summaryValue, { color: theme.red }]}>GHS {totalCommission.toFixed(2)}</Text>
+              <Text style={[styles.summaryValue, { color: theme.red }]}>GH₵ {totalCommission.toFixed(2)}</Text>
               <Text style={styles.summaryLabel}>Commission</Text>
             </View>
             <View style={[styles.summaryCard, { borderTopColor: theme.blue }]}>
               <Feather name="trending-up" size={18} color={theme.blue} />
-              <Text style={[styles.summaryValue, { color: theme.blue }]}>GHS {netIncome.toFixed(2)}</Text>
+              <Text style={[styles.summaryValue, { color: theme.blue }]}>GH₵ {netIncome.toFixed(2)}</Text>
               <Text style={styles.summaryLabel}>Net Income</Text>
             </View>
           </View>
@@ -277,9 +277,9 @@ export default function DriverDailyReportsScreen() {
                     </Text>
                     {isCompleted ? (
                       <View style={styles.rideFareRow}>
-                        <Text style={styles.rideFareText}>Fare: GHS {fare.toFixed(2)}</Text>
-                        <Text style={[styles.rideFareText, { color: theme.red }]}>Commission: -GHS {commission.toFixed(2)}</Text>
-                        <Text style={[styles.rideFareText, { color: theme.green }]}>Net: GHS {net.toFixed(2)}</Text>
+                        <Text style={styles.rideFareText}>Fare: GH₵ {fare.toFixed(2)}</Text>
+                        <Text style={[styles.rideFareText, { color: theme.red }]}>Commission: -GH₵ {commission.toFixed(2)}</Text>
+                        <Text style={[styles.rideFareText, { color: theme.green }]}>Net: GH₵ {net.toFixed(2)}</Text>
                       </View>
                     ) : null}
                   </View>
@@ -303,7 +303,7 @@ export default function DriverDailyReportsScreen() {
                     <Text style={styles.txnTime}>{formatTime(txn.created_at)}</Text>
                   </View>
                   <Text style={[styles.txnAmount, { color: txnColor(txn.type) }]}>
-                    {txnSign(txn.type)}GHS {(txn.amount || 0).toFixed(2)}
+                    {txnSign(txn.type)}GH₵ {(txn.amount || 0).toFixed(2)}
                   </Text>
                 </View>
               ))

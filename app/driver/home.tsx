@@ -673,14 +673,22 @@ export default function DriverHome() {
       }, (payload) => {
         console.log('Driver ride update:', JSON.stringify(payload.new))
         const ride = payload.new as any
+        // activeRideRef still holds the pre-update value here (it's synced by a separate
+        // effect), so this reliably catches the false->true transition without depending
+        // on payload.old, which Supabase only populates fully when REPLICA IDENTITY FULL is set.
+        const justBoarded = ride.rider_confirmed_boarding && !activeRideRef.current?.rider_confirmed_boarding
         // Keep local state in lockstep with the row so handlers never act on a stale ride.
         setActiveRide(ride)
         setRideStatus(ride.status)
 
+        if (justBoarded) {
+          Alert.alert('Rider has boarded!', 'You can now start the ride.')
+        }
+
         if (ride.status === 'completed') {
           setEarnings(prev => prev + (ride.final_fare_ghs || ride.fare_ghs))
           setRidesCount(prev => prev + 1)
-          Alert.alert('Ride Complete!', `GHS ${ride.final_fare_ghs || ride.fare_ghs} earned!`)
+          Alert.alert('Ride Complete!', `GH₵ ${ride.final_fare_ghs || ride.fare_ghs} earned!`)
         }
         if (ride.status === 'cancelled') {
           setRideRequest(null)
@@ -805,7 +813,7 @@ export default function DriverHome() {
       setRideStatus('payment_pending')
       Alert.alert(
         'Arrived at Destination!',
-        `Fare: GHS ${estimatedFare.toFixed(2)}\nPlease wait for the rider to confirm payment.`
+        `Fare: GH₵ ${estimatedFare.toFixed(2)}\nPlease wait for the rider to confirm payment.`
       )
     } else {
       Alert.alert('Error', 'Could not update status. Please try again.')
@@ -848,7 +856,7 @@ export default function DriverHome() {
       setRideStatus('')
       Alert.alert(
         '🎉 Ride Complete!',
-        `Fare: GHS ${finalFare}\nYour earnings: GHS ${driverEarnings}\nCommission: GHS ${commission}`
+        `Fare: GH₵ ${finalFare}\nYour earnings: GH₵ ${driverEarnings}\nCommission: GH₵ ${commission}`
       )
     } else {
       Alert.alert('Error', 'Could not confirm payment. Please try again.')
@@ -971,7 +979,7 @@ export default function DriverHome() {
           <View style={styles.row}>
             <Text style={[styles.driverName, { color: '#fff' }]}>{driverName}</Text>
             <View style={{ alignItems: 'flex-end', marginLeft: 'auto' }}>
-              <Text style={[styles.earnings, { color: '#fff' }]}>GHS {earnings.toFixed(2)}</Text>
+              <Text style={[styles.earnings, { color: '#fff' }]}>GH₵ {earnings.toFixed(2)}</Text>
               <Text style={[styles.earningsLabel, { color: '#e6fff7' }]}>Today's Earnings</Text>
             </View>
           </View>
@@ -987,7 +995,7 @@ export default function DriverHome() {
               </View>
               <View style={[styles.pill, { backgroundColor: 'rgba(0,0,0,0.18)' }]}>
                 <Feather name="dollar-sign" size={12} color="#fff" />
-                <Text style={styles.pillText}>GHS {commissionOwed.toFixed(2)}</Text>
+                <Text style={styles.pillText}>GH₵ {commissionOwed.toFixed(2)}</Text>
               </View>
             </View>
 
@@ -1143,7 +1151,7 @@ export default function DriverHome() {
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
             <View style={styles.rowBetween}>
               <Text style={[styles.rideStatus, { color: theme.text }]}>{getStatusLabel()}</Text>
-              <View style={styles.fareBadge}><Text style={{ color: '#fff' }}>GHS {activeRide.fare ?? '0.00'}</Text></View>
+              <View style={styles.fareBadge}><Text style={{ color: '#fff' }}>GH₵ {activeRide.fare ?? '0.00'}</Text></View>
             </View>
 
             {riderInfo && ['accepted', 'rider_boarding', 'in_progress', 'arrived_destination', 'payment_pending'].includes(rideStatus) ? (
@@ -1312,7 +1320,7 @@ export default function DriverHome() {
               fontSize: 40, fontWeight: '900',
               color: theme.red, marginBottom: 8,
             }}>
-              GHS {commissionOwed.toFixed(2)}
+              GH₵ {commissionOwed.toFixed(2)}
             </Text>
 
             <Text style={{

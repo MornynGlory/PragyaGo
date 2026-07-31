@@ -141,7 +141,7 @@ export default function DriverWalletScreen() {
   const handleTopUp = () => {
     const amount = parseFloat(topUpAmount);
     if (!amount || amount < 1) {
-      Alert.alert('Invalid Amount', 'Minimum top up is GHS 1.');
+      Alert.alert('Invalid Amount', 'Minimum top up is GH₵ 1.');
       return;
     }
     if (!topUpPhone.trim() || topUpPhone.trim().length < 9) {
@@ -163,7 +163,7 @@ export default function DriverWalletScreen() {
 
     setPaystackParams({
       email: userEmail,
-      amount: capturedAmount, // GHS — Paystack GHS uses cedis, not pesewas
+      amount: capturedAmount, // GH₵ — Paystack GH₵ uses cedis, not pesewas
       reference,
       metadata: {
         mobile_money_phone: capturedPhone,
@@ -196,7 +196,7 @@ export default function DriverWalletScreen() {
             driver_id: capturedDriverId,
             type: 'topup',
             amount: capturedAmount,
-            description: `${PROVIDER_LABELS[capturedProvider]} MoMo top up of GHS ${capturedAmount.toFixed(2)}`,
+            description: `${PROVIDER_LABELS[capturedProvider]} MoMo top up of GH₵ ${capturedAmount.toFixed(2)}`,
             reference: txRef,
             created_at: new Date().toISOString(),
           });
@@ -238,10 +238,10 @@ export default function DriverWalletScreen() {
 
             Alert.alert(
               'Top Up Successful!',
-              `GHS ${capturedAmount.toFixed(2)} added. Commission of GHS ${deduction.toFixed(2)} auto-deducted. Wallet unlocked!`,
+              `GH₵ ${capturedAmount.toFixed(2)} added. Commission of GH₵ ${deduction.toFixed(2)} auto-deducted. Wallet unlocked!`,
             );
           } else {
-            Alert.alert('Top Up Successful!', `GHS ${capturedAmount.toFixed(2)} added to your wallet.`);
+            Alert.alert('Top Up Successful!', `GH₵ ${capturedAmount.toFixed(2)} added to your wallet.`);
           }
 
           setWalletBalance(finalBalance);
@@ -268,7 +268,7 @@ export default function DriverWalletScreen() {
     const amount = parseFloat(withdrawAmount);
     if (!amount || amount <= 0) { Alert.alert('Invalid Amount', 'Please enter a valid amount.'); return; }
     if (amount > goCashEarnings) {
-      Alert.alert('Insufficient Balance', `Maximum withdrawal is GHS ${goCashEarnings.toFixed(2)}.`);
+      Alert.alert('Insufficient Balance', `Maximum withdrawal is GH₵ ${goCashEarnings.toFixed(2)}.`);
       return;
     }
     if (!withdrawPhone.trim()) { Alert.alert('Phone Required', 'Please enter your Mobile Money number.'); return; }
@@ -292,7 +292,7 @@ export default function DriverWalletScreen() {
       setWithdrawAmount('');
       Alert.alert(
         'Withdrawal Submitted',
-        `GHS ${amount.toFixed(2)} withdrawal to ${withdrawPhone} (${PROVIDER_LABELS[withdrawNetwork]}) submitted. Will be processed within 24 hours.`,
+        `GH₵ ${amount.toFixed(2)} withdrawal to ${withdrawPhone} (${PROVIDER_LABELS[withdrawNetwork]}) submitted. Will be processed within 24 hours.`,
       );
     } catch {
       Alert.alert('Error', 'Withdrawal failed. Please try again.');
@@ -376,7 +376,7 @@ export default function DriverWalletScreen() {
         <ScrollView style={styles.content}>
           <View style={styles.balanceCard}>
             <Text style={styles.balanceLabel}>Wallet Balance</Text>
-            <Text style={styles.balanceAmount}>GHS {walletBalance.toFixed(2)}</Text>
+            <Text style={styles.balanceAmount}>GH₵ {walletBalance.toFixed(2)}</Text>
             {isLocked && commissionOwed > 0 && (
               <View style={styles.lockedBadge}>
                 <Text style={styles.lockedText}>🔒 App locked — pay commission to unlock</Text>
@@ -387,7 +387,7 @@ export default function DriverWalletScreen() {
           {commissionOwed > 0 && (
             <View style={styles.commissionCard}>
               <Text style={styles.commissionLabel}>Commission Owed</Text>
-              <Text style={styles.commissionAmount}>GHS {commissionOwed.toFixed(2)}</Text>
+              <Text style={styles.commissionAmount}>GH₵ {commissionOwed.toFixed(2)}</Text>
               <Text style={styles.commissionNote}>Top up your wallet to auto-settle commission and unlock your account.</Text>
             </View>
           )}
@@ -423,7 +423,7 @@ export default function DriverWalletScreen() {
               placeholderTextColor={theme.placeholder}
             />
 
-            <Text style={styles.fieldLabel}>Amount (GHS)</Text>
+            <Text style={styles.fieldLabel}>Amount (GH₵)</Text>
             <TextInput
               style={styles.input}
               placeholder="Enter amount"
@@ -436,7 +436,7 @@ export default function DriverWalletScreen() {
               <View key={ri} style={[styles.quickAmounts, ri === 0 && { marginBottom: 8 }]}>
                 {row.map((amt) => (
                   <TouchableOpacity key={amt} style={styles.quickBtn} onPress={() => setTopUpAmount(String(amt))}>
-                    <Text style={styles.quickBtnText}>GHS {amt}</Text>
+                    <Text style={styles.quickBtnText}>GH₵ {amt}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -450,7 +450,7 @@ export default function DriverWalletScreen() {
                 <ActivityIndicator color="#fff" />
               ) : (
                 <Text style={styles.actionButtonText}>
-                  Pay GHS {parseFloat(topUpAmount || '0').toFixed(2)} via {PROVIDER_LABELS[topUpProvider]}
+                  Pay GH₵ {parseFloat(topUpAmount || '0').toFixed(2)} via {PROVIDER_LABELS[topUpProvider]}
                 </Text>
               )}
             </TouchableOpacity>
@@ -464,7 +464,7 @@ export default function DriverWalletScreen() {
         <ScrollView style={styles.content}>
           <View style={[styles.balanceCard, { backgroundColor: '#185FA5' }]}>
             <Text style={styles.balanceLabel}>Go Cash Earnings</Text>
-            <Text style={styles.balanceAmount}>GHS {goCashEarnings.toFixed(2)}</Text>
+            <Text style={styles.balanceAmount}>GH₵ {goCashEarnings.toFixed(2)}</Text>
             {goCashLocked && (
               <View style={styles.lockedBadge}>
                 <Text style={styles.lockedText}>🔒 Go Cash locked — settle commission first</Text>
@@ -475,7 +475,7 @@ export default function DriverWalletScreen() {
           {goCashLocked || commissionOwed > 0 ? (
             <View style={styles.section}>
               <Text style={styles.warningText}>
-                Your Go Cash earnings are locked. Please settle your commission of GHS {commissionOwed.toFixed(2)} via the Wallet tab to unlock withdrawals.
+                Your Go Cash earnings are locked. Please settle your commission of GH₵ {commissionOwed.toFixed(2)} via the Wallet tab to unlock withdrawals.
               </Text>
             </View>
           ) : (
@@ -507,7 +507,7 @@ export default function DriverWalletScreen() {
               />
               <TextInput
                 style={styles.input}
-                placeholder="Enter amount (GHS)"
+                placeholder="Enter amount (GH₵)"
                 keyboardType="numeric"
                 value={withdrawAmount}
                 onChangeText={setWithdrawAmount}
@@ -520,7 +520,7 @@ export default function DriverWalletScreen() {
                     style={[styles.quickBtn, { borderColor: '#185FA5' }]}
                     onPress={() => setWithdrawAmount(String(Math.min(amt, goCashEarnings)))}
                   >
-                    <Text style={[styles.quickBtnText, { color: '#185FA5' }]}>GHS {amt}</Text>
+                    <Text style={[styles.quickBtnText, { color: '#185FA5' }]}>GH₵ {amt}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -554,7 +554,7 @@ export default function DriverWalletScreen() {
                   <Text style={styles.txnDate}>{formatDate(txn.created_at)}</Text>
                 </View>
                 <Text style={[styles.txnAmount, { color: txnColor(txn.type) }]}>
-                  {txn.type === 'topup' || txn.type === 'refund' ? '+' : '-'}GHS {(txn.amount || 0).toFixed(2)}
+                  {txn.type === 'topup' || txn.type === 'refund' ? '+' : '-'}GH₵ {(txn.amount || 0).toFixed(2)}
                 </Text>
               </View>
             ))
