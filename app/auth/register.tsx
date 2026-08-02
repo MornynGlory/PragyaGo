@@ -1,4 +1,10 @@
+// Run in Supabase SQL:
+// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS terms_version TEXT;
+// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS privacy_accepted_at TIMESTAMPTZ;
+
 import { supabase } from '@/lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -6,7 +12,6 @@ import {
   Alert,
   Animated,
   Image,
-  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,6 +21,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { TERMS_ACCEPTED_KEY, TERMS_VERSION } from './terms-screen';
 
 const PRAGYA_COLORS = ['Red', 'Blue', 'Yellow', 'Green', 'White', 'Black', 'Orange', 'Silver'];
 
@@ -36,7 +42,8 @@ export default function RegisterScreen() {
   const [pragyaColor, setPragyaColor] = useState('');
   const [role, setRole] = useState<'rider' | 'driver'>('rider');
   const [loading, setLoading] = useState(false);
-  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [checkingTerms, setCheckingTerms] = useState(true);
+  const termsAcceptanceRef = useRef<{ version: string; acceptedAt: string } | null>(null);
   const [showOTPScreen, setShowOTPScreen] = useState(false);
   const [otp, setOtp] = useState('');
   const [sendingOTP, setSendingOTP] = useState(false);
@@ -53,6 +60,28 @@ export default function RegisterScreen() {
     }).start();
   }, [role]);
 
+  // register.tsx is only reachable after accepting terms-screen; guard the direct-link
+  // case (e.g. deep link, stale nav state) by bouncing back if the flag isn't set.
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(TERMS_ACCEPTED_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (!parsed?.accepted) {
+          router.replace('/auth/terms-screen' as any);
+          return;
+        }
+        termsAcceptanceRef.current = {
+          version: parsed.version ?? TERMS_VERSION,
+          acceptedAt: parsed.acceptedAt ?? new Date().toISOString(),
+        };
+        setCheckingTerms(false);
+      } catch {
+        router.replace('/auth/terms-screen' as any);
+      }
+    })();
+  }, []);
+
   const handleRegister = async () => {
     if (!email.trim() || !password.trim() || !fullName.trim() || !phone.trim()) {
       Alert.alert('Validation', 'Please fill in all required fields');
@@ -64,7 +93,6 @@ export default function RegisterScreen() {
       if (!pragyaColor) { Alert.alert('Validation', 'Please select your Pragya Color'); return; }
     }
     if (password !== confirmPassword) { Alert.alert('Validation', 'Passwords do not match'); return; }
-    if (!agreedToTerms) { Alert.alert('Terms Required', 'Please agree to our Terms of Service and Privacy Policy to continue.'); return; }
     if (password.length < 6) { Alert.alert('Validation', 'Password must be at least 6 characters'); return; }
 
     setLoading(true);
@@ -91,6 +119,15 @@ export default function RegisterScreen() {
         Alert.alert('Profile Creation Error', 'Account created but profile setup failed. Please try logging in.');
         return;
       }
+
+      // Record the terms acceptance captured on terms-screen now that the profile row exists.
+      const acceptedAt = termsAcceptanceRef.current?.acceptedAt ?? new Date().toISOString();
+      await supabase.from('profiles').update({
+        terms_accepted_at: acceptedAt,
+        terms_version: termsAcceptanceRef.current?.version ?? TERMS_VERSION,
+        privacy_accepted_at: acceptedAt,
+      }).eq('id', data.user.id);
+      await AsyncStorage.removeItem(TERMS_ACCEPTED_KEY);
 
       if (role === 'driver') {
         const { error: driverError } = await supabase.from('drivers').insert([{
@@ -215,6 +252,16 @@ export default function RegisterScreen() {
     setOtp('');
     await sendOTP(registeredPhone);
   };
+
+  if (checkingTerms) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+        <View style={styles.loadingGate}>
+          <ActivityIndicator color="#1D9E75" />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (showOTPScreen) {
     return (
@@ -435,27 +482,6 @@ export default function RegisterScreen() {
             editable={!loading}
           />
 
-          {/* Terms */}
-          <View style={styles.termsRow}>
-            <TouchableOpacity
-              style={[styles.checkbox, agreedToTerms && styles.checkboxChecked]}
-              onPress={() => setAgreedToTerms(v => !v)}
-              disabled={loading}
-            >
-              {agreedToTerms && <Text style={styles.checkmark}>✓</Text>}
-            </TouchableOpacity>
-            <View style={styles.termsTextRow}>
-              <Text style={styles.termsText}>I agree to the </Text>
-              <TouchableOpacity onPress={() => Linking.openURL('https://www.pragyago.com/terms')}>
-                <Text style={styles.termsLink}>Terms of Service</Text>
-              </TouchableOpacity>
-              <Text style={styles.termsText}> and </Text>
-              <TouchableOpacity onPress={() => Linking.openURL('https://www.pragyago.com/privacy-policy')}>
-                <Text style={styles.termsLink}>Privacy Policy</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
           {/* Register button */}
           <Pressable
             style={({ pressed }) => [
@@ -568,18 +594,7 @@ const styles = StyleSheet.create({
   },
   driverNoteText: { fontSize: 12, color: '#4DA3FF', lineHeight: 18 },
 
-  /* Terms */
-  termsRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 4, paddingHorizontal: 2 },
-  checkbox: {
-    width: 22, height: 22, borderRadius: 5,
-    borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  checkboxChecked: { backgroundColor: '#1D9E75', borderColor: '#1D9E75' },
-  checkmark: { color: '#fff', fontSize: 13, fontWeight: '700', lineHeight: 16 },
-  termsTextRow: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
-  termsText: { fontSize: 13, color: 'rgba(255,255,255,0.7)' },
-  termsLink: { fontSize: 13, color: '#1D9E75', fontWeight: '600' },
+  loadingGate: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
   /* Register button */
   registerBtn: {

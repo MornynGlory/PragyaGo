@@ -54,7 +54,7 @@ export default function LandingScreen() {
     try {
       const { data, error } = await supabase
         .from('profiles')
-        .select('role, suspended, suspension_reason')
+        .select('role, suspended, suspension_reason, is_deleted')
         .eq('id', userId)
         .single();
 
@@ -66,6 +66,43 @@ export default function LandingScreen() {
         setLoading(false);
         Alert.alert('Account Suspended', `Your account has been suspended.\n\nReason: ${reason}\n\nPlease contact PragyaGo support.`);
         return;
+      }
+
+      if (data.is_deleted) {
+        const { data: deletion } = await supabase
+          .from('account_deletions')
+          .select('id, grace_period_ends_at')
+          .eq('user_id', userId)
+          .eq('status', 'pending')
+          .order('deletion_requested_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const stillInGracePeriod = deletion?.grace_period_ends_at
+          ? new Date(deletion.grace_period_ends_at).getTime() > Date.now()
+          : false;
+
+        if (stillInGracePeriod) {
+          await supabase.from('profiles').update({
+            is_deleted: false,
+            deletion_requested_at: null,
+            deletion_reason: null,
+          }).eq('id', userId);
+          await supabase.from('account_deletions').update({
+            status: 'cancelled',
+            cancelled_at: new Date().toISOString(),
+          }).eq('id', deletion!.id);
+          Alert.alert('Welcome back!', 'Your account deletion request has been cancelled and your account is active again.');
+          // fall through to normal routing below
+        } else {
+          // Grace period has lapsed. Permanent purge of profile/ride data is a server-side
+          // job (service-role key required) — out of scope for this client app. This just
+          // blocks login; a backend job still needs to do the actual deletion.
+          await supabase.auth.signOut();
+          setLoading(false);
+          Alert.alert('Account Deleted', 'This account was permanently deleted after the 30-day grace period. Please register again if you\'d like to use PragyaGo.');
+          return;
+        }
       }
 
       if (data.role === 'driver') {
@@ -133,7 +170,7 @@ export default function LandingScreen() {
       <View style={styles.bottomSection}>
         <Pressable
           style={({ pressed }) => [styles.getStartedBtn, pressed && styles.btnPressed]}
-          onPress={() => router.push('/auth/register')}
+          onPress={() => router.push('/auth/terms-screen' as any)}
         >
           <Text style={styles.getStartedText}>Get Started</Text>
         </Pressable>

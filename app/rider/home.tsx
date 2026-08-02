@@ -7,6 +7,7 @@ import { useTheme } from '@/lib/theme';
 import { calculateZoneFare, FareResult, getFareSuggestions } from '@/lib/fares';
 import { getDriverToken, sendPushNotification } from '@/lib/notifications';
 import { supabase } from '@/lib/supabase';
+import { useUnreadMessages } from '@/lib/useUnreadMessages';
 import { Feather } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -181,7 +182,7 @@ export default function RiderHomeScreen() {
   const [stopSuggestions, setStopSuggestions] = useState<any[]>([]);
   const [loadingStopSuggestions, setLoadingStopSuggestions] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [hasBoarded, setHasBoarded] = useState(false);
   const [boardingLoading, setBoardingLoading] = useState(false);
   const [pickupLocation, setPickupLocation] = useState('My Current Location');
@@ -209,13 +210,8 @@ export default function RiderHomeScreen() {
 
   useEffect(() => { currentRideRef.current = currentRide; }, [currentRide]);
   useEffect(() => { rideStatusRef.current = rideStatus; }, [rideStatus]);
-  useEffect(() => {
-    if (currentRide?.id) {
-      fetchChatUnreadCount(currentRide.id);
-    } else {
-      setChatUnreadCount(0);
-    }
-  }, [currentRide?.id]);
+
+  const chatUnreadCount = useUnreadMessages(currentRide?.id ?? null, currentUserId);
 
   useEffect(() => {
     if (currentRide) {
@@ -320,6 +316,7 @@ export default function RiderHomeScreen() {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return;
       userIdRef.current = user.id;
+      setCurrentUserId(user.id);
       supabase.from('profiles').select('zone_id, role').eq('id', user.id).single()
         .then(({ data }: { data: { zone_id: string | null; role: string } | null }) => {
           const zoneId = data?.zone_id ?? null;
@@ -428,7 +425,7 @@ export default function RiderHomeScreen() {
         .eq('is_online', true)
         .not('current_lat', 'is', null)
         .not('current_lng', 'is', null);
-      console.log('Nearby drivers fetched:', JSON.stringify(drivers));
+      console.log('Nearby drivers fetched:', drivers?.length);
       if (drivers) setNearbyDrivers(drivers);
     } catch (error) { console.error(error); }
   };
@@ -551,6 +548,11 @@ export default function RiderHomeScreen() {
     driverLocationSubscription.current = channel;
   };
 
+  // TODO before multi-zone launch: Replace with proper geometric boundary detection
+  // using zone boundary coordinates from zone_settings table
+  // Current implementation: uses closest online driver's zone as proxy
+  // Acceptable for single-zone launch in Sunyani
+  // See: boundary_lat_min, boundary_lat_max, boundary_lng_min, boundary_lng_max in zone_settings
   const detectAndAssignZone = async (lat: number, lng: number, userId: string) => {
     try {
       // Use find_nearest_driver logic in reverse - find which zone the rider is in
@@ -590,6 +592,11 @@ export default function RiderHomeScreen() {
     }
   };
 
+  // TODO before multi-zone launch: Replace with proper geometric boundary detection
+  // using zone boundary coordinates from zone_settings table
+  // Current implementation: uses closest online driver's zone as proxy
+  // Acceptable for single-zone launch in Sunyani
+  // See: boundary_lat_min, boundary_lat_max, boundary_lng_min, boundary_lng_max in zone_settings
   const detectZoneFromCoordinates = async (lat: number, lng: number): Promise<string | null> => {
     try {
       // Find nearest zone by comparing pickup coordinates to driver locations in each zone
@@ -848,7 +855,7 @@ export default function RiderHomeScreen() {
       .channel(`ride-update-${rideId}-${Date.now()}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides' },
         async (payload) => {
-          console.log('Ride UPDATE received:', JSON.stringify(payload.new));
+          console.log('Ride UPDATE received, status:', payload.new?.status);
           const ride = payload.new;
           if (ride.id !== rideId) return;
           setCurrentRide(ride);
@@ -1004,16 +1011,26 @@ export default function RiderHomeScreen() {
 
   const acceptNewFare = async () => {
     if (!currentRide) return;
-    await supabase.from('rides').update({ fare_accepted: true }).eq('id', currentRide.id);
-    setShowFareAcceptModal(false);
-    Alert.alert(
-      'Fare Accepted!',
-      `New fare: GH₵ ${finalFare}. Please confirm payment.`,
-      [
-        { text: 'Later', style: 'cancel' },
-        { text: currentRide.payment_method === 'cash' ? 'Cash Sent' : 'Confirm Payment', onPress: () => confirmPayment(currentRide, finalFare!) }
-      ]
-    );
+    try {
+      const { error } = await supabase.from('rides').update({ fare_accepted: true }).eq('id', currentRide.id);
+
+      if (error) {
+        Alert.alert('Error', 'Could not accept fare. Please try again.');
+        return;
+      }
+
+      setShowFareAcceptModal(false);
+      Alert.alert(
+        'Fare Accepted!',
+        `New fare: GH₵ ${finalFare}. Please confirm payment.`,
+        [
+          { text: 'Later', style: 'cancel' },
+          { text: currentRide.payment_method === 'cash' ? 'Cash Sent' : 'Confirm Payment', onPress: () => confirmPayment(currentRide, finalFare!) }
+        ]
+      );
+    } catch (e) {
+      Alert.alert('Error', 'Something went wrong. Please try again.');
+    }
   };
 
   const sendReceiptEmail = async (ride: any) => {
@@ -1203,33 +1220,36 @@ export default function RiderHomeScreen() {
   const cancelRide = async (reason: string) => {
     if (!currentRide) return;
     setCancellingRide(true);
-    const { data, error } = await supabase
-      .from('rides')
-      .update({ status: 'cancelled', cancellation_reason: reason, cancelled_by: 'rider' })
-      .eq('id', currentRide.id)
-      .select();
+    try {
+      const { error } = await supabase
+        .from('rides')
+        .update({ status: 'cancelled', cancellation_reason: reason, cancelled_by: 'rider' })
+        .eq('id', currentRide.id);
 
-    console.log('Cancel update error:', JSON.stringify(error));
-    console.log('Cancel update data:', JSON.stringify(data));
-    setCurrentRide(null); setRideStatus(''); setDriverInfo(null);
-    setShowDriverCard(false); setEta(null); setFinalFare(null);
-    if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
-    if (driverLocationSubscription.current) { await supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
-    if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
-    stopDriverTracking();
-    setCancellingRide(false);
-    setShowCancelReasonModal(false);
-    setCancelReason('');
-    setOtherCancelReason('');
-    Alert.alert('Ride Cancelled', 'Your ride has been cancelled.');
+      if (error) {
+        Alert.alert('Error', 'Could not cancel ride. Please try again.');
+        return;
+      }
+
+      // Only reset state if cancellation actually succeeded
+      setCurrentRide(null); setRideStatus(''); setDriverInfo(null);
+      setShowDriverCard(false); setEta(null); setFinalFare(null);
+      if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
+      if (driverLocationSubscription.current) { await supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
+      if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
+      stopDriverTracking();
+      setShowCancelReasonModal(false);
+      setCancelReason('');
+      setOtherCancelReason('');
+      Alert.alert('Ride Cancelled', 'Your ride has been cancelled.');
+    } catch (e) {
+      Alert.alert('Error', 'Something went wrong. Please try again.');
+    } finally {
+      setCancellingRide(false);
+    }
   };
 
   const confirmCancelRide = () => {
-    console.log('Confirming cancellation...');
-    console.log('Active ride ID:', currentRide?.id);
-    console.log('Cancel reason:', cancelReason);
-    console.log('Custom reason:', otherCancelReason);
-
     if (!currentRide?.id) {
       Alert.alert('Error', 'No active ride found');
       return;
@@ -1249,37 +1269,34 @@ export default function RiderHomeScreen() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user || !completedRide || !driverInfo) return;
-      await supabase.from('ratings').insert([{
+      const { error } = await supabase.from('ratings').insert([{
         ride_id: completedRide.id, rated_by: user.id,
         rated_user: driverInfo.profile_id, score: selectedRating,
         comment: ratingComment.trim() || null,
         created_at: new Date().toISOString(),
       }]);
+
+      if (error) {
+        Alert.alert('Error', 'Could not submit rating. Please try again.');
+        return;
+      }
+
       const { data: ratings } = await supabase.from('ratings').select('score').eq('rated_user', driverInfo.profile_id);
       if (ratings && ratings.length > 0) {
         const avgRating = ratings.reduce((sum: number, r: { score: number }) => sum + r.score, 0) / ratings.length;
         await supabase.from('drivers').update({ rating: Math.round(avgRating * 10) / 10 }).eq('id', driverInfo.id);
       }
-      Alert.alert('Thank you!', `You rated your driver ${selectedRating} star${selectedRating > 1 ? 's' : ''}!`);
-    } catch (error) { console.error('Error submitting rating:', error); }
-    finally {
-      setSubmittingRating(false); setShowRatingModal(false);
-      setSelectedRating(0); setRatingComment(''); setCompletedRide(null); setDriverInfo(null); setEta(null);
-    }
-  };
 
-  const fetchChatUnreadCount = async (rideId: string) => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      const { count } = await supabase
-        .from('ride_messages')
-        .select('*', { count: 'exact', head: true })
-        .eq('ride_id', rideId)
-        .neq('sender_id', user.id)
-        .eq('is_read', false);
-      setChatUnreadCount(count ?? 0);
-    } catch {}
+      // Only close the modal and clear state if the insert actually succeeded
+      Alert.alert('Thank you!', `You rated your driver ${selectedRating} star${selectedRating > 1 ? 's' : ''}!`);
+      setShowRatingModal(false);
+      setSelectedRating(0); setRatingComment(''); setCompletedRide(null); setDriverInfo(null); setEta(null);
+    } catch (error) {
+      console.error('Error submitting rating:', error);
+      Alert.alert('Error', 'Something went wrong. Please try again.');
+    } finally {
+      setSubmittingRating(false);
+    }
   };
 
   const fetchUnreadCount = async () => {
@@ -1546,6 +1563,22 @@ export default function RiderHomeScreen() {
             <TouchableOpacity style={styles.driverInlineChatBtn} onPress={() => router.push(('/chat/' + currentRide.id) as any)}>
               <Feather name="message-circle" size={18} color={theme.green} />
               <Text style={styles.driverInlineChatBtnText}>Chat</Text>
+              {chatUnreadCount > 0 && (
+                <View style={{
+                  position: 'absolute',
+                  top: -6, right: -6,
+                  backgroundColor: theme.red,
+                  borderRadius: 10,
+                  minWidth: 18, height: 18,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  paddingHorizontal: 4,
+                }}>
+                  <Text style={{ color: 'white', fontSize: 10, fontWeight: '700' }}>
+                    {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
             <TouchableOpacity style={styles.driverInlineCallBtn} onPress={() => router.push(('/call/' + currentRide.id) as any)}>
               <Feather name="phone" size={18} color="#185FA5" />
@@ -1749,7 +1782,21 @@ export default function RiderHomeScreen() {
             </View>
             {loadingDestSuggestions ? <ActivityIndicator size="small" color="#2563eb" style={styles.suggestionsLoader} /> : null}
             {destinationSuggestions.length > 0 ? (
-            <View style={styles.suggestionsCard}>
+              <>
+                {/* Backdrop — tapping anywhere below the dropdown dismisses it instead of
+                    hitting whatever button/input happens to be buried underneath. Sized well
+                    past this container's own (small) height since RN doesn't clip absolutely
+                    positioned views to their parent's bounds. */}
+                <TouchableOpacity
+                  style={{
+                    position: 'absolute',
+                    top: 0, left: 0, right: 0, bottom: -600,
+                    zIndex: 99,
+                  }}
+                  onPress={() => setDestinationSuggestions([])}
+                  activeOpacity={1}
+                />
+                <View style={styles.suggestionsCard}>
               {destinationSuggestions.map((item, index) => {
                 const prev = index > 0 ? destinationSuggestions[index - 1] : null;
                 const showFaresHeader = item.source === 'zone' && prev?.source !== 'zone';
@@ -1788,7 +1835,8 @@ export default function RiderHomeScreen() {
                   </React.Fragment>
                 );
               })}
-            </View>
+                </View>
+              </>
             ) : null}
           </View>
           {stops.length > 0 ? (
@@ -2152,7 +2200,7 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   rideStatusFare: { fontSize: 14, color: '#fff', fontWeight: 'bold' },
   originalFare: { fontSize: 11, color: '#E6F1FB' },
   rideActions: { flexDirection: 'row', gap: 10 },
-  cancelButton: { flex: 1, backgroundColor: '#FF3B30', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
+  cancelButton: { flex: 1, backgroundColor: c.red, paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
   cancelButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
   boardingPanel: { backgroundColor: c.card, alignItems: 'center', padding: 20, gap: 4 },
   boardingTitle: { fontSize: 18, fontWeight: '700', color: c.text, marginTop: 8 },
@@ -2193,7 +2241,7 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   stopRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderBottomWidth: 0.5, borderBottomColor: c.border },
   stopNumber: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#2563eb', color: '#fff', textAlign: 'center', lineHeight: 24, fontSize: 12, fontWeight: 'bold', marginRight: 10 },
   stopText: { flex: 1, fontSize: 13, color: c.text },
-  removeStop: { fontSize: 16, color: '#FF3B30', paddingHorizontal: 8 },
+  removeStop: { fontSize: 16, color: c.red, paddingHorizontal: 8 },
   addStopRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
   stopInput: { flex: 1, borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, backgroundColor: c.input, color: c.text },
   addStopButton: { backgroundColor: '#1D9E75', paddingHorizontal: 14, borderRadius: 8, justifyContent: 'center' },
@@ -2257,7 +2305,7 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   cancelReasonActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
   cancelReasonCancelBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', backgroundColor: c.background2 },
   cancelReasonCancelBtnText: { fontSize: 15, fontWeight: '600', color: c.textSecondary },
-  cancelReasonConfirmBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', backgroundColor: '#FF3B30' },
+  cancelReasonConfirmBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', backgroundColor: c.red },
   cancelReasonConfirmBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
   fareAcceptTitle: { fontSize: 20, fontWeight: 'bold', color: c.text, textAlign: 'center', marginBottom: 8 },
   fareAcceptSubtitle: { fontSize: 14, color: c.textSecondary, textAlign: 'center', marginBottom: 20 },
@@ -2327,7 +2375,7 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   pulseCircle: { position: 'absolute', width: 50, height: 50, borderRadius: 25, backgroundColor: '#1D9E75' },
   bellBtn: { position: 'absolute', top: 12, right: 12, zIndex: 10, width: 40, height: 40, borderRadius: 20, backgroundColor: c.card, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 },
   locateMeBtn: { position: 'absolute', right: 16, bottom: 16, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 6 },
-  bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF3B30', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },
+  bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: c.red, borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },
   bellBadgeText: { color: '#fff', fontSize: 9, fontWeight: 'bold' },
   });
 }
