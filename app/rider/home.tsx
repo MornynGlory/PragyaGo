@@ -169,8 +169,6 @@ export default function RiderHomeScreen() {
   const zoneIdRef = useRef<string | null>(null);
   const userIdRef = useRef<string | null>(null);
   const regionZoneIdsRef = useRef<string[]>([]);
-  const viewboxRef = useRef<string | null>(null);
-  const regionCenterRef = useRef<{ lat: number; lng: number } | null>(null);
   const [selectedDestCoords, setSelectedDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [driverLocation, setDriverLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [routePoints, setRoutePoints] = useState<{ latitude: number; longitude: number }[]>([]);
@@ -239,7 +237,6 @@ export default function RiderHomeScreen() {
         .maybeSingle();
 
       if (activeRideData) {
-        console.log('Restored active ride from Supabase:', activeRideData.id);
         setCurrentRide(activeRideData);
         setRideStatus(activeRideData.status);
         setHasBoarded(false);
@@ -290,6 +287,13 @@ export default function RiderHomeScreen() {
       if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
         console.log('App came to foreground - restoring ride state');
 
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          router.replace('/');
+          appStateRef.current = nextAppState;
+          return;
+        }
+
         if (currentRide?.id) {
           const { data: ride } = await supabase
             .from('rides')
@@ -298,8 +302,26 @@ export default function RiderHomeScreen() {
             .single();
 
           if (ride) {
-            setCurrentRide(ride);
-            setRideStatus(ride.status);
+            if (ride.status === 'completed' || ride.status === 'cancelled') {
+              // Realtime socket is typically dropped while backgrounded, so the
+              // subscription handler's own cleanup may have been missed — mirror it here.
+              setShowDriverCard(false);
+              setShowFareAcceptModal(false);
+              setCurrentRide(null);
+              setRideStatus('');
+              setDriverInfo(null);
+              setEta(null);
+              setFinalFare(null);
+              setHasBoarded(false);
+              if (rideSubscription.current) { supabase.removeChannel(rideSubscription.current); rideSubscription.current = null; }
+              if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
+              if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
+              stopDriverTracking();
+              if (ride.status === 'cancelled') Alert.alert('Ride Cancelled', 'Your ride was cancelled.');
+            } else {
+              setCurrentRide(ride);
+              setRideStatus(ride.status);
+            }
           }
         }
       }
@@ -665,14 +687,6 @@ export default function RiderHomeScreen() {
       if (!regionZones || regionZones.length === 0) return;
 
       regionZoneIdsRef.current = regionZones.map((z: any) => z.id);
-
-      const latMin = Math.min(...regionZones.map((z: any) => z.boundary_lat_min));
-      const latMax = Math.max(...regionZones.map((z: any) => z.boundary_lat_max));
-      const lngMin = Math.min(...regionZones.map((z: any) => z.boundary_lng_min));
-      const lngMax = Math.max(...regionZones.map((z: any) => z.boundary_lng_max));
-      const viewbox = `${lngMin},${latMin},${lngMax},${latMax}`;
-      viewboxRef.current = viewbox;
-      regionCenterRef.current = { lat: (latMin + latMax) / 2, lng: (lngMin + lngMax) / 2 };
     } catch (err) {
       console.error('Error initializing zone data:', err);
     }
@@ -718,7 +732,6 @@ export default function RiderHomeScreen() {
     if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
     if (text.length < 2) { setDestinationSuggestions([]); return; }
     destDebounceRef.current = setTimeout(async () => {
-      console.log('Debounce fired, fetching suggestions for:', text);
       setLoadingDestSuggestions(true);
       try {
         const fareZoneIds = regionZoneIdsRef.current.length > 0 ? regionZoneIdsRef.current : zoneIdRef.current;

@@ -1,5 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/theme';
+import { Feather } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -21,6 +23,7 @@ const TYPE_ICON: Record<string, string> = {
 export default function NotificationsScreen() {
   const theme = useTheme();
   const styles = makeStyles(theme);
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [markingAll, setMarkingAll] = useState(false);
@@ -82,7 +85,14 @@ export default function NotificationsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['bottom']}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+          <Feather name="arrow-left" size={22} color={theme.text} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Notifications</Text>
+        <View style={styles.headerBtn} />
+      </View>
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#1D9E75" />
@@ -135,6 +145,9 @@ export default function NotificationsScreen() {
 function makeStyles(c: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: c.background },
+    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: c.border, backgroundColor: c.background },
+    headerBtn: { minWidth: 48, height: 40, justifyContent: 'center', alignItems: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: c.text },
     markAllRow: { alignSelf: 'flex-end', paddingVertical: 6, paddingHorizontal: 4, marginBottom: 4 },
     markAllText: { color: '#1D9E75', fontSize: 13, fontWeight: '600' },
     loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },

@@ -33,24 +33,12 @@ export default function LoginScreen() {
 
     setLoading(true);
     try {
-      // Connection test
-      const { data: testData, error: testError } = await supabase
-        .from('profiles')
-        .select('count');
-      console.log('Connection test - count:', JSON.stringify(testData));
-      console.log('Connection test - error:', JSON.stringify(testError));
-      console.log('SUPABASE URL:', process.env.EXPO_PUBLIC_SUPABASE_URL);
-      console.log('SUPABASE KEY exists:', !!process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY);
-
       // Step 1: look up profile by phone
-      console.log('Phone:', phone.trim());
       const { data: profile } = await supabase
         .from('profiles')
         .select('id, role, email')
         .eq('phone', phone.trim())
         .maybeSingle();
-
-      console.log('Profile:', JSON.stringify(profile));
 
       if (!profile) {
         Alert.alert('Error', 'Phone number not registered.');
@@ -62,8 +50,6 @@ export default function LoginScreen() {
         email: profile.email,
         password,
       });
-
-      console.log('SignIn error:', JSON.stringify(error));
 
       if (error) {
         Alert.alert('Login Failed', error.message);

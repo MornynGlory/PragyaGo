@@ -14,10 +14,10 @@
 
 import { Feather } from '@expo/vector-icons'
 import * as Notifications from 'expo-notifications'
-import { Stack } from 'expo-router'
+import { Stack, useRouter } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { useEffect, useRef, useState } from 'react'
-import { Linking, Modal, Platform, Text, TouchableOpacity, useColorScheme, View } from 'react-native'
+import { Linking, Modal, Text, TouchableOpacity, useColorScheme, View } from 'react-native'
 import 'react-native-reanimated'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { version as currentVersion } from '../package.json'
@@ -25,6 +25,12 @@ import { registerForPushNotifications } from '@/lib/notifications'
 import { supabase } from '@/lib/supabase'
 
 const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.mornynglory.pragyago'
+
+if (process.env.NODE_ENV === 'production') {
+  console.log = () => {}
+  console.warn = () => {}
+  console.debug = () => {}
+}
 
 function compareVersions(v1: string, v2: string): number {
   const parts1 = v1.split('.').map(Number)
@@ -41,6 +47,7 @@ function compareVersions(v1: string, v2: string): number {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme()
+  const router = useRouter()
   const notificationListener = useRef<Notifications.EventSubscription | null>(null)
   const responseListener = useRef<Notifications.EventSubscription | null>(null)
 
@@ -83,26 +90,22 @@ export default function RootLayout() {
 
   useEffect(() => {
     registerForPushNotifications()
-    if (Platform.OS === 'android') {
-      Notifications.setNotificationChannelAsync('ride-requests', {
-        name: 'Ride Requests',
-        importance: Notifications.AndroidImportance.MAX,
-        sound: 'default',
-        enableVibrate: true,
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#1D9E75',
-      })
-      Notifications.setNotificationChannelAsync('ride-updates', {
-        name: 'Ride Updates',
-        importance: Notifications.AndroidImportance.HIGH,
-        sound: 'default',
-      })
-    }
-    notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
-      console.log('Notification received:', notification)
+
+    notificationListener.current = Notifications.addNotificationReceivedListener(() => {
+      console.log('Notification received')
     })
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
-      console.log('Notification tapped:', response)
+      const data = response.notification.request.content.data as { type?: string } | undefined
+
+      // Navigate based on notification type — mirrors the types actually sent by
+      // sendPushNotification() call sites (driver/home.tsx, rider/home.tsx).
+      if (data?.type === 'ride_request' || data?.type === 'boarding_confirmed') {
+        router.push('/driver/home')
+      } else if (data?.type === 'payment_confirmed') {
+        router.push('/driver/wallet')
+      } else if (data?.type === 'ride_update') {
+        router.push('/rider/home')
+      }
     })
     return () => {
       notificationListener.current?.remove()

@@ -1,7 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/theme';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,12 +17,17 @@ export default function LandingScreen() {
   const theme = useTheme();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
+  // Supabase fires an initial onAuthStateChange event alongside the mount-time
+  // getSession() call below, so both can race to call fetchUserRole for the same
+  // user. This guards against running (and routing on) it twice concurrently.
+  const resolvingUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     checkAuthState();
     try {
       const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        async (_event, session) => {
+        async (event, session) => {
+          if (event === 'TOKEN_REFRESHED') return;
           if (session?.user?.id) {
             await fetchUserRole(session.user.id);
           } else {
@@ -51,6 +56,8 @@ export default function LandingScreen() {
 
   const fetchUserRole = async (userId: string) => {
     if (!userId) { setLoading(false); return; }
+    if (resolvingUserIdRef.current === userId) return;
+    resolvingUserIdRef.current = userId;
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -58,11 +65,12 @@ export default function LandingScreen() {
         .eq('id', userId)
         .single();
 
-      if (error || !data?.role) { setLoading(false); return; }
+      if (error || !data?.role) { resolvingUserIdRef.current = null; setLoading(false); return; }
 
       if (data.suspended) {
         const reason = data.suspension_reason ?? 'No reason provided.';
         await supabase.auth.signOut();
+        resolvingUserIdRef.current = null;
         setLoading(false);
         Alert.alert('Account Suspended', `Your account has been suspended.\n\nReason: ${reason}\n\nPlease contact PragyaGo support.`);
         return;
@@ -99,6 +107,7 @@ export default function LandingScreen() {
           // job (service-role key required) — out of scope for this client app. This just
           // blocks login; a backend job still needs to do the actual deletion.
           await supabase.auth.signOut();
+          resolvingUserIdRef.current = null;
           setLoading(false);
           Alert.alert('Account Deleted', 'This account was permanently deleted after the 30-day grace period. Please register again if you\'d like to use PragyaGo.');
           return;
@@ -119,6 +128,7 @@ export default function LandingScreen() {
         router.replace('/rider/home' as any);
       }
     } catch {
+      resolvingUserIdRef.current = null;
       setLoading(false);
     }
   };

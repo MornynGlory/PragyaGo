@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -17,6 +18,32 @@ export const registerForPushNotifications = async (): Promise<string | null> => 
   if (Constants.executionEnvironment === 'storeClient') return null;
 
   if (!Device.isDevice) return null;
+
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('ride-requests', {
+      name: 'Ride Requests',
+      importance: Notifications.AndroidImportance.MAX,
+      sound: 'default',
+      enableVibrate: true,
+      vibrationPattern: [0, 500, 250, 500],
+      lightColor: '#1D9E75',
+    });
+    await Notifications.setNotificationChannelAsync('ride-updates', {
+      name: 'Ride Updates',
+      importance: Notifications.AndroidImportance.HIGH,
+      sound: 'default',
+    });
+    await Notifications.setNotificationChannelAsync('payments', {
+      name: 'Payments',
+      importance: Notifications.AndroidImportance.HIGH,
+      sound: 'default',
+    });
+    await Notifications.setNotificationChannelAsync('general', {
+      name: 'General',
+      importance: Notifications.AndroidImportance.DEFAULT,
+      sound: 'default',
+    });
+  }
 
   const existingPermissions = await Notifications.getPermissionsAsync();
   const existingStatus =

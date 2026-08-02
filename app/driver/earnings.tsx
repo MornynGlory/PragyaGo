@@ -1,9 +1,3 @@
-// Run in Supabase SQL (if not already present):
-// ALTER TABLE driver_daily_reports ADD COLUMN IF NOT EXISTS total_trips INTEGER;
-// ALTER TABLE driver_daily_reports ADD COLUMN IF NOT EXISTS total_earned NUMERIC(10,2);
-// ALTER TABLE driver_daily_reports ADD COLUMN IF NOT EXISTS total_commission NUMERIC(10,2);
-// ALTER TABLE driver_daily_reports ADD COLUMN IF NOT EXISTS net_income NUMERIC(10,2);
-
 import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/theme';
 import { Feather } from '@expo/vector-icons';
@@ -11,12 +5,10 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -67,8 +59,6 @@ export default function DriverDailyReportsScreen() {
   const [loading, setLoading] = useState(true);
   const [rides, setRides] = useState<any[]>([]);
   const [walletTxns, setWalletTxns] = useState<any[]>([]);
-  const [notes, setNotes] = useState('');
-  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -124,31 +114,6 @@ export default function DriverDailyReportsScreen() {
   const totalEarned = completedRides.reduce((sum, r) => sum + parseFloat(r.final_fare_ghs || r.fare_ghs || 0), 0);
   const totalCommission = totalEarned * COMMISSION_RATE;
   const netIncome = totalEarned - totalCommission;
-
-  const submitDailyReport = async () => {
-    if (!driverId) return;
-    setSubmitting(true);
-    try {
-      const reportDate = start.toISOString().split('T')[0];
-      const { error } = await supabase.from('driver_daily_reports').upsert({
-        driver_id: driverId,
-        report_date: reportDate,
-        total_trips: totalTrips,
-        total_earned: totalEarned,
-        total_commission: totalCommission,
-        net_income: netIncome,
-        notes,
-      }, { onConflict: 'driver_id,report_date' });
-      if (error) throw error;
-      Alert.alert('Report Submitted', 'Your daily report has been saved.');
-      setNotes('');
-    } catch (e) {
-      console.log('Submit report error:', e);
-      Alert.alert('Error', 'Failed to submit report. Please try again.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   const formatTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -309,34 +274,6 @@ export default function DriverDailyReportsScreen() {
               ))
             )}
           </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Notes (optional)</Text>
-            <TextInput
-              style={styles.notesInput}
-              placeholder="Any notes for this report..."
-              value={notes}
-              onChangeText={setNotes}
-              multiline
-              numberOfLines={3}
-              placeholderTextColor={theme.placeholder}
-            />
-          </View>
-
-          <TouchableOpacity
-            style={[styles.submitBtn, submitting && { opacity: 0.7 }]}
-            onPress={submitDailyReport}
-            disabled={submitting}
-          >
-            {submitting ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <Feather name="check-circle" size={16} color="#fff" />
-                <Text style={styles.submitBtnText}>Submit Daily Report</Text>
-              </>
-            )}
-          </TouchableOpacity>
         </ScrollView>
       )}
     </SafeAreaView>
@@ -409,17 +346,5 @@ function makeStyles(theme: ReturnType<typeof useTheme>) {
     txnAmount: { fontSize: 14, fontWeight: '700' },
 
     emptyText: { fontSize: 13, color: theme.textMuted, textAlign: 'center', paddingVertical: 8 },
-
-    notesInput: {
-      borderWidth: 1, borderColor: theme.inputBorder, borderRadius: 8,
-      padding: 12, fontSize: 14, color: theme.text,
-      backgroundColor: theme.input, textAlignVertical: 'top',
-    },
-    submitBtn: {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      backgroundColor: theme.green, borderRadius: 12,
-      marginHorizontal: 16, marginTop: 16, paddingVertical: 14,
-    },
-    submitBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
   });
 }

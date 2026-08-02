@@ -157,6 +157,7 @@ export default function DriverHome() {
   const locationIntervalRef = useRef<any>(null)
   const queueChannelRef = useRef<any>(null)
   const lastSentLocationRef = useRef<{ lat: number; lng: number }>({ lat: 0, lng: 0 })
+  const statusChangingRef = useRef(false)
 
   const [driverName, setDriverName] = useState('Driver')
   const [inQueue, setInQueue] = useState(false)
@@ -215,6 +216,35 @@ export default function DriverHome() {
     const subscription = AppState.addEventListener('change', async (nextAppState: AppStateStatus) => {
       if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
         console.log('Driver app came to foreground')
+
+        const { data: sessionData } = await supabase.auth.getSession()
+        if (!sessionData?.session) {
+          router.replace('/')
+          appStateRef.current = nextAppState
+          return
+        }
+
+        // Realtime socket is typically dropped while backgrounded, so the
+        // driverRideUpdatesChannelRef handler's terminal-state clear may have been missed —
+        // re-check the known ride by id directly rather than relying on the channel alone.
+        if (activeRideRef.current?.id) {
+          const { data: ride } = await supabase
+            .from('rides')
+            .select('*')
+            .eq('id', activeRideRef.current.id)
+            .single()
+
+          if (ride) {
+            if (ride.status === 'completed' || ride.status === 'cancelled') {
+              setActiveRide(null)
+              setRideStatus('')
+            } else {
+              setActiveRide(ride)
+              setRideStatus(ride.status)
+            }
+          }
+        }
+
         restoreDriverState()
       }
       appStateRef.current = nextAppState
@@ -254,7 +284,6 @@ export default function DriverHome() {
     try {
       const { data: sessionData } = await supabase.auth.getSession()
       const user = sessionData?.session?.user
-      console.log('Session user:', user?.id)
       if (!user) {
         router.replace('/')
         return
@@ -325,7 +354,6 @@ export default function DriverHome() {
         .maybeSingle()
 
       if (activeRideData) {
-        console.log('Restored driver active ride:', activeRideData.id)
         setActiveRide(activeRideData)
         setRideStatus(activeRideData.status)
         setIsOnline(true)
@@ -400,7 +428,7 @@ export default function DriverHome() {
     locationIntervalRef.current = setInterval(async () => {
       try {
         const loc = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.BestForNavigation
+          accuracy: Location.Accuracy.Balanced
         })
         const { latitude, longitude } = loc.coords
         setUserLat(latitude)
@@ -423,7 +451,6 @@ export default function DriverHome() {
             .eq('id', driverIdRef.current)
 
           lastSentLocationRef.current = { lat: latitude, lng: longitude }
-          console.log('Driver location updated:', latitude, longitude)
         }
       } catch (e) {
         console.log('Location update error:', e)
@@ -505,17 +532,27 @@ export default function DriverHome() {
   }
 
   async function toggleOnline() {
+    if (statusChangingRef.current) return
+    statusChangingRef.current = true
+
     if (vehicleVerified === false) {
       Alert.alert('Verification Required', 'Complete vehicle verification first')
+      statusChangingRef.current = false
       return
     }
 
+    const previousStatus = isOnline
     const newStatus = !isOnline
+    // Optimistic update — flip the UI immediately so the toggle feels instant;
+    // revert it if any step below fails.
+    setIsOnline(newStatus)
+
+    try {
 
     const { data: sessionData } = await supabase.auth.getSession()
     const user = sessionData?.session?.user
-    console.log('Toggle - Session user:', user?.id)
     if (!user) {
+      setIsOnline(previousStatus)
       Alert.alert('Session expired', 'Please log in again.')
       router.replace('/')
       return
@@ -527,9 +564,11 @@ export default function DriverHome() {
       .eq('profile_id', user.id)
       .single()
 
-    console.log('Driver found:', JSON.stringify(driver))
-    console.log('Driver error:', JSON.stringify(driverError))
-    if (!driver) return
+    if (driverError) console.error('Driver lookup error:', driverError)
+    if (!driver) {
+      setIsOnline(previousStatus)
+      return
+    }
 
     // Zone-id lives on profiles (drivers has no zone_id column in the known schema);
     // keep drivers.zone_id in sync so the zone-scoped online-count query below can
@@ -576,6 +615,8 @@ export default function DriverHome() {
           setInQueue(true)
           subscribeToQueueUpdates(driver.id)
         }
+        // Not actually online yet — queued, so undo the optimistic flip.
+        setIsOnline(previousStatus)
         return
       }
     }
@@ -591,6 +632,7 @@ export default function DriverHome() {
 
     console.log('Update error:', JSON.stringify(updateError))
     if (updateError) {
+      setIsOnline(previousStatus)
       Alert.alert('Error', 'Could not update online status. Please try again.')
       return
     }
@@ -622,8 +664,13 @@ export default function DriverHome() {
       }
       if (zoneId) await activateNextInQueue(zoneId)
     }
-
-    setIsOnline(newStatus)
+    } catch (e) {
+      console.log('Toggle online error:', e)
+      setIsOnline(previousStatus)
+      Alert.alert('Error', 'Could not update online status. Please try again.')
+    } finally {
+      statusChangingRef.current = false
+    }
   }
 
   const sendRideRequestNotification = async (ride: any) => {
@@ -649,7 +696,6 @@ export default function DriverHome() {
   }
 
   async function subscribeToRideRequests(driverId: string) {
-    console.log('Setting up ride request subscription for driver:', driverId)
     if (rideRequestChannelRef.current) {
       await supabase.removeChannel(rideRequestChannelRef.current)
     }
@@ -660,7 +706,6 @@ export default function DriverHome() {
         schema: 'public',
         table: 'rides',
       }, async (payload) => {
-        console.log('New ride INSERT received:', JSON.stringify(payload.new))
         const ride = payload.new as any
         if (ride.status === 'requested' && !activeRideRef.current) {
           setRideRequest(ride)
@@ -683,7 +728,6 @@ export default function DriverHome() {
         table: 'rides',
         filter: `driver_id=eq.${driverId}`
       }, (payload) => {
-        console.log('Driver ride update:', JSON.stringify(payload.new))
         const ride = payload.new as any
         // activeRideRef still holds the pre-update value here (it's synced by a separate
         // effect), so this reliably catches the false->true transition without depending
@@ -722,18 +766,12 @@ export default function DriverHome() {
     if (!rideRequest) return
 
     try {
-      console.log('Attempting to accept ride:', rideRequest.id)
-      console.log('Driver ID:', driverIdRef.current)
-
       // Use atomic function to prevent race conditions
       const { data, error } = await supabase.rpc('accept_ride', {
         p_ride_id: rideRequest.id,
         p_driver_id: driverIdRef.current,
         p_profile_id: driverIdRef.current
       })
-
-      console.log('Accept ride result:', JSON.stringify(data))
-      console.log('Accept ride error:', JSON.stringify(error))
 
       if (error) {
         Alert.alert('Error', 'Could not accept ride. Please try again.')
@@ -754,7 +792,7 @@ export default function DriverHome() {
       setRideRequest(null)
 
     } catch (e: any) {
-      console.log('Accept ride catch:', e)
+      console.error('Accept ride error:', e)
       Alert.alert('Error', 'Something went wrong. Please try again.')
       setRideRequest(null)
     }
@@ -763,9 +801,6 @@ export default function DriverHome() {
 
   const handleArrivedAtPickup = async () => {
     try {
-      console.log('Arrived at pickup - ride ID:', activeRide?.id)
-      console.log('Current ride status:', rideStatus)
-
       if (!activeRide?.id) {
         Alert.alert('Error', 'No active ride found. Please try again.')
         return
@@ -777,9 +812,6 @@ export default function DriverHome() {
         .eq('id', activeRide.id)
         .select()
 
-      console.log('Arrived update result:', JSON.stringify(data))
-      console.log('Arrived update error:', JSON.stringify(error))
-
       if (error) {
         Alert.alert('Error', `Status update failed: ${error.message}`)
         return
@@ -789,7 +821,7 @@ export default function DriverHome() {
       setActiveRide({ ...activeRide, status: 'rider_boarding' })
       Alert.alert('Arrived!', 'Waiting for rider to confirm boarding.')
     } catch (e: any) {
-      console.log('Arrived catch error:', e)
+      console.error('Arrived at pickup error:', e)
       Alert.alert('Error', 'Something went wrong. Please try again.')
     }
   }

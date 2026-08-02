@@ -22,12 +22,14 @@ import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/theme';
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -35,7 +37,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const userRole = 'driver' as const;
 
@@ -43,6 +45,8 @@ export default function DriverSettingsScreen() {
   const theme = useTheme();
   const styles = makeStyles(theme);
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const deleteScrollRef = useRef<ScrollView>(null);
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -252,35 +256,57 @@ export default function DriverSettingsScreen() {
       </ScrollView>
 
       <Modal visible={showDeleteModal} transparent animationType="slide">
-        <View style={{
-          flex: 1,
-          backgroundColor: 'rgba(0,0,0,0.5)',
-          justifyContent: 'flex-end',
-        }}>
-          <ScrollView
-            style={{
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            justifyContent: 'flex-end',
+          }}>
+            <View style={{
               backgroundColor: theme.card,
               borderTopLeftRadius: 24,
               borderTopRightRadius: 24,
-            }}
-            contentContainerStyle={{ padding: 24 }}
-            showsVerticalScrollIndicator={false}
-          >
-            <View style={{
-              width: 64, height: 64, borderRadius: 32,
-              backgroundColor: theme.redLight,
-              justifyContent: 'center', alignItems: 'center',
-              alignSelf: 'center',
-              marginBottom: 16,
+              paddingBottom: Math.max(insets.bottom, 16),
+              maxHeight: '90%',
             }}>
-              <Feather name="trash-2" size={32} color={theme.red} />
-            </View>
+              <ScrollView
+                ref={deleteScrollRef}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ padding: 24 }}
+              >
+                <View style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: 20,
+                }}>
+                  <Text style={{ fontSize: 20, fontWeight: '800', color: theme.text }}>
+                    Delete Account
+                  </Text>
+                  <TouchableOpacity onPress={() => {
+                    setShowDeleteModal(false);
+                    setDeletionReason('');
+                    setDeletePassword('');
+                  }}>
+                    <Feather name="x" size={24} color={theme.text} />
+                  </TouchableOpacity>
+                </View>
 
-            <Text style={{ fontSize: 20, fontWeight: '800', color: theme.text, textAlign: 'center', marginBottom: 12 }}>
-              Delete Account
-            </Text>
+                <View style={{
+                  width: 64, height: 64, borderRadius: 32,
+                  backgroundColor: theme.redLight,
+                  justifyContent: 'center', alignItems: 'center',
+                  alignSelf: 'center',
+                  marginBottom: 16,
+                }}>
+                  <Feather name="trash-2" size={32} color={theme.red} />
+                </View>
 
-            <Text style={{ fontSize: 14, color: theme.textSecondary, textAlign: 'center', lineHeight: 22, marginBottom: 20 }}>
+                <Text style={{ fontSize: 14, color: theme.textSecondary, textAlign: 'center', lineHeight: 22, marginBottom: 20 }}>
               Are you sure you want to delete your account? This action cannot be undone after 30 days.
             </Text>
 
@@ -358,6 +384,11 @@ export default function DriverSettingsScreen() {
               secureTextEntry
               value={deletePassword}
               onChangeText={setDeletePassword}
+              onFocus={() => {
+                setTimeout(() => {
+                  deleteScrollRef.current?.scrollToEnd({ animated: true });
+                }, 300);
+              }}
               style={{
                 backgroundColor: theme.input,
                 borderRadius: 10,
@@ -400,8 +431,10 @@ export default function DriverSettingsScreen() {
             >
               <Text style={{ color: theme.textSecondary, fontSize: 15 }}>Cancel</Text>
             </TouchableOpacity>
-          </ScrollView>
-        </View>
+              </ScrollView>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );

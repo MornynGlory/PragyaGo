@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase'
 import { useTheme } from '@/lib/theme'
 import { Feather } from '@expo/vector-icons'
+import { useRouter } from 'expo-router'
 import React, { useEffect, useState } from 'react'
 import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -19,6 +20,7 @@ const formatDate = (dateStr: string) => {
 export default function RiderHistoryScreen() {
   const theme = useTheme()
   const styles = makeStyles(theme)
+  const router = useRouter()
   const [rides, setRides] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -99,7 +101,11 @@ export default function RiderHistoryScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+          <Feather name="arrow-left" size={22} color={theme.text} />
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>Ride History</Text>
+        <View style={styles.headerBtn} />
       </View>
 
       {loading ? (
@@ -123,7 +129,8 @@ export default function RiderHistoryScreen() {
 function makeStyles(c: ReturnType<typeof useTheme>) {
   return StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: c.background },
-    header: { paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 0.5, borderBottomColor: c.border, backgroundColor: c.background },
+    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: c.border, backgroundColor: c.background },
+    headerBtn: { minWidth: 48, height: 40, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: c.text },
     loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     rideCard: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 0.5, borderBottomColor: c.border, backgroundColor: c.card },
