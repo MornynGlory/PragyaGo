@@ -231,10 +231,10 @@ export default function DriverSettingsScreen() {
 
         {/* Main menu */}
         <View style={styles.section}>
-          <MenuItem icon="user" label="My Profile" onPress={() => router.push('/driver/edit-profile' as any)} styles={styles} theme={theme} />
-          <MenuItem icon="dollar-sign" label="My Wallet" onPress={() => router.push('/driver/wallet' as any)} styles={styles} theme={theme} />
+          <MenuItem icon="user" label="My Profile" onPress={() => router.push('/driver-screens/edit-profile' as any)} styles={styles} theme={theme} />
+          <MenuItem icon="dollar-sign" label="My Wallet" onPress={() => router.push('/driver-screens/wallet' as any)} styles={styles} theme={theme} />
           <MenuItem icon="bar-chart-2" label="Daily Report" onPress={() => router.push('/driver/earnings' as any)} styles={styles} theme={theme} />
-          <MenuItem icon="bell" label="Notifications" onPress={() => router.push('/notifications' as any)} styles={styles} theme={theme} />
+          <MenuItem icon="bell" label="Notifications" onPress={() => router.push('/driver-screens/notifications' as any)} styles={styles} theme={theme} />
           <MenuItem icon="headphones" label="Support" onPress={() => router.push('/support' as any)} styles={styles} theme={theme} last />
         </View>
 

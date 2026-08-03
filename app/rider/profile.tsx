@@ -242,7 +242,7 @@ export default function RiderProfileScreen() {
         <View style={styles.section}>
           <MenuItem
             icon="dollar-sign" iconColor={theme.green} iconBg={theme.greenLight}
-            label="My Wallet" onPress={() => router.push('/rider/gocash' as any)}
+            label="My Wallet" onPress={() => router.push('/rider-screens/gocash' as any)}
             styles={styles} theme={theme}
           />
           <MenuItem
@@ -252,12 +252,12 @@ export default function RiderProfileScreen() {
           />
           <MenuItem
             icon="edit-2" iconColor={theme.amber} iconBg={theme.amberLight}
-            label="Edit Profile" onPress={() => router.push('/rider/edit-profile' as any)}
+            label="Edit Profile" onPress={() => router.push('/rider-screens/edit-profile' as any)}
             styles={styles} theme={theme}
           />
           <MenuItem
             icon="bell" iconColor="#2563eb" iconBg={theme.blueLight}
-            label="Notifications" onPress={() => router.push('/rider/notifications' as any)}
+            label="Notifications" onPress={() => router.push('/rider-screens/notifications' as any)}
             styles={styles} theme={theme} last
           />
         </View>

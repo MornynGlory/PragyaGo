@@ -102,7 +102,7 @@ export default function RootLayout() {
       if (data?.type === 'ride_request' || data?.type === 'boarding_confirmed') {
         router.push('/driver/home')
       } else if (data?.type === 'payment_confirmed') {
-        router.push('/driver/wallet')
+        router.push('/driver-screens/wallet')
       } else if (data?.type === 'ride_update') {
         router.push('/rider/home')
       }
@@ -119,7 +119,13 @@ export default function RootLayout() {
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="auth" options={{ headerShown: false }} />
         <Stack.Screen name="rider" options={{ headerShown: false }} />
+        <Stack.Screen name="rider-screens/gocash" options={{ headerShown: false }} />
+        <Stack.Screen name="rider-screens/edit-profile" options={{ headerShown: false }} />
+        <Stack.Screen name="rider-screens/notifications" options={{ headerShown: false }} />
         <Stack.Screen name="driver" options={{ headerShown: false }} />
+        <Stack.Screen name="driver-screens/wallet" options={{ headerShown: false }} />
+        <Stack.Screen name="driver-screens/edit-profile" options={{ headerShown: false }} />
+        <Stack.Screen name="driver-screens/notifications" options={{ headerShown: false }} />
         <Stack.Screen name="support" options={{ headerShown: false }} />
         <Stack.Screen name="notifications" options={{ headerShown: false }} />
         <Stack.Screen name="chat/[rideId]" options={{ headerShown: false }} />

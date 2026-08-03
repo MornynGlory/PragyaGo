@@ -39,22 +39,13 @@ export default function RiderLayout() {
         }}
       />
       <Tabs.Screen
-        name="notifications"
-        options={{
-          title: 'Alerts',
-          tabBarIcon: ({ color, size }) => <Feather name="bell" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
         name="profile"
         options={{
           title: 'Settings',
           tabBarIcon: ({ color, size }) => <Feather name="settings" size={size} color={color} />,
         }}
       />
-      <Tabs.Screen name="gocash" options={{ href: null }} />
       <Tabs.Screen name="support" options={{ href: null }} />
-      <Tabs.Screen name="edit-profile" options={{ href: null }} />
     </Tabs>
   )
 }

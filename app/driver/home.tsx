@@ -1400,7 +1400,7 @@ export default function DriverHome() {
               }}
               onPress={() => {
                 setShowCommissionModal(false)
-                router.push('/driver/wallet')
+                router.push('/driver-screens/wallet')
               }}
             >
               <Text style={{ color: 'white', fontSize: 17, fontWeight: '700' }}>
