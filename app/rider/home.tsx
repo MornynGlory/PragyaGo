@@ -145,7 +145,9 @@ export default function RiderHomeScreen() {
   const [ratingComment, setRatingComment] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
   const [riderConfirmedPayment, setRiderConfirmedPayment] = useState(false);
-  const [finalFare, setFinalFare] = useState<number | null>(null);
+  // Supabase serializes Postgres `numeric` columns as strings, so despite the DB
+  // value being a fare amount, final_fare_ghs/fare_ghs can arrive here as either type.
+  const [finalFare, setFinalFare] = useState<number | string | null>(null);
   const [showFareAcceptModal, setShowFareAcceptModal] = useState(false);
   const [showCancelReasonModal, setShowCancelReasonModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
@@ -921,27 +923,10 @@ export default function RiderHomeScreen() {
             setRouteDistance(null);
             const newFare = ride.final_fare_ghs || ride.fare_ghs;
             setFinalFare(newFare);
+            // paymentPanel handles the rest automatically (rideStatus is already set above,
+            // and it renders whenever rideStatus is 'arrived_destination' or 'payment_pending')
             if (ride.final_fare_ghs && Math.abs(ride.final_fare_ghs - ride.fare_ghs) > 0.5) {
               setShowFareAcceptModal(true);
-            } else {
-              const baseFare = ride.estimated_fare || ride.fare_ghs;
-              const diff = Math.round(Math.abs(newFare - baseFare) * 100) / 100;
-              let fareMsg: string;
-              if (diff > 0.5 && newFare > baseFare) {
-                fareMsg = `Fare adjusted: +GH₵ ${diff.toFixed(2)} (longer route)\nFinal fare: GH₵ ${newFare.toFixed(2)}`;
-              } else if (diff > 0.5 && newFare < baseFare) {
-                fareMsg = `Fare reduced: -GH₵ ${diff.toFixed(2)} (shorter route)\nFinal fare: GH₵ ${newFare.toFixed(2)}`;
-              } else {
-                fareMsg = `Fare unchanged: GH₵ ${newFare.toFixed(2)}`;
-              }
-              Alert.alert(
-                'Reached Destination!',
-                `${fareMsg}\nPlease confirm payment.`,
-                [
-                  { text: 'Later', style: 'cancel' },
-                  { text: ride.payment_method === 'cash' ? 'Cash Sent' : 'Confirm Payment', onPress: () => confirmPayment(ride, newFare) }
-                ]
-              );
             }
           } else if (ride.status === 'completed') {
             setShowDriverCard(false);
@@ -1033,14 +1018,8 @@ export default function RiderHomeScreen() {
       }
 
       setShowFareAcceptModal(false);
-      Alert.alert(
-        'Fare Accepted!',
-        `New fare: GH₵ ${finalFare}. Please confirm payment.`,
-        [
-          { text: 'Later', style: 'cancel' },
-          { text: currentRide.payment_method === 'cash' ? 'Cash Sent' : 'Confirm Payment', onPress: () => confirmPayment(currentRide, finalFare!) }
-        ]
-      );
+      setFinalFare(finalFare);
+      // paymentPanel will show automatically since rideStatus is payment_pending
     } catch (e) {
       Alert.alert('Error', 'Something went wrong. Please try again.');
     }
@@ -1079,7 +1058,8 @@ export default function RiderHomeScreen() {
     }
   };
 
-  const confirmPayment = async (ride: any, fare: number) => {
+  const confirmPayment = async (ride: any, fare: number | string) => {
+    const fareAmount = typeof fare === 'number' ? fare : parseFloat(String(fare));
     setRiderConfirmedPayment(true);
     const { data: currentRideData } = await supabase.from('rides').select('driver_confirmed_payment').eq('id', ride.id).single();
     if (currentRideData?.driver_confirmed_payment) {
@@ -1105,7 +1085,7 @@ export default function RiderHomeScreen() {
         await sendPushNotification(
           driverToken,
           '💰 Payment Confirmed!',
-          `Payment of GH₵ ${fare} confirmed via ${ride.payment_method === 'cash' ? 'Cash' : 'Go Cash'}.`,
+          `Payment of GH₵ ${fareAmount} confirmed via ${ride.payment_method === 'cash' ? 'Cash' : 'Go Cash'}.`,
           { type: 'payment_confirmed', rideId: ride.id },
           'ride-updates'
         );
@@ -1340,7 +1320,9 @@ export default function RiderHomeScreen() {
     return '';
   };
 
-  const displayFare = finalFare || currentRide?.discounted_fare || currentRide?.fare_ghs;
+  const displayFare = finalFare
+    ? (typeof finalFare === 'string' ? parseFloat(finalFare) : finalFare)
+    : parseFloat(String(currentRide?.discounted_fare ?? currentRide?.fare_ghs ?? 0));
   const driverInitials = (driverInfo?.profiles?.full_name || '')
     .split(' ').map((n: string) => n[0]).filter(Boolean).join('').toUpperCase().slice(0, 2) || '?';
 
