@@ -25,8 +25,11 @@ export const registerForPushNotifications = async (): Promise<string | null> => 
       importance: Notifications.AndroidImportance.MAX,
       sound: 'default',
       enableVibrate: true,
-      vibrationPattern: [0, 500, 250, 500],
+      vibrationPattern: [0, 500, 250, 500, 250, 500],
       lightColor: '#1D9E75',
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      bypassDnd: true,
+      showBadge: true,
     });
     await Notifications.setNotificationChannelAsync('ride-updates', {
       name: 'Ride Updates',
@@ -97,6 +100,10 @@ export const sendPushNotification = async (
 ): Promise<void> => {
   if (!expoPushToken) return;
   try {
+    // Ride requests need to reliably wake a locked/sleeping Android device, which plain
+    // high-priority delivery doesn't guarantee — max channel priority + a short TTL (so a
+    // stale request doesn't buzz the driver after it's no longer available) does.
+    const isRideRequest = channelId === 'ride-requests';
     await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: {
@@ -112,6 +119,17 @@ export const sendPushNotification = async (
         sound: 'default',
         priority: 'high',
         ...(channelId ? { channelId } : {}),
+        ...(isRideRequest ? {
+          ttl: 30,
+          expiration: Math.floor(Date.now() / 1000) + 30,
+          android: {
+            channelId: 'ride-requests',
+            priority: 'max',
+            sticky: false,
+            vibrate: [0, 500, 250, 500, 250, 500],
+            sound: 'default',
+          },
+        } : {}),
       }),
     });
   } catch {

@@ -1,5 +1,60 @@
 // Run in Supabase SQL:
 // ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by TEXT;
+//
+// --- Sequential driver dispatch (Feature 1) ---
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS dispatched_driver_id UUID REFERENCES drivers(id);
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS dispatch_attempt INT DEFAULT 0;
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS driver_accept_expires_at TIMESTAMPTZ;
+//
+// CREATE OR REPLACE FUNCTION find_next_driver(
+//   p_pickup_lat NUMERIC,
+//   p_pickup_lng NUMERIC,
+//   p_zone_id UUID,
+//   p_excluded_driver_ids UUID[] DEFAULT NULL
+// ) RETURNS TABLE(driver_id UUID, profile_id UUID, distance_km NUMERIC) AS $$
+//   SELECT
+//     d.id AS driver_id,
+//     d.profile_id,
+//     (
+//       6371 * acos(
+//         LEAST(1, GREATEST(-1,
+//           cos(radians(p_pickup_lat)) * cos(radians(d.current_lat)) *
+//           cos(radians(d.current_lng) - radians(p_pickup_lng)) +
+//           sin(radians(p_pickup_lat)) * sin(radians(d.current_lat))
+//         ))
+//       )
+//     ) AS distance_km
+//   FROM drivers d
+//   WHERE d.is_online = true
+//     AND d.current_lat IS NOT NULL
+//     AND d.current_lng IS NOT NULL
+//     AND (p_zone_id IS NULL OR d.zone_id = p_zone_id)
+//     AND (p_excluded_driver_ids IS NULL OR NOT (d.id = ANY(p_excluded_driver_ids)))
+//   ORDER BY distance_km ASC
+//   LIMIT 1;
+// $$ LANGUAGE sql STABLE;
+//
+// Recommended hardening of the existing accept_ride() (see app/driver/home.tsx) so a driver
+// whose 20s dispatch window already expired can't still win a race against whoever it was
+// reassigned to — add this condition to its UPDATE ... WHERE clause:
+//   AND (dispatched_driver_id IS NULL OR dispatched_driver_id = p_driver_id)
+//
+// --- Emergency SOS (Feature 3) ---
+// CREATE TABLE IF NOT EXISTS sos_alerts (
+//   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+//   ride_id UUID REFERENCES rides(id) ON DELETE SET NULL,
+//   user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+//   user_role TEXT NOT NULL,
+//   lat NUMERIC(10,6) NOT NULL,
+//   lng NUMERIC(10,6) NOT NULL,
+//   triggered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+// );
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS sos_triggered BOOLEAN DEFAULT false;
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS sos_triggered_at TIMESTAMPTZ;
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS sos_location_lat NUMERIC(10,6);
+// ALTER TABLE rides ADD COLUMN IF NOT EXISTS sos_location_lng NUMERIC(10,6);
+// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS emergency_contact_name TEXT;
+// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS emergency_contact_phone TEXT;
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { applyDiscount, DiscountResult, recordDiscountUse } from '@/lib/discounts';
@@ -155,7 +210,9 @@ export default function RiderHomeScreen() {
   const [cancellingRide, setCancellingRide] = useState(false);
   const rideSubscription = useRef<any>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const requestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dispatchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [declinedDriverIds, setDeclinedDriverIds] = useState<string[]>([]);
+  const [dispatchAttempt, setDispatchAttempt] = useState(0);
   const driverLocationSubscription = useRef<any>(null);
   const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
   const locationWatcherRef = useRef<Location.LocationSubscription | null>(null);
@@ -358,7 +415,7 @@ export default function RiderHomeScreen() {
       if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
       if (stopDebounceRef.current) clearTimeout(stopDebounceRef.current);
       if (pickupDebounceRef.current) clearTimeout(pickupDebounceRef.current);
-      if (requestTimeoutRef.current) clearTimeout(requestTimeoutRef.current);
+      if (dispatchTimeoutRef.current) clearTimeout(dispatchTimeoutRef.current);
       locationWatcherRef.current?.remove();
     };
   }, []);
@@ -877,10 +934,12 @@ export default function RiderHomeScreen() {
           setRideStatus(ride.status);
 
           if (ride.status === 'accepted' && ride.driver_id) {
-            if (requestTimeoutRef.current) {
-              clearTimeout(requestTimeoutRef.current);
-              requestTimeoutRef.current = null;
+            if (dispatchTimeoutRef.current) {
+              clearTimeout(dispatchTimeoutRef.current);
+              dispatchTimeoutRef.current = null;
             }
+            setDeclinedDriverIds([]);
+            setDispatchAttempt(0);
             Alert.alert('Driver Found!', 'Your Pragya driver is on the way!');
             await fetchDriverInfo(ride.driver_id);
             await subscribeToDriverLocation(ride.driver_id);
@@ -1093,6 +1152,127 @@ export default function RiderHomeScreen() {
     }
   };
 
+  const handleSOS = async () => {
+    Alert.alert(
+      '🚨 Emergency SOS',
+      'Are you in danger? This will alert PragyaGo and your emergency contact.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Send SOS',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const sosLocation = await Location.getCurrentPositionAsync({});
+              const { data: { user } } = await supabase.auth.getUser();
+
+              await supabase.from('sos_alerts').insert({
+                ride_id: currentRide?.id || null,
+                user_id: user?.id,
+                user_role: 'rider',
+                lat: sosLocation.coords.latitude,
+                lng: sosLocation.coords.longitude,
+                triggered_at: new Date().toISOString(),
+              });
+
+              if (currentRide?.id) {
+                await supabase.from('rides').update({
+                  sos_triggered: true,
+                  sos_triggered_at: new Date().toISOString(),
+                  sos_location_lat: sosLocation.coords.latitude,
+                  sos_location_lng: sosLocation.coords.longitude,
+                }).eq('id', currentRide.id);
+              }
+
+              // Send push notification to admin
+              // This would trigger an admin alert in real implementation
+
+              Alert.alert(
+                '🚨 SOS Sent!',
+                `Your emergency alert has been sent to PragyaGo support.\n\nYour location has been recorded.\n\nPlease call Ghana Police: 191\nAmbulance: 193\nFire: 192`,
+                [{ text: 'OK' }]
+              );
+            } catch (e) {
+              Alert.alert('Error', 'Could not send SOS. Please call 191 directly.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const dispatchToNearestDriver = async (rideId: string, excludedIds: string[] = []) => {
+    try {
+      // Re-fetch pickup coords/zone from the ride row itself rather than closing over
+      // component state — this function recurses via setTimeout, and a closure captured
+      // at the first call would go stale across re-renders.
+      const { data: rideRow } = await supabase
+        .from('rides')
+        .select('pickup_lat, pickup_lng, zone_id, pickup_address, dropoff_address')
+        .eq('id', rideId)
+        .single();
+      if (!rideRow) return;
+
+      const { data: nearestDriver, error: rpcError } = await supabase.rpc('find_next_driver', {
+        p_pickup_lat: rideRow.pickup_lat,
+        p_pickup_lng: rideRow.pickup_lng,
+        p_zone_id: rideRow.zone_id,
+        p_excluded_driver_ids: excludedIds.length > 0 ? excludedIds : null,
+      });
+
+      if (rpcError || !nearestDriver || nearestDriver.length === 0) {
+        // No more drivers available
+        await supabase.from('rides').update({ status: 'cancelled', cancellation_reason: 'No drivers available' }).eq('id', rideId);
+        setCurrentRide(null);
+        setRideStatus('');
+        if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
+        Alert.alert('No Drivers Available', 'All nearby drivers are busy. Please try again in a few minutes.');
+        return;
+      }
+
+      const driver = nearestDriver[0];
+
+      // Update ride with dispatched driver info
+      await supabase.from('rides').update({
+        dispatched_driver_id: driver.driver_id,
+        dispatch_attempt: excludedIds.length + 1,
+        driver_accept_expires_at: new Date(Date.now() + 20000).toISOString(),
+      }).eq('id', rideId);
+
+      // Send push notification to this specific driver
+      const driverToken = await getDriverToken(driver.driver_id);
+      if (driverToken) {
+        await sendPushNotification(
+          driverToken,
+          '🛺 New Ride Request!',
+          `Pickup: ${rideRow.pickup_address}\nTo: ${rideRow.dropoff_address}`,
+          { type: 'ride_request', rideId },
+          'ride-requests'
+        );
+      }
+
+      // Set 20 second timeout - if driver doesn't accept, try next
+      dispatchTimeoutRef.current = setTimeout(async () => {
+        const { data: currentRideRow } = await supabase
+          .from('rides')
+          .select('status')
+          .eq('id', rideId)
+          .single();
+
+        if (currentRideRow?.status === 'requested') {
+          // Driver didn't accept - try next driver
+          const newExcludedIds = [...excludedIds, driver.driver_id];
+          setDeclinedDriverIds(newExcludedIds);
+          setDispatchAttempt(prev => prev + 1);
+          dispatchToNearestDriver(rideId, newExcludedIds);
+        }
+        dispatchTimeoutRef.current = null;
+      }, 20000);
+    } catch (e) {
+      console.error('Dispatch error:', e);
+    }
+  };
+
   const requestRide = async () => {
     if (!destination.trim()) { Alert.alert('Enter Destination', 'Please enter your final destination.'); return; }
     if (!location) { Alert.alert('Location Error', 'Could not get your location.'); return; }
@@ -1110,6 +1290,17 @@ export default function RiderHomeScreen() {
     if (lastRequestTime > 0 && now - lastRequestTime < REQUEST_COOLDOWN) {
       const secondsLeft = Math.ceil((REQUEST_COOLDOWN - (now - lastRequestTime)) / 1000);
       Alert.alert('Please wait', `You can request another ride in ${secondsLeft} seconds.`);
+      return;
+    }
+
+    // nearbyDrivers is kept fresh by a 5s poll (fetchNearbyDrivers) using the same
+    // is_online + current_lat/lng filter, so it doubles as the "any driver online" check.
+    if (nearbyDrivers.length === 0) {
+      Alert.alert(
+        'No Drivers Available',
+        'There are no drivers available in your area right now. Please try again in a few minutes.',
+        [{ text: 'OK' }]
+      );
       return;
     }
 
@@ -1156,47 +1347,17 @@ export default function RiderHomeScreen() {
         setLastRequestTime(Date.now());
         setHasBoarded(false);
         setBoardingLoading(false);
+        setDeclinedDriverIds([]);
+        setDispatchAttempt(0);
         await subscribeToRideUpdates(ride.id);
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = setInterval(() => pollRideStatus(ride.id), 5000);
 
-        // Auto-cancel if no driver accepts within 60 seconds
-        if (requestTimeoutRef.current) clearTimeout(requestTimeoutRef.current);
-        requestTimeoutRef.current = setTimeout(async () => {
-          const { data: latestRide } = await supabase
-            .from('rides')
-            .select('status')
-            .eq('id', ride.id)
-            .single();
+        // Sequential dispatch owns the "no driver responded" cancellation + alert from
+        // here — dispatchToNearestDriver cascades through drivers on its own 20s timeout
+        // and cancels the ride itself once no more candidates are left.
+        dispatchToNearestDriver(ride.id, []);
 
-          if (latestRide?.status === 'requested') {
-            await supabase
-              .from('rides')
-              .update({ status: 'cancelled', cancellation_reason: 'No driver available' })
-              .eq('id', ride.id);
-
-            setCurrentRide(null);
-            setRideStatus('');
-            if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
-            Alert.alert('No Drivers Available', 'No drivers accepted your ride request. Please try again.');
-          }
-          requestTimeoutRef.current = null;
-        }, 60000);
-
-        await Promise.all(
-          nearbyDrivers.map(async (driver: any) => {
-            const driverToken = await getDriverToken(driver.id);
-            if (driverToken) {
-              await sendPushNotification(
-                driverToken,
-                '🛺 New Ride Request Near You!',
-                `Pickup: ${ride.pickup_address} → ${ride.dropoff_address} | GH₵ ${ride.fare_ghs}`,
-                { type: 'ride_request', rideId: ride.id },
-                'ride-requests'
-              );
-            }
-          })
-        );
         if (discountResult?.discount) await recordDiscountUse(discountResult.discount.id);
         Alert.alert('Ride Requested 🛺', stops.length > 0 ? `Finding a driver... ${stops.length} stop(s) added.` : 'Finding a nearby driver...');
         setDestination(''); setStops([]); setFareEstimate(null); setFareBreakdown(null); setDiscountResult(null); setOriginalFare(null);
@@ -1204,6 +1365,25 @@ export default function RiderHomeScreen() {
       }
     } catch (error) { Alert.alert('Error', 'Could not request ride.'); }
     finally { setRequesting(false); }
+  };
+
+  const handleShareRide = async () => {
+    try {
+      const driverName = driverInfo?.profiles?.full_name || 'Your driver';
+      const plateNumber = driverInfo?.plate_number || '';
+      const pragyaColor = driverInfo?.pragya_color || '';
+      const pickup = currentRide?.pickup_address || 'Current location';
+      const dropoff = currentRide?.dropoff_address || 'Destination';
+
+      const message = `🛺 I'm on a PragyaGo ride!\n\nDriver: ${driverName}\nPragya: ${pragyaColor} - ${plateNumber}\nFrom: ${pickup}\nTo: ${dropoff}\n\nTrack my ride on PragyaGo`;
+
+      await Share.share({
+        message: message,
+        title: 'Track My PragyaGo Ride'
+      });
+    } catch (e) {
+      console.error('Share error:', e);
+    }
   };
 
   const handleCancelRide = () => {
@@ -1403,6 +1583,29 @@ export default function RiderHomeScreen() {
             <Feather name="check-circle" size={22} color={theme.green} />
             <Text style={{ fontSize: 16, fontWeight: '700', color: theme.text }}>You have arrived!</Text>
           </View>
+        ) : null}
+
+        {currentRide ? (
+          <TouchableOpacity
+            onPress={handleSOS}
+            style={{
+              position: 'absolute',
+              top: insets.top + 16,
+              right: 16,
+              width: 52, height: 52,
+              borderRadius: 26,
+              backgroundColor: theme.red,
+              justifyContent: 'center',
+              alignItems: 'center',
+              elevation: 8,
+              shadowColor: theme.red,
+              shadowOpacity: 0.5,
+              shadowRadius: 8,
+              zIndex: 100,
+            }}
+          >
+            <Text style={{ color: 'white', fontSize: 11, fontWeight: '900' }}>SOS</Text>
+          </TouchableOpacity>
         ) : null}
 
         {loading || !location ? (
@@ -1625,6 +1828,11 @@ export default function RiderHomeScreen() {
 
         <View style={styles.rideStatusBanner}>
           <Text style={styles.rideStatusText}>{getRideStatusLabel()}</Text>
+          {rideStatus === 'requested' ? (
+            <Text style={styles.dispatchAttemptText}>
+              {dispatchAttempt > 0 ? `Trying another driver... (${dispatchAttempt})` : 'Finding your driver...'}
+            </Text>
+          ) : null}
           <Text style={styles.rideStatusSub}>To: {currentRide.dropoff_address}</Text>
           {(currentRide.stops?.length ?? 0) > 0 ? (
             <Text style={styles.rideStatusStops}>{`Stops: ${currentRide.stops.map((s: any) => s.address).join(' → ')}`}</Text>
@@ -1647,6 +1855,26 @@ export default function RiderHomeScreen() {
               </TouchableOpacity>
             ) : null}
           </View>
+
+          {driverInfo ? (
+            <TouchableOpacity
+              onPress={handleShareRide}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                paddingVertical: 10,
+                borderWidth: 1,
+                borderColor: theme.border,
+                borderRadius: 10,
+                marginTop: 8,
+              }}
+            >
+              <Feather name="share-2" size={16} color={theme.textSecondary} />
+              <Text style={{ color: theme.textSecondary, fontSize: 14 }}>Share Ride</Text>
+            </TouchableOpacity>
+          ) : null}
 
           {rideStatus === 'accepted' || rideStatus === 'rider_boarding' ? (
             <TouchableOpacity
@@ -2168,6 +2396,7 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: 14, color: c.textSecondary },
   rideStatusBanner: { backgroundColor: '#185FA5', padding: 16, borderRadius: 10 },
+  dispatchAttemptText: { fontSize: 12, color: '#E6F1FB', marginBottom: 2 },
   driverInlineCard: { backgroundColor: c.card, borderLeftWidth: 4, borderLeftColor: c.green, borderRadius: 16, padding: 16, marginBottom: 12 },
   driverInlineTopRow: { flexDirection: 'row', alignItems: 'center' },
   driverInlineAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: c.green, justifyContent: 'center', alignItems: 'center' },

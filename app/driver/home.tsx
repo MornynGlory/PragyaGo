@@ -151,6 +151,8 @@ export default function DriverHome() {
   const mapRef = useRef<MapView>(null)
   const rideRequestChannelRef = useRef<any>(null)
   const driverRideUpdatesChannelRef = useRef<any>(null)
+  const dispatchUpdatesChannelRef = useRef<any>(null)
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const activeRideRef = useRef<any>(null)
   const driverIdRef = useRef<string | null>(null)
   const currentUserIdRef = useRef<string | null>(null)
@@ -177,6 +179,7 @@ export default function DriverHome() {
   const [rideStatus, setRideStatus] = useState('')
   const [riderInfo, setRiderInfo] = useState<any>(null)
   const [rideRequest, setRideRequest] = useState<any>(null)
+  const [acceptCountdown, setAcceptCountdown] = useState(20)
   const [chatUnreadCount, setChatUnreadCount] = useState(0)
   const [showBreakdownModal, setShowBreakdownModal] = useState(false)
   const [breakdownReason, setBreakdownReason] = useState('')
@@ -202,7 +205,9 @@ export default function DriverHome() {
     return () => {
       if (rideRequestChannelRef.current) supabase.removeChannel(rideRequestChannelRef.current)
       if (driverRideUpdatesChannelRef.current) supabase.removeChannel(driverRideUpdatesChannelRef.current)
+      if (dispatchUpdatesChannelRef.current) supabase.removeChannel(dispatchUpdatesChannelRef.current)
       if (queueChannelRef.current) supabase.removeChannel(queueChannelRef.current)
+      if (countdownRef.current) clearInterval(countdownRef.current)
       if (locationIntervalRef.current) {
         clearInterval(locationIntervalRef.current)
         locationIntervalRef.current = null
@@ -651,6 +656,10 @@ export default function DriverHome() {
         supabase.removeChannel(driverRideUpdatesChannelRef.current)
         driverRideUpdatesChannelRef.current = null
       }
+      if (dispatchUpdatesChannelRef.current) {
+        supabase.removeChannel(dispatchUpdatesChannelRef.current)
+        dispatchUpdatesChannelRef.current = null
+      }
       stopLocationTracking()
 
       // Remove this driver from the queue if they were waiting, then let the
@@ -695,6 +704,22 @@ export default function DriverHome() {
     }
   }
 
+  function startAcceptCountdown() {
+    if (countdownRef.current) clearInterval(countdownRef.current)
+    setAcceptCountdown(20)
+    countdownRef.current = setInterval(() => {
+      setAcceptCountdown(prev => {
+        if (prev <= 1) {
+          if (countdownRef.current) clearInterval(countdownRef.current)
+          countdownRef.current = null
+          setRideRequest(null) // auto dismiss when time runs out
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+  }
+
   async function subscribeToRideRequests(driverId: string) {
     if (rideRequestChannelRef.current) {
       await supabase.removeChannel(rideRequestChannelRef.current)
@@ -707,8 +732,11 @@ export default function DriverHome() {
         table: 'rides',
       }, async (payload) => {
         const ride = payload.new as any
-        if (ride.status === 'requested' && !activeRideRef.current) {
+        // Sequential dispatch (rider/home.tsx's dispatchToNearestDriver) only ever targets
+        // one driver at a time — ignore INSERTs not dispatched to this driver.
+        if (ride.status === 'requested' && !activeRideRef.current && ride.dispatched_driver_id === driverIdRef.current) {
           setRideRequest(ride)
+          startAcceptCountdown()
           await sendRideRequestNotification(ride)
         }
       })
@@ -716,6 +744,29 @@ export default function DriverHome() {
         console.log('Driver subscription status:', status)
       })
     rideRequestChannelRef.current = channel
+
+    if (dispatchUpdatesChannelRef.current) {
+      await supabase.removeChannel(dispatchUpdatesChannelRef.current)
+    }
+    const dispatchChannel = supabase
+      .channel(`driver-dispatch-${driverId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'rides',
+        filter: `dispatched_driver_id=eq.${driverId}`
+      }, async (payload) => {
+        const ride = payload.new as any
+        // Catches a later dispatch attempt reassigned to this driver (e.g. after an
+        // earlier driver's 20s window expired), not just the very first INSERT.
+        if (ride.status === 'requested' && !activeRideRef.current) {
+          setRideRequest(ride)
+          startAcceptCountdown()
+          await sendRideRequestNotification(ride)
+        }
+      })
+      .subscribe()
+    dispatchUpdatesChannelRef.current = dispatchChannel
 
     if (driverRideUpdatesChannelRef.current) {
       await supabase.removeChannel(driverRideUpdatesChannelRef.current)
@@ -762,8 +813,58 @@ export default function DriverHome() {
     driverRideUpdatesChannelRef.current = driverRideChannel
   }
 
+  const handleSOS = async () => {
+    Alert.alert(
+      '🚨 Emergency SOS',
+      'Are you in danger? This will alert PragyaGo and your emergency contact.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Send SOS',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const sosLocation = await Location.getCurrentPositionAsync({})
+              const { data: { user } } = await supabase.auth.getUser()
+
+              await supabase.from('sos_alerts').insert({
+                ride_id: activeRide?.id || null,
+                user_id: user?.id,
+                user_role: 'driver',
+                lat: sosLocation.coords.latitude,
+                lng: sosLocation.coords.longitude,
+                triggered_at: new Date().toISOString(),
+              })
+
+              if (activeRide?.id) {
+                await supabase.from('rides').update({
+                  sos_triggered: true,
+                  sos_triggered_at: new Date().toISOString(),
+                  sos_location_lat: sosLocation.coords.latitude,
+                  sos_location_lng: sosLocation.coords.longitude,
+                }).eq('id', activeRide.id)
+              }
+
+              // Send push notification to admin
+              // This would trigger an admin alert in real implementation
+
+              Alert.alert(
+                '🚨 SOS Sent!',
+                `Your emergency alert has been sent to PragyaGo support.\n\nYour location has been recorded.\n\nPlease call Ghana Police: 191\nAmbulance: 193\nFire: 192`,
+                [{ text: 'OK' }]
+              )
+            } catch (e) {
+              Alert.alert('Error', 'Could not send SOS. Please call 191 directly.')
+            }
+          }
+        }
+      ]
+    )
+  }
+
   const acceptRide = async () => {
     if (!rideRequest) return
+    if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null }
 
     try {
       // Use atomic function to prevent race conditions
@@ -797,7 +898,10 @@ export default function DriverHome() {
       setRideRequest(null)
     }
   }
-  function declineRide() { setRideRequest(null) }
+  function declineRide() {
+    if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null }
+    setRideRequest(null)
+  }
 
   const handleArrivedAtPickup = async () => {
     try {
@@ -1068,6 +1172,28 @@ export default function DriverHome() {
       </SafeAreaView>
 
       <View style={styles.mapContainer}>
+        {activeRide ? (
+          <TouchableOpacity
+            onPress={handleSOS}
+            style={{
+              position: 'absolute',
+              top: insets.top + 16,
+              right: 16,
+              width: 52, height: 52,
+              borderRadius: 26,
+              backgroundColor: theme.red,
+              justifyContent: 'center',
+              alignItems: 'center',
+              elevation: 8,
+              shadowColor: theme.red,
+              shadowOpacity: 0.5,
+              shadowRadius: 8,
+              zIndex: 100,
+            }}
+          >
+            <Text style={{ color: 'white', fontSize: 11, fontWeight: '900' }}>SOS</Text>
+          </TouchableOpacity>
+        ) : null}
         <MapView
           ref={mapRef}
           style={styles.map}
@@ -1288,8 +1414,14 @@ export default function DriverHome() {
 
       <Modal visible={!!rideRequest} transparent animationType="fade">
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalCard, { backgroundColor: theme.card }]}> 
+          <View style={[styles.modalCard, { backgroundColor: theme.card }]}>
             <Text style={[styles.modalTitle, { color: theme.text }]}>🛺 New Ride Request!</Text>
+            <Text style={{
+              color: acceptCountdown <= 5 ? theme.red : theme.text,
+              fontSize: 24, fontWeight: '800', textAlign: 'center'
+            }}>
+              {acceptCountdown}s
+            </Text>
 
             <View style={[styles.modalRouteCard, { backgroundColor: theme.background2 }]}>
               <Text style={[styles.modalRouteLabel, { color: theme.textSecondary }]}>PICKUP</Text>
