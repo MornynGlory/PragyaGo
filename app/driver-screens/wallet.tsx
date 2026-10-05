@@ -7,7 +7,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,7 +18,7 @@ import {
   View,
 } from 'react-native';
 import { PaystackProvider, usePaystack } from 'react-native-paystack-webview';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const COMMISSION_RATE = 0.15;
 const PAYSTACK_PUBLIC_KEY = process.env.EXPO_PUBLIC_PAYSTACK_PUBLIC_KEY ?? '';
@@ -38,6 +40,7 @@ function PaystackAutoCheckout({ params }: { params: any }) {
 
 export default function DriverWalletScreen() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = makeStyles(theme);
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabName>('wallet');
@@ -350,6 +353,11 @@ export default function DriverWalletScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      >
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
           <Feather name="arrow-left" size={22} color={theme.text} />
@@ -373,7 +381,11 @@ export default function DriverWalletScreen() {
 
       {/* WALLET TAB */}
       {activeTab === 'wallet' && (
-        <ScrollView style={styles.content}>
+        <ScrollView
+          style={styles.content}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: Math.max(insets.bottom + 16, 32) }}
+        >
           <View style={styles.balanceCard}>
             <Text style={styles.balanceLabel}>Wallet Balance</Text>
             <Text style={styles.balanceAmount}>GH₵ {walletBalance.toFixed(2)}</Text>
@@ -461,7 +473,11 @@ export default function DriverWalletScreen() {
 
       {/* GO CASH TAB */}
       {activeTab === 'gocash' && (
-        <ScrollView style={styles.content}>
+        <ScrollView
+          style={styles.content}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: Math.max(insets.bottom + 16, 32) }}
+        >
           <View style={[styles.balanceCard, { backgroundColor: '#185FA5' }]}>
             <Text style={styles.balanceLabel}>Go Cash Earnings</Text>
             <Text style={styles.balanceAmount}>GH₵ {goCashEarnings.toFixed(2)}</Text>
@@ -542,7 +558,11 @@ export default function DriverWalletScreen() {
 
       {/* HISTORY TAB */}
       {activeTab === 'history' && (
-        <ScrollView style={styles.content}>
+        <ScrollView
+          style={styles.content}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: Math.max(insets.bottom + 16, 32) }}
+        >
           {transactions.length === 0 ? (
             <Text style={styles.emptyText}>No transactions yet.</Text>
           ) : (
@@ -561,6 +581,7 @@ export default function DriverWalletScreen() {
           )}
         </ScrollView>
       )}
+      </KeyboardAvoidingView>
 
       {/* Paystack payment modal — PaystackProvider lives here so the WebView stays in-app */}
       <Modal visible={showPaystack} animationType="slide" transparent={false}>

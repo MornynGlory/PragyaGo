@@ -76,6 +76,7 @@ import {
   Image,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -177,6 +178,7 @@ export default function RiderHomeScreen() {
   const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [userLat, setUserLat] = useState<number | null>(null);
   const [userLng, setUserLng] = useState<number | null>(null);
+  const [sosSending, setSosSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [destination, setDestination] = useState('');
   const [stops, setStops] = useState<string[]>([]);
@@ -1153,6 +1155,8 @@ export default function RiderHomeScreen() {
   };
 
   const handleSOS = async () => {
+    if (sosSending) return // prevent double tap
+
     Alert.alert(
       '🚨 Emergency SOS',
       'Are you in danger? This will alert PragyaGo and your emergency contact.',
@@ -1162,44 +1166,103 @@ export default function RiderHomeScreen() {
           text: 'Send SOS',
           style: 'destructive',
           onPress: async () => {
+            setSosSending(true)
             try {
-              const sosLocation = await Location.getCurrentPositionAsync({});
-              const { data: { user } } = await supabase.auth.getUser();
+              // Get current location - fall back to last known if it fails
+              let lat = userLat
+              let lng = userLng
 
-              await supabase.from('sos_alerts').insert({
-                ride_id: currentRide?.id || null,
-                user_id: user?.id,
-                user_role: 'rider',
-                lat: sosLocation.coords.latitude,
-                lng: sosLocation.coords.longitude,
-                triggered_at: new Date().toISOString(),
-              });
-
-              if (currentRide?.id) {
-                await supabase.from('rides').update({
-                  sos_triggered: true,
-                  sos_triggered_at: new Date().toISOString(),
-                  sos_location_lat: sosLocation.coords.latitude,
-                  sos_location_lng: sosLocation.coords.longitude,
-                }).eq('id', currentRide.id);
+              try {
+                const location = await Location.getCurrentPositionAsync({
+                  accuracy: Location.Accuracy.Balanced,
+                })
+                lat = location.coords.latitude
+                lng = location.coords.longitude
+              } catch (e) {
+                console.error('Location error - using last known')
               }
 
-              // Send push notification to admin
-              // This would trigger an admin alert in real implementation
+              if (!lat || !lng) {
+                Alert.alert(
+                  'Location Unavailable',
+                  'Could not get your location. Please call 191 directly.',
+                  [{ text: 'Call 191', onPress: () => Linking.openURL('tel:191') }]
+                )
+                return
+              }
+
+              const { data: { user } } = await supabase.auth.getUser()
+              if (!user) {
+                Alert.alert(
+                  'SOS Failed',
+                  'Could not send SOS alert. Please call emergency services directly.',
+                  [
+                    { text: 'Call Police (191)', onPress: () => Linking.openURL('tel:191') },
+                    { text: 'Call Ambulance (193)', onPress: () => Linking.openURL('tel:193') },
+                  ]
+                )
+                return
+              }
+
+              const rideId = currentRide?.id || null
+
+              // Save SOS alert
+              const { error: sosError } = await supabase
+                .from('sos_alerts')
+                .insert({
+                  ride_id: rideId,
+                  user_id: user.id,
+                  user_role: 'rider',
+                  lat,
+                  lng,
+                  triggered_at: new Date().toISOString(),
+                })
+
+              if (sosError) {
+                Alert.alert(
+                  'SOS Failed',
+                  'Could not send SOS alert. Please call emergency services directly.',
+                  [
+                    { text: 'Call Police (191)', onPress: () => Linking.openURL('tel:191') },
+                    { text: 'Call Ambulance (193)', onPress: () => Linking.openURL('tel:193') },
+                  ]
+                )
+                return
+              }
+
+              // Update ride if active
+              if (rideId) {
+                const { error: rideError } = await supabase.from('rides').update({
+                  sos_triggered: true,
+                  sos_triggered_at: new Date().toISOString(),
+                  sos_location_lat: lat,
+                  sos_location_lng: lng,
+                }).eq('id', rideId)
+                if (rideError) console.error('SOS ride update error')
+              }
 
               Alert.alert(
                 '🚨 SOS Sent!',
                 `Your emergency alert has been sent to PragyaGo support.\n\nYour location has been recorded.\n\nPlease call Ghana Police: 191\nAmbulance: 193\nFire: 192`,
-                [{ text: 'OK' }]
-              );
+                [
+                  { text: 'Call Police (191)', onPress: () => Linking.openURL('tel:191') },
+                  { text: 'OK' },
+                ]
+              )
             } catch (e) {
-              Alert.alert('Error', 'Could not send SOS. Please call 191 directly.');
+              Alert.alert(
+                'SOS Failed',
+                'Could not send SOS alert. Please call emergency services directly.',
+                [{ text: 'Call 191', onPress: () => Linking.openURL('tel:191') }]
+              )
+            } finally {
+              setSosSending(false)
             }
-          }
-        }
+          },
+        },
       ]
-    );
-  };
+    )
+  }
 
   const dispatchToNearestDriver = async (rideId: string, excludedIds: string[] = []) => {
     try {

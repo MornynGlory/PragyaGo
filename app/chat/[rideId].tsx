@@ -1,9 +1,11 @@
 import { useTheme } from '@/lib/theme';
 import { supabase } from '@/lib/supabase';
 import { Feather } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { getDriverToken, getRiderToken, sendPushNotification } from '@/lib/notifications';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -53,10 +55,10 @@ export default function ChatScreen() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [currentUserName, setCurrentUserName] = useState('');
   const [senderRole, setSenderRole] = useState<'rider' | 'driver'>('rider');
   const [otherPersonName, setOtherPersonName] = useState('');
-  const [otherPersonId, setOtherPersonId] = useState<string | null>(null);
+  const [driverId, setDriverId] = useState<string | null>(null);
+  const [riderId, setRiderId] = useState<string | null>(null);
   const [rideEnded, setRideEnded] = useState(false);
   const [sending, setSending] = useState(false);
 
@@ -77,20 +79,22 @@ export default function ChatScreen() {
     if (!user) return;
     setCurrentUserId(user.id);
 
-    const [{ data: profile }, { data: ride }] = await Promise.all([
-      supabase.from('profiles').select('full_name').eq('id', user.id).single(),
-      supabase.from('rides').select('rider_id, driver_id, status').eq('id', rideId).single(),
-    ]);
+    const { data: ride } = await supabase
+      .from('rides')
+      .select('rider_id, driver_id, status')
+      .eq('id', rideId)
+      .single();
 
-    if (profile?.full_name) setCurrentUserName(profile.full_name);
     if (!ride) return;
 
     const isRider = ride.rider_id === user.id;
     setSenderRole(isRider ? 'rider' : 'driver');
 
+    setDriverId(ride.driver_id);
+    setRiderId(ride.rider_id);
     if (ride.status === 'completed' || ride.status === 'cancelled') setRideEnded(true);
 
-    // Resolve other person's name and profile ID for push notifications
+    // Resolve other person's name
     if (isRider && ride.driver_id) {
       const { data: driver } = await supabase
         .from('drivers')
@@ -99,9 +103,7 @@ export default function ChatScreen() {
         .single();
       const driverProfile = driver?.profiles as any;
       if (driverProfile?.full_name) setOtherPersonName(driverProfile.full_name);
-      if (driver?.profile_id) setOtherPersonId(driver.profile_id);
     } else if (!isRider) {
-      setOtherPersonId(ride.rider_id);
       const { data: riderProfile } = await supabase
         .from('profiles')
         .select('full_name')
@@ -135,9 +137,12 @@ export default function ChatScreen() {
         filter: `ride_id=eq.${rideId}`,
       }, (payload) => {
         const newMsg = payload.new as Message;
-        setMessages((prev) => [...prev, newMsg]);
+        addMessage(newMsg);
         if (newMsg.sender_id !== user.id) {
-          supabase.from('ride_messages').update({ is_read: true }).eq('id', newMsg.id);
+          supabase.from('ride_messages').update({ is_read: true }).eq('id', newMsg.id)
+            .then(({ error }: { error: unknown }) => {
+              if (error) console.error('Mark read error');
+            });
         }
       })
       .subscribe();
@@ -159,44 +164,77 @@ export default function ChatScreen() {
     rideChannelRef.current = rideChannel;
   };
 
+  const addMessage = (newMessage: Message) => {
+    setMessages((prev) => {
+      const exists = prev.some((m) => m.id === newMessage.id);
+      if (exists) return prev;
+      return [...prev, newMessage];
+    });
+  };
+
+  // Mark the other person's messages as read whenever the screen is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!rideId || !currentUserId) return;
+
+      supabase
+        .from('ride_messages')
+        .update({ is_read: true })
+        .eq('ride_id', rideId)
+        .neq('sender_id', currentUserId)
+        .eq('is_read', false)
+        .then(({ error }: { error: unknown }) => {
+          if (error) console.error('Mark read error');
+        });
+    }, [rideId, currentUserId])
+  );
+
+  const notifyOtherUser = async (messageText: string) => {
+    try {
+      const token = senderRole === 'rider'
+        ? (driverId ? await getDriverToken(driverId) : null)
+        : (riderId ? await getRiderToken(riderId) : null);
+      if (token) {
+        await sendPushNotification(
+          token,
+          '💬 New Message',
+          messageText,
+          { type: 'chat', rideId },
+          'ride-updates'
+        );
+      }
+    } catch (e) {
+      console.error('Notify error');
+    }
+  };
+
   const sendMessage = async () => {
-    if (!input.trim() || !currentUserId || sending) return;
+    if (!input.trim() || !currentUserId) return;
+    if (sending) return;
+
+    setSending(true);
     const text = input.trim();
     setInput('');
-    setSending(true);
-    try {
-      await supabase.from('ride_messages').insert({
+
+    const { error } = await supabase
+      .from('ride_messages')
+      .insert({
         ride_id: rideId,
         sender_id: currentUserId,
         sender_role: senderRole,
         message: text,
         is_read: false,
+        created_at: new Date().toISOString(),
       });
 
-      // Push notification to other person
-      if (otherPersonId && currentUserName) {
-        const { data: otherProfile } = await supabase
-          .from('profiles')
-          .select('expo_push_token')
-          .eq('id', otherPersonId)
-          .single();
-        const token = otherProfile?.expo_push_token;
-        if (token) {
-          fetch('https://exp.host/--/api/v2/push/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              to: token,
-              title: `New message from ${currentUserName}`,
-              body: text,
-              data: { rideId, screen: 'chat' },
-            }),
-          }).catch(() => {});
-        }
-      }
-    } finally {
-      setSending(false);
+    if (error) {
+      setInput(text); // restore message if failed
+      Alert.alert('Error', 'Could not send message. Please try again.');
+    } else {
+      notifyOtherUser(text);
     }
+
+    setSending(false);
   };
 
   useEffect(() => {
@@ -250,10 +288,6 @@ export default function ChatScreen() {
         </View>
         <View style={styles.headerInfo}>
           <Text style={styles.headerName} numberOfLines={1}>{otherPersonName || '...'}</Text>
-          <View style={styles.onlineRow}>
-            <View style={styles.onlineDot} />
-            <Text style={styles.onlineText}>Online</Text>
-          </View>
         </View>
         <TouchableOpacity style={styles.callBtn} onPress={() => router.push(`/call/${rideId}` as any)}>
           <Feather name="phone" size={20} color="#fff" />
@@ -263,7 +297,7 @@ export default function ChatScreen() {
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
         <FlatList
           ref={flatListRef}
@@ -293,7 +327,6 @@ export default function ChatScreen() {
               value={input}
               onChangeText={setInput}
               multiline
-              maxHeight={100}
               returnKeyType="default"
             />
             <TouchableOpacity
@@ -335,9 +368,6 @@ function makeStyles(theme: ReturnType<typeof useTheme>) {
     headerAvatarText: { color: '#fff', fontSize: 16, fontWeight: '700' },
     headerInfo: { flex: 1 },
     headerName: { color: '#fff', fontSize: 16, fontWeight: '700' },
-    onlineRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-    onlineDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#4ADE80' },
-    onlineText: { color: 'rgba(255,255,255,0.8)', fontSize: 12 },
     callBtn: { padding: 6 },
 
     list: { flex: 1 },

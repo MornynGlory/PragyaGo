@@ -7,11 +7,12 @@ import { Feather } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
 import React, { useEffect, useState } from 'react'
-import { ActivityIndicator, Alert, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 export default function RiderEditProfileScreen() {
   const theme = useTheme()
+  const insets = useSafeAreaInsets()
   const styles = makeStyles(theme)
   const router = useRouter()
 
@@ -131,6 +132,11 @@ export default function RiderEditProfileScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      >
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn} activeOpacity={0.7}>
@@ -142,7 +148,11 @@ export default function RiderEditProfileScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.scrollContent, { flexGrow: 1, paddingBottom: Math.max(insets.bottom + 16, 40) }]}
+      >
         {/* Avatar */}
         <View style={styles.avatarSection}>
           <View style={styles.avatarWrapper}>
@@ -223,6 +233,7 @@ export default function RiderEditProfileScreen() {
           <Text style={styles.saveButtonText}>{saving ? 'Saving...' : 'Save Changes'}</Text>
         </TouchableOpacity>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   )
 }

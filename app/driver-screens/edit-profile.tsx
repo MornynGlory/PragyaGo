@@ -11,6 +11,8 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -18,7 +20,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const PRAGYA_COLOR_LABELS: Record<string, string> = {
   red: 'Red', blue: 'Blue', yellow: 'Yellow', green: 'Green',
@@ -27,6 +29,7 @@ const PRAGYA_COLOR_LABELS: Record<string, string> = {
 
 export default function DriverEditProfileScreen() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = makeStyles(theme);
   const router = useRouter();
 
@@ -174,6 +177,11 @@ export default function DriverEditProfileScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      >
       {/* Header bar */}
       <View style={styles.topBar}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
@@ -183,7 +191,11 @@ export default function DriverEditProfileScreen() {
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.scrollContent, { flexGrow: 1, paddingBottom: Math.max(insets.bottom + 16, 40) }]}
+      >
         {/* Avatar */}
         <View style={styles.avatarSection}>
           <View style={styles.avatarWrapper}>
@@ -285,6 +297,7 @@ export default function DriverEditProfileScreen() {
           }
         </TouchableOpacity>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

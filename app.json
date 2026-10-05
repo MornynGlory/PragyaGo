@@ -55,7 +55,8 @@
           "color": "#1D9E75",
           "sounds": []
         }
-      ]
+      ],
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": false,

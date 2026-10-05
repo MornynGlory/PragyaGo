@@ -7,7 +7,9 @@ import React, { useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,7 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { PaystackProvider, usePaystack } from 'react-native-paystack-webview'
 
 const PAYSTACK_PUBLIC_KEY = process.env.EXPO_PUBLIC_PAYSTACK_PUBLIC_KEY ?? ''
@@ -34,6 +36,7 @@ function PaystackAutoCheckout({ params }: { params: any }) {
 
 export default function GoCashScreen() {
   const theme = useTheme()
+  const insets = useSafeAreaInsets()
   const styles = makeStyles(theme)
   const router = useRouter()
 
@@ -162,6 +165,11 @@ export default function GoCashScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      >
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn} activeOpacity={0.7}>
@@ -171,7 +179,12 @@ export default function GoCashScreen() {
         <View style={styles.headerBtn} />
       </View>
 
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.container}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ flexGrow: 1, paddingBottom: Math.max(insets.bottom + 16, 32) }}
+      >
         {/* Balance Card */}
         <View style={styles.walletCard}>
           <Feather name="dollar-sign" size={28} color="rgba(255,255,255,0.8)" style={{ marginBottom: 8 }} />
@@ -276,6 +289,7 @@ export default function GoCashScreen() {
 
         <View style={{ height: 32 }} />
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Paystack modal */}
       <Modal visible={showPaystack} animationType="slide" transparent={false}>

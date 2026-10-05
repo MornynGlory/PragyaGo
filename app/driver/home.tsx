@@ -84,6 +84,7 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  Linking,
   AppStateStatus,
   View,
   Text,
@@ -185,8 +186,61 @@ export default function DriverHome() {
   const [breakdownReason, setBreakdownReason] = useState('')
   const [otherBreakdownReason, setOtherBreakdownReason] = useState('')
   const [reportingBreakdown, setReportingBreakdown] = useState(false)
+  const [sosSending, setSosSending] = useState(false)
+  const [distanceToPickup, setDistanceToPickup] = useState<string | null>(null)
+  const [etaToPickup, setEtaToPickup] = useState<string | null>(null)
+  const distanceIntervalRef = useRef<any>(null)
+  // Latest driver position, read by the distance interval so it doesn't use stale coords.
+  const userLocRef = useRef<{ lat: number | null; lng: number | null }>({ lat: null, lng: null })
 
   useEffect(() => { activeRideRef.current = activeRide }, [activeRide])
+  useEffect(() => { userLocRef.current = { lat: userLat, lng: userLng } }, [userLat, userLng])
+
+  const fetchDistanceToPickup = async (driverLat: number, driverLng: number, pickupLat: number, pickupLng: number) => {
+    try {
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${driverLat},${driverLng}&destinations=${pickupLat},${pickupLng}&mode=driving&key=${GOOGLE_API_KEY}`
+      )
+      const data = await response.json()
+      const element = data.rows?.[0]?.elements?.[0]
+      if (element?.status === 'OK') {
+        setDistanceToPickup(element.distance.text)
+        setEtaToPickup(element.duration.text)
+      }
+    } catch (e) {
+      console.error('Distance fetch error')
+    }
+  }
+
+  // Poll distance/ETA to pickup every 30s while heading to pickup.
+  useEffect(() => {
+    const clearDistanceInterval = () => {
+      if (distanceIntervalRef.current) {
+        clearInterval(distanceIntervalRef.current)
+        distanceIntervalRef.current = null
+      }
+    }
+
+    if (rideStatus !== 'accepted' || !activeRide?.id) {
+      clearDistanceInterval()
+      setDistanceToPickup(null)
+      setEtaToPickup(null)
+      return
+    }
+
+    const pickupLat = parseFloat(activeRide.pickup_lat)
+    const pickupLng = parseFloat(activeRide.pickup_lng)
+    if (isNaN(pickupLat) || isNaN(pickupLng)) return
+
+    const tick = () => {
+      const { lat, lng } = userLocRef.current
+      if (lat != null && lng != null) fetchDistanceToPickup(lat, lng, pickupLat, pickupLng)
+    }
+    tick()
+    distanceIntervalRef.current = setInterval(tick, 30000)
+
+    return clearDistanceInterval
+  }, [rideStatus, activeRide?.id])
 
   useEffect(() => {
     if (activeRide) {
@@ -814,6 +868,8 @@ export default function DriverHome() {
   }
 
   const handleSOS = async () => {
+    if (sosSending) return // prevent double tap
+
     Alert.alert(
       '🚨 Emergency SOS',
       'Are you in danger? This will alert PragyaGo and your emergency contact.',
@@ -823,41 +879,100 @@ export default function DriverHome() {
           text: 'Send SOS',
           style: 'destructive',
           onPress: async () => {
+            setSosSending(true)
             try {
-              const sosLocation = await Location.getCurrentPositionAsync({})
-              const { data: { user } } = await supabase.auth.getUser()
+              // Get current location - fall back to last known if it fails
+              let lat = userLat
+              let lng = userLng
 
-              await supabase.from('sos_alerts').insert({
-                ride_id: activeRide?.id || null,
-                user_id: user?.id,
-                user_role: 'driver',
-                lat: sosLocation.coords.latitude,
-                lng: sosLocation.coords.longitude,
-                triggered_at: new Date().toISOString(),
-              })
-
-              if (activeRide?.id) {
-                await supabase.from('rides').update({
-                  sos_triggered: true,
-                  sos_triggered_at: new Date().toISOString(),
-                  sos_location_lat: sosLocation.coords.latitude,
-                  sos_location_lng: sosLocation.coords.longitude,
-                }).eq('id', activeRide.id)
+              try {
+                const location = await Location.getCurrentPositionAsync({
+                  accuracy: Location.Accuracy.Balanced,
+                })
+                lat = location.coords.latitude
+                lng = location.coords.longitude
+              } catch (e) {
+                console.error('Location error - using last known')
               }
 
-              // Send push notification to admin
-              // This would trigger an admin alert in real implementation
+              if (!lat || !lng) {
+                Alert.alert(
+                  'Location Unavailable',
+                  'Could not get your location. Please call 191 directly.',
+                  [{ text: 'Call 191', onPress: () => Linking.openURL('tel:191') }]
+                )
+                return
+              }
+
+              const { data: { user } } = await supabase.auth.getUser()
+              if (!user) {
+                Alert.alert(
+                  'SOS Failed',
+                  'Could not send SOS alert. Please call emergency services directly.',
+                  [
+                    { text: 'Call Police (191)', onPress: () => Linking.openURL('tel:191') },
+                    { text: 'Call Ambulance (193)', onPress: () => Linking.openURL('tel:193') },
+                  ]
+                )
+                return
+              }
+
+              const rideId = activeRide?.id || null
+
+              // Save SOS alert
+              const { error: sosError } = await supabase
+                .from('sos_alerts')
+                .insert({
+                  ride_id: rideId,
+                  user_id: user.id,
+                  user_role: 'driver',
+                  lat,
+                  lng,
+                  triggered_at: new Date().toISOString(),
+                })
+
+              if (sosError) {
+                Alert.alert(
+                  'SOS Failed',
+                  'Could not send SOS alert. Please call emergency services directly.',
+                  [
+                    { text: 'Call Police (191)', onPress: () => Linking.openURL('tel:191') },
+                    { text: 'Call Ambulance (193)', onPress: () => Linking.openURL('tel:193') },
+                  ]
+                )
+                return
+              }
+
+              // Update ride if active
+              if (rideId) {
+                const { error: rideError } = await supabase.from('rides').update({
+                  sos_triggered: true,
+                  sos_triggered_at: new Date().toISOString(),
+                  sos_location_lat: lat,
+                  sos_location_lng: lng,
+                }).eq('id', rideId)
+                if (rideError) console.error('SOS ride update error')
+              }
 
               Alert.alert(
                 '🚨 SOS Sent!',
                 `Your emergency alert has been sent to PragyaGo support.\n\nYour location has been recorded.\n\nPlease call Ghana Police: 191\nAmbulance: 193\nFire: 192`,
-                [{ text: 'OK' }]
+                [
+                  { text: 'Call Police (191)', onPress: () => Linking.openURL('tel:191') },
+                  { text: 'OK' },
+                ]
               )
             } catch (e) {
-              Alert.alert('Error', 'Could not send SOS. Please call 191 directly.')
+              Alert.alert(
+                'SOS Failed',
+                'Could not send SOS alert. Please call emergency services directly.',
+                [{ text: 'Call 191', onPress: () => Linking.openURL('tel:191') }]
+              )
+            } finally {
+              setSosSending(false)
             }
-          }
-        }
+          },
+        },
       ]
     )
   }
@@ -1335,6 +1450,34 @@ export default function DriverHome() {
               <Text style={[styles.rideStatus, { color: theme.text }]}>{getStatusLabel()}</Text>
               <View style={styles.fareBadge}><Text style={{ color: '#fff' }}>GH₵ {activeRide.fare ?? '0.00'}</Text></View>
             </View>
+
+            {rideStatus === 'accepted' ? (
+              <View style={{
+                backgroundColor: theme.greenLight,
+                borderRadius: 12,
+                padding: 12,
+                marginBottom: 12,
+                flexDirection: 'row',
+                justifyContent: 'space-around',
+                alignItems: 'center',
+              }}>
+                <View style={{ alignItems: 'center' }}>
+                  <Feather name="navigation" size={20} color={theme.green} />
+                  <Text style={{ color: theme.green, fontSize: 18, fontWeight: '800', marginTop: 4 }}>
+                    {distanceToPickup || '--'}
+                  </Text>
+                  <Text style={{ color: theme.textSecondary, fontSize: 12 }}>Distance</Text>
+                </View>
+                <View style={{ width: 1, height: 40, backgroundColor: theme.border }} />
+                <View style={{ alignItems: 'center' }}>
+                  <Feather name="clock" size={20} color={theme.green} />
+                  <Text style={{ color: theme.green, fontSize: 18, fontWeight: '800', marginTop: 4 }}>
+                    {etaToPickup || '--'}
+                  </Text>
+                  <Text style={{ color: theme.textSecondary, fontSize: 12 }}>ETA</Text>
+                </View>
+              </View>
+            ) : null}
 
             {riderInfo && ['accepted', 'rider_boarding', 'in_progress', 'arrived_destination', 'payment_pending'].includes(rideStatus) ? (
               <View style={[styles.riderInfoRow, { borderColor: theme.border }]}>
