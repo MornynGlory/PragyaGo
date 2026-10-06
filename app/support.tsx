@@ -113,7 +113,7 @@ export default function SupportScreen() {
       </View>
 
       {loading ? (
-        <View style={styles.center}><ActivityIndicator size="large" color="#1D9E75" /></View>
+        <View style={styles.center}><ActivityIndicator size="large" color={theme.green} /></View>
       ) : tickets.length === 0 ? (
         <View style={styles.center}>
           <Text style={styles.emptyIcon}>🎧</Text>
@@ -216,8 +216,8 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
     safeArea: { flex: 1, backgroundColor: c.background },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: c.card, borderBottomWidth: 1, borderBottomColor: c.border },
     backBtn: { width: 32, height: 32, justifyContent: 'center', alignItems: 'flex-start' },
-    headerTitle: { fontSize: 18, fontWeight: '700', color: '#1D9E75' },
-    newButton: { backgroundColor: '#1D9E75', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: c.green },
+    newButton: { backgroundColor: c.green, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
     newButtonText: { color: '#fff', fontWeight: '600', fontSize: 14 },
     center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 60 },
     emptyIcon: { fontSize: 48, marginBottom: 12 },
@@ -229,11 +229,11 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
     ticketSubject: { fontSize: 15, fontWeight: '600', color: c.text, flex: 1, marginRight: 8 },
     statusBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
     statusText: { fontSize: 11, fontWeight: '700' },
-    ticketCategory: { fontSize: 12, color: '#1D9E75', fontWeight: '600', marginBottom: 6 },
+    ticketCategory: { fontSize: 12, color: c.green, fontWeight: '600', marginBottom: 6 },
     ticketMessage: { fontSize: 13, color: c.textSecondary, lineHeight: 18, marginBottom: 8 },
     ticketDate: { fontSize: 11, color: c.textSecondary },
-    replyBox: { marginTop: 10, backgroundColor: '#F0FDF7', borderRadius: 8, padding: 10, borderLeftWidth: 3, borderLeftColor: '#1D9E75' },
-    replyLabel: { fontSize: 11, fontWeight: '700', color: '#1D9E75', marginBottom: 4 },
+    replyBox: { marginTop: 10, backgroundColor: '#F0FDF7', borderRadius: 8, padding: 10, borderLeftWidth: 3, borderLeftColor: c.green },
+    replyLabel: { fontSize: 11, fontWeight: '700', color: c.green, marginBottom: 4 },
     replyText: { fontSize: 13, color: c.text, lineHeight: 18 },
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
     modalCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '90%' },
@@ -243,12 +243,12 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
     fieldLabel: { fontSize: 13, fontWeight: '600', color: c.text, marginBottom: 8, marginTop: 4 },
     categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
     categoryChip: { borderWidth: 1.5, borderColor: c.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: c.card },
-    categoryChipActive: { borderColor: '#1D9E75', backgroundColor: '#F0FDF7' },
+    categoryChipActive: { borderColor: c.green, backgroundColor: '#F0FDF7' },
     categoryChipText: { fontSize: 12, color: c.textSecondary },
-    categoryChipTextActive: { color: '#1D9E75', fontWeight: '700' },
+    categoryChipTextActive: { color: c.green, fontWeight: '700' },
     input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, color: c.text, backgroundColor: c.input, marginBottom: 14 },
     messageInput: { height: 110, paddingTop: 11 },
-    submitButton: { backgroundColor: '#1D9E75', paddingVertical: 14, borderRadius: 8, alignItems: 'center', marginTop: 4, marginBottom: 8 },
+    submitButton: { backgroundColor: c.green, paddingVertical: 14, borderRadius: 8, alignItems: 'center', marginTop: 4, marginBottom: 8 },
     buttonDisabled: { opacity: 0.6 },
     submitButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   });

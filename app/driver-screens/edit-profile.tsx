@@ -169,7 +169,7 @@ export default function DriverEditProfileScreen() {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#1D9E75" />
+          <ActivityIndicator size="large" color={theme.green} />
         </View>
       </SafeAreaView>
     );
@@ -312,7 +312,7 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
     scrollContent: { paddingBottom: 40 },
     avatarSection: { alignItems: 'center', paddingVertical: 28, backgroundColor: c.card, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
     avatarWrapper: { position: 'relative', marginBottom: 10 },
-    avatarContainer: { width: 88, height: 88, borderRadius: 44, backgroundColor: '#1D9E75', justifyContent: 'center', alignItems: 'center' },
+    avatarContainer: { width: 88, height: 88, borderRadius: 44, backgroundColor: c.green, justifyContent: 'center', alignItems: 'center' },
     initials: { fontSize: 30, fontWeight: '700', color: '#fff' },
     avatarHint: { fontSize: 12, color: c.textMuted },
     section: { backgroundColor: c.card, marginHorizontal: 16, marginTop: 20, borderRadius: 14, padding: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: c.cardBorder },
@@ -324,7 +324,7 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
     lockedBannerText: { fontSize: 12, color: '#854F0B', backgroundColor: '#FAEEDA', borderRadius: 8, padding: 10, marginBottom: 4 },
     lockedField: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, backgroundColor: c.background2 },
     lockedFieldText: { flex: 1, fontSize: 15, color: c.textSecondary },
-    saveButton: { margin: 16, marginTop: 24, backgroundColor: '#1D9E75', paddingVertical: 15, borderRadius: 12, alignItems: 'center' },
+    saveButton: { margin: 16, marginTop: 24, backgroundColor: c.green, paddingVertical: 15, borderRadius: 12, alignItems: 'center' },
     saveButtonDisabled: { opacity: 0.6 },
     saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   });

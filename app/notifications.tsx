@@ -95,7 +95,7 @@ export default function NotificationsScreen() {
       </View>
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#1D9E75" />
+          <ActivityIndicator size="large" color={theme.green} />
         </View>
       ) : notifications.length === 0 ? (
         <View style={styles.emptyContainer}>
@@ -111,7 +111,7 @@ export default function NotificationsScreen() {
               style={styles.markAllRow}
             >
               {markingAll
-                ? <ActivityIndicator size="small" color="#1D9E75" />
+                ? <ActivityIndicator size="small" color={theme.green} />
                 : <Text style={styles.markAllText}>Mark all as read</Text>
               }
             </TouchableOpacity>
@@ -149,7 +149,7 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
     headerBtn: { minWidth: 48, height: 40, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: c.text },
     markAllRow: { alignSelf: 'flex-end', paddingVertical: 6, paddingHorizontal: 4, marginBottom: 4 },
-    markAllText: { color: '#1D9E75', fontSize: 13, fontWeight: '600' },
+    markAllText: { color: c.green, fontSize: 13, fontWeight: '600' },
     loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
     emptyIcon: { fontSize: 48 },

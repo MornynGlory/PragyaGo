@@ -320,7 +320,7 @@ export default function DriverWalletScreen() {
   };
 
   const txnColor = (type: string) => {
-    if (type === 'topup') return '#1D9E75';
+    if (type === 'topup') return theme.green;
     if (type === 'commission_deduction') return '#FF3B30';
     return '#185FA5';
   };
@@ -345,7 +345,7 @@ export default function DriverWalletScreen() {
           <View style={styles.headerBtn} />
         </View>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#1D9E75" />
+          <ActivityIndicator size="large" color={theme.green} />
         </View>
       </SafeAreaView>
     );
@@ -613,11 +613,11 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   headerTitle: { fontSize: 18, fontWeight: '700', color: c.text },
   tabs: { flexDirection: 'row', backgroundColor: c.card, borderBottomWidth: 1, borderBottomColor: c.border },
   tab: { flex: 1, paddingVertical: 12, alignItems: 'center' },
-  tabActive: { borderBottomWidth: 2, borderBottomColor: '#1D9E75' },
+  tabActive: { borderBottomWidth: 2, borderBottomColor: c.green },
   tabText: { fontSize: 14, fontWeight: '600', color: c.textSecondary },
-  tabTextActive: { color: '#1D9E75' },
+  tabTextActive: { color: c.green },
   content: { flex: 1 },
-  balanceCard: { backgroundColor: '#1D9E75', margin: 16, borderRadius: 16, padding: 24, alignItems: 'center' },
+  balanceCard: { backgroundColor: c.green, margin: 16, borderRadius: 16, padding: 24, alignItems: 'center' },
   balanceLabel: { fontSize: 14, color: 'rgba(255,255,255,0.8)', marginBottom: 8 },
   balanceAmount: { fontSize: 36, fontWeight: 'bold', color: '#fff' },
   lockedBadge: { marginTop: 12, backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 6 },
@@ -630,10 +630,10 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   sectionTitle: { fontSize: 16, fontWeight: '600', color: c.text, marginBottom: 14 },
   input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: c.text, backgroundColor: c.input, marginBottom: 12 },
   quickAmounts: { flexDirection: 'row', gap: 8, marginBottom: 14 },
-  quickBtn: { flex: 1, borderWidth: 1, borderColor: '#1D9E75', borderRadius: 8, paddingVertical: 8, alignItems: 'center' },
-  quickBtnText: { fontSize: 13, fontWeight: '600', color: '#1D9E75' },
+  quickBtn: { flex: 1, borderWidth: 1, borderColor: c.green, borderRadius: 8, paddingVertical: 8, alignItems: 'center' },
+  quickBtnText: { fontSize: 13, fontWeight: '600', color: c.green },
   actionButton: { paddingVertical: 14, borderRadius: 10, alignItems: 'center' },
-  walletButton: { backgroundColor: '#1D9E75' },
+  walletButton: { backgroundColor: c.green },
   goCashButton: { backgroundColor: '#185FA5' },
   buttonDisabled: { opacity: 0.6 },
   actionButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },

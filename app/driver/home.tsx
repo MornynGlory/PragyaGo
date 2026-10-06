@@ -1330,13 +1330,13 @@ export default function DriverHome() {
           >
             <View style={{
               width: 48, height: 48, borderRadius: 24,
-              backgroundColor: '#1D9E75',
+              backgroundColor: theme.green,
               borderWidth: 3,
               borderColor: 'white',
               justifyContent: 'center',
               alignItems: 'center',
               elevation: 8,
-              shadowColor: '#1D9E75',
+              shadowColor: theme.green,
               shadowOpacity: 0.5,
               shadowRadius: 8,
             }}>
@@ -1376,7 +1376,7 @@ export default function DriverHome() {
               }}
               apikey={GOOGLE_API_KEY}
               strokeWidth={4}
-              strokeColor="#1D9E75"
+              strokeColor={theme.green}
               onReady={(result) => {
                 console.log('Distance:', result.distance)
                 console.log('Duration:', result.duration)

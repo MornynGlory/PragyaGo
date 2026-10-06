@@ -156,6 +156,14 @@ const PRAGYA_COLOR_MAP: { [key: string]: string } = {
   orange: '#FF9500', silver: '#8E8E93',
 };
 
+// Zone centers used for pickup zone detection (radius-based until zone_settings has boundaries)
+const ZONE_CENTERS: Record<string, { lat: number; lng: number; radiusKm: number; name: string }> = {
+  '30853fd6-cafa-4a12-9a82-db209ad6c450': { lat: 7.3349, lng: -2.3123, radiusKm: 15, name: 'Sunyani' },
+  'e47b9116-1e40-46c1-8a8d-b9e7aee7c271': { lat: 7.4574, lng: -2.5884, radiusKm: 15, name: 'Berekum' },
+  '7d9e8499-e07f-4e76-a07f-7e0c1f4639c2': { lat: 7.5912, lng: -1.9784, radiusKm: 15, name: 'Techiman' },
+  'b5345518-41de-4ab9-8339-0fcaaeb460b6': { lat: 8.0607, lng: -1.7300, radiusKm: 15, name: 'Kintampo' },
+};
+
 const calculateETA = (driverLat: number, driverLng: number, riderLat: number, riderLng: number) => {
   const R = 6371;
   const dLat = (riderLat - driverLat) * Math.PI / 180;
@@ -631,103 +639,74 @@ export default function RiderHomeScreen() {
     driverLocationSubscription.current = channel;
   };
 
-  // TODO before multi-zone launch: Replace with proper geometric boundary detection
-  // using zone boundary coordinates from zone_settings table
-  // Current implementation: uses closest online driver's zone as proxy
-  // Acceptable for single-zone launch in Sunyani
-  // See: boundary_lat_min, boundary_lat_max, boundary_lng_min, boundary_lng_max in zone_settings
   const detectAndAssignZone = async (lat: number, lng: number, userId: string) => {
     try {
-      // Use find_nearest_driver logic in reverse - find which zone the rider is in
-      // by checking which zone's drivers are closest
-      const { data: zones } = await supabase
-        .from('zones')
-        .select('id, name');
-
-      if (!zones || zones.length === 0) return;
-
-      // For now assign based on closest zone centroid
-      // Get zone settings which have zone boundaries
+      // Check if rider already has a zone
       const { data: profile } = await supabase
         .from('profiles')
         .select('zone_id')
         .eq('id', userId)
         .single();
 
-      if (!profile?.zone_id) {
-        // Assign first available zone if none set
-        // In future this will use GPS boundary detection
-        const { data: defaultZone } = await supabase
-          .from('zones')
-          .select('id')
-          .limit(1)
-          .single();
+      if (profile?.zone_id) return; // already has zone, no need to reassign
 
-        if (defaultZone) {
-          await supabase
-            .from('profiles')
-            .update({ zone_id: defaultZone.id })
-            .eq('id', userId);
-        }
+      // Detect zone from coordinates
+      const zoneId = await detectZoneFromCoordinates(lat, lng);
+
+      if (zoneId) {
+        await supabase
+          .from('profiles')
+          .update({ zone_id: zoneId })
+          .eq('id', userId);
       }
     } catch (e) {
-      console.log('Zone detection error:', e);
+      console.error('Zone assignment error');
     }
   };
 
-  // TODO before multi-zone launch: Replace with proper geometric boundary detection
-  // using zone boundary coordinates from zone_settings table
-  // Current implementation: uses closest online driver's zone as proxy
-  // Acceptable for single-zone launch in Sunyani
-  // See: boundary_lat_min, boundary_lat_max, boundary_lng_min, boundary_lng_max in zone_settings
   const detectZoneFromCoordinates = async (lat: number, lng: number): Promise<string | null> => {
     try {
-      // Find nearest zone by comparing pickup coordinates to driver locations in each zone
-      const { data: zones } = await supabase
-        .from('zones')
-        .select('id, name');
+      // Check which zone the coordinates fall within
+      const haversineDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+        const R = 6371;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLng = (lng2 - lng1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+          Math.sin(dLng / 2) * Math.sin(dLng / 2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      };
 
-      if (!zones || zones.length === 0) return null;
+      // Find zone where rider is within radius
+      let closestZoneId: string | null = null;
+      let closestDistance = Infinity;
 
-      // Find which zone has the most online drivers near the pickup point
-      // This is a simple approach - find nearest online driver and use their zone
-      const { data: nearestDriver } = await supabase
-        .from('drivers')
-        .select('zone_id, current_lat, current_lng')
-        .eq('is_online', true)
-        .not('current_lat', 'is', null)
-        .not('current_lng', 'is', null)
-        .limit(10);
-
-      if (nearestDriver && nearestDriver.length > 0) {
-        // Find closest driver
-        let closestDriver = nearestDriver[0];
-        let minDistance = Infinity;
-
-        nearestDriver.forEach((driver: any) => {
-          const distance = Math.sqrt(
-            Math.pow(parseFloat(driver.current_lat) - lat, 2) +
-            Math.pow(parseFloat(driver.current_lng) - lng, 2)
-          );
-          if (distance < minDistance) {
-            minDistance = distance;
-            closestDriver = driver;
-          }
-        });
-
-        return closestDriver.zone_id;
+      for (const [zoneId, center] of Object.entries(ZONE_CENTERS)) {
+        const distance = haversineDistance(lat, lng, center.lat, center.lng);
+        if (distance <= center.radiusKm && distance < closestDistance) {
+          closestDistance = distance;
+          closestZoneId = zoneId;
+        }
       }
 
-      // Fallback: use rider's profile zone_id
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('zone_id')
-        .eq('id', userIdRef.current)
-        .single();
+      // If within a zone return it
+      if (closestZoneId) return closestZoneId;
 
-      return profile?.zone_id || null;
+      // If not within any zone return nearest zone
+      let nearestZoneId: string | null = null;
+      let nearestDistance = Infinity;
+
+      for (const [zoneId, center] of Object.entries(ZONE_CENTERS)) {
+        const distance = haversineDistance(lat, lng, center.lat, center.lng);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestZoneId = zoneId;
+        }
+      }
+
+      return nearestZoneId;
     } catch (e) {
-      console.log('Zone detection error:', e);
+      console.error('Zone detection error');
       return null;
     }
   };
@@ -1720,13 +1699,13 @@ export default function RiderHomeScreen() {
               >
                 <View style={{
                   width: 44, height: 44, borderRadius: 22,
-                  backgroundColor: '#1D9E75',
+                  backgroundColor: theme.green,
                   borderWidth: 2.5,
                   borderColor: 'white',
                   justifyContent: 'center',
                   alignItems: 'center',
                   elevation: 6,
-                  shadowColor: '#1D9E75',
+                  shadowColor: theme.green,
                   shadowOpacity: 0.4,
                   shadowRadius: 6,
                 }}>
@@ -1753,7 +1732,7 @@ export default function RiderHomeScreen() {
               </MarkerAnimated>
             ) : null}
             {routePoints.length > 1 ? (
-              <Polyline coordinates={routePoints} strokeColor="#1D9E75" strokeWidth={4} />
+              <Polyline coordinates={routePoints} strokeColor={theme.green} strokeWidth={4} />
             ) : null}
           </MapView>
         )}
@@ -2021,7 +2000,7 @@ export default function RiderHomeScreen() {
                 ) : null}
               </TouchableOpacity>
             )}
-            {loadingPickupSuggestions ? <ActivityIndicator size="small" color="#1D9E75" style={styles.suggestionsLoader} /> : null}
+            {loadingPickupSuggestions ? <ActivityIndicator size="small" color={theme.green} style={styles.suggestionsLoader} /> : null}
             {pickupSuggestions.length > 0 ? (
               <View style={styles.suggestionsCard}>
                 {pickupSuggestions.map((item, index) => (
@@ -2164,7 +2143,7 @@ export default function RiderHomeScreen() {
             </View>
           ) : null}
           {calculatingFare ? (
-            <ActivityIndicator color="#1D9E75" style={{ marginVertical: 12 }} />
+            <ActivityIndicator color={theme.green} style={{ marginVertical: 12 }} />
           ) : null}
           {fareEstimate ? (
             <View style={styles.fareBadgeWrapper}>
@@ -2405,7 +2384,7 @@ export default function RiderHomeScreen() {
               <Image source={{ uri: driverInfo.photo_url }} style={styles.ratingDriverPhoto} />
             ) : (
               <View style={styles.ratingDriverPhotoPlaceholder}>
-                <Feather name="user" size={40} color="#1D9E75" />
+                <Feather name="user" size={40} color={theme.green} />
               </View>
             )}
             <Text style={styles.ratingDriverName}>{driverInfo?.profiles?.full_name || 'Your Driver'}</Text>
@@ -2504,18 +2483,18 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   viewDriverButton: { flex: 1, backgroundColor: '#fff', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
   viewDriverButtonText: { color: '#185FA5', fontWeight: 'bold', fontSize: 14 },
   panelTitle: { fontSize: 18, fontWeight: 'bold', color: c.text, marginBottom: 4 },
-  driversCount: { fontSize: 13, color: '#1D9E75', marginBottom: 12 },
+  driversCount: { fontSize: 13, color: c.green, marginBottom: 12 },
   inputLabel: { fontSize: 13, fontWeight: '600', color: c.textSecondary, marginBottom: 6 },
   input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 12, fontSize: 14, backgroundColor: c.input, color: c.text, marginBottom: 10 },
   pickupInputContainer: { position: 'relative', zIndex: 10000, backgroundColor: 'rgba(29,158,117,0.08)', borderWidth: 1, borderColor: 'rgba(29,158,117,0.2)', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 2, marginBottom: 0 },
   pickupDisplay: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 44 },
   pickupDisplayText: { flex: 1, fontSize: 14, fontWeight: '600' },
-  pickupDisplayTextDefault: { color: '#1D9E75' },
+  pickupDisplayTextDefault: { color: c.green },
   pickupDisplayTextCustom: { color: c.text },
   pickupTextInput: { borderWidth: 0, backgroundColor: 'transparent', paddingHorizontal: 4, paddingVertical: 0 },
   routeConnector: { paddingLeft: 16, paddingVertical: 3 },
   connectorContent: { alignItems: 'center', width: 12 },
-  connectorDotGreen: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#1D9E75' },
+  connectorDotGreen: { width: 8, height: 8, borderRadius: 4, backgroundColor: c.green },
   connectorLine: { width: 2, height: 14, backgroundColor: '#CBD5E1', marginVertical: 1 },
   connectorDotBlue: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#185FA5' },
   destInputContainer: { position: 'relative', zIndex: 9999, marginBottom: 10 },
@@ -2531,33 +2510,33 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   removeStop: { fontSize: 16, color: c.red, paddingHorizontal: 8 },
   addStopRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
   stopInput: { flex: 1, borderWidth: 1, borderColor: c.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, backgroundColor: c.input, color: c.text },
-  addStopButton: { backgroundColor: '#1D9E75', paddingHorizontal: 14, borderRadius: 8, justifyContent: 'center' },
+  addStopButton: { backgroundColor: c.green, paddingHorizontal: 14, borderRadius: 8, justifyContent: 'center' },
   addStopButtonText: { color: '#fff', fontWeight: '600', fontSize: 13 },
   estimateButton: { backgroundColor: c.card, paddingVertical: 10, borderRadius: 8, alignItems: 'center', marginBottom: 10 },
   estimateButtonText: { color: c.text, fontWeight: '600' },
   fareContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#E1F5EE', padding: 12, borderRadius: 8, marginBottom: 10 },
   fareInfo: { flex: 1, marginRight: 8 },
   fareLabel: { fontSize: 14, color: '#085041', fontWeight: '600' },
-  fareNote: { fontSize: 11, color: '#1D9E75', marginTop: 1 },
+  fareNote: { fontSize: 11, color: c.green, marginTop: 1 },
   fareBadgeWrapper: { marginBottom: 12, alignItems: 'center' },
-  fareBadge: { backgroundColor: '#1D9E75', borderRadius: 12, paddingVertical: 16, paddingHorizontal: 24, alignItems: 'center', width: '100%', shadowColor: '#1D9E75', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 6, marginBottom: 8 },
+  fareBadge: { backgroundColor: c.green, borderRadius: 12, paddingVertical: 16, paddingHorizontal: 24, alignItems: 'center', width: '100%', shadowColor: c.green, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 6, marginBottom: 8 },
   fareBadgeOriginal: { fontSize: 14, color: 'rgba(255,255,255,0.6)', textDecorationLine: 'line-through', marginBottom: 2 },
   fareBadgeAmount: { fontSize: 28, fontWeight: 'bold', color: '#fff', marginBottom: 2 },
   fareBadgeLabel: { fontSize: 13, color: 'rgba(255,255,255,0.8)' },
   fareBreakdownText: { fontSize: 12, color: c.textSecondary, textAlign: 'center', marginBottom: 2 },
   fareDistanceText: { fontSize: 11, color: c.textSecondary, textAlign: 'center', marginBottom: 2 },
-  fareBreakdown: { fontSize: 11, color: '#1D9E75', marginTop: 1 },
-  fareSourceZone: { fontSize: 11, color: '#1D9E75', fontWeight: '600', marginTop: 2 },
+  fareBreakdown: { fontSize: 11, color: c.green, marginTop: 1 },
+  fareSourceZone: { fontSize: 11, color: c.green, fontWeight: '600', marginTop: 2 },
   fareSourceDistance: { fontSize: 11, color: '#2563eb', fontWeight: '600', marginTop: 2 },
   discountMessage: { fontSize: 12, color: '#085041', fontWeight: '600', marginTop: 4 },
   fareAmountContainer: { alignItems: 'flex-end' },
   fareOriginal: { fontSize: 13, color: c.textSecondary, textDecorationLine: 'line-through', marginBottom: 2 },
-  fareAmount: { fontSize: 18, fontWeight: 'bold', color: '#1D9E75' },
+  fareAmount: { fontSize: 18, fontWeight: 'bold', color: c.green },
   paymentContainer: { marginBottom: 12 },
   paymentLabel: { fontSize: 13, fontWeight: '600', color: c.text, marginBottom: 8 },
   paymentOptions: { flexDirection: 'row', gap: 10 },
   paymentOption: { flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', alignItems: 'center', backgroundColor: '#F5F5F5' },
-  paymentActiveCash: { backgroundColor: '#1D9E75', borderColor: '#1D9E75' },
+  paymentActiveCash: { backgroundColor: c.green, borderColor: c.green },
   paymentActiveMomo: { backgroundColor: '#185FA5', borderColor: '#185FA5' },
   paymentText: { fontSize: 14, fontWeight: '600', color: '#666' },
   paymentTextActive: { color: '#fff' },
@@ -2585,8 +2564,8 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   cancelReasonTitle: { fontSize: 18, fontWeight: '700', color: c.text, marginBottom: 16 },
   cancelReasonRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 12 },
   radioOuter: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: c.border, justifyContent: 'center', alignItems: 'center' },
-  radioOuterActive: { borderColor: '#1D9E75' },
-  radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#1D9E75' },
+  radioOuterActive: { borderColor: c.green },
+  radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: c.green },
   cancelReasonText: { fontSize: 14, color: c.text, flex: 1 },
   cancelReasonInput: { borderWidth: 1, borderColor: c.inputBorder, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, color: c.text, backgroundColor: c.input, minHeight: 70, textAlignVertical: 'top', marginTop: 8 },
   cancelReasonActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
@@ -2600,10 +2579,10 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   fareCompareItem: { alignItems: 'center' },
   fareCompareLabel: { fontSize: 12, color: c.textSecondary, marginBottom: 4 },
   fareCompareOld: { fontSize: 20, color: c.textSecondary, textDecorationLine: 'line-through' },
-  fareCompareNew: { fontSize: 28, fontWeight: 'bold', color: '#1D9E75' },
+  fareCompareNew: { fontSize: 28, fontWeight: 'bold', color: c.green },
   fareArrow: { fontSize: 20, color: c.textSecondary },
   fareDistance: { fontSize: 13, color: c.textSecondary, textAlign: 'center', marginBottom: 16 },
-  acceptFareButton: { backgroundColor: '#1D9E75', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 8 },
+  acceptFareButton: { backgroundColor: c.green, paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 8 },
   acceptFareButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   fareAcceptNote: { fontSize: 12, color: c.textSecondary, textAlign: 'center' },
   driverCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24 },
@@ -2611,8 +2590,8 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   etaBadge: { backgroundColor: '#E1F5EE', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 4, alignSelf: 'center', marginBottom: 12 },
   etaText: { color: '#085041', fontWeight: '600', fontSize: 14 },
   driverPhotoSection: { alignItems: 'center', marginBottom: 12, position: 'relative' },
-  driverPhoto: { width: 90, height: 90, borderRadius: 45, borderWidth: 3, borderColor: '#1D9E75' },
-  driverPhotoPlaceholder: { width: 90, height: 90, borderRadius: 45, backgroundColor: '#E1F5EE', justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#1D9E75' },
+  driverPhoto: { width: 90, height: 90, borderRadius: 45, borderWidth: 3, borderColor: c.green },
+  driverPhotoPlaceholder: { width: 90, height: 90, borderRadius: 45, backgroundColor: '#E1F5EE', justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: c.green },
   driverRatingBadge: { position: 'absolute', bottom: 0, right: '30%', backgroundColor: '#FFD60A', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 2 },
   driverRatingText: { fontSize: 12, fontWeight: 'bold', color: '#333' },
   driverName: { fontSize: 20, fontWeight: 'bold', color: c.text, textAlign: 'center', marginBottom: 4 },
@@ -2623,26 +2602,26 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   pragyaDetailValue: { fontSize: 13, fontWeight: '600', color: c.text },
   pragyaColorRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   pragyaColorDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 1, borderColor: c.border },
-  closeCardButton: { backgroundColor: '#1D9E75', paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
+  closeCardButton: { backgroundColor: c.green, paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
   closeCardButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   ratingCard: { backgroundColor: c.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, alignItems: 'center' },
   ratingTitle: { fontSize: 22, fontWeight: 'bold', color: c.text, marginBottom: 4 },
   ratingTopFare: { fontSize: 32, fontWeight: '900', color: c.green, marginBottom: 8 },
   ratingSubtitle: { fontSize: 14, color: c.textSecondary, textAlign: 'center', marginBottom: 16 },
-  ratingDriverPhoto: { width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: '#1D9E75', marginBottom: 8 },
+  ratingDriverPhoto: { width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: c.green, marginBottom: 8 },
   ratingDriverPhotoPlaceholder: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#E1F5EE', justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
   ratingDriverName: { fontSize: 16, fontWeight: '700', color: c.text, marginBottom: 12 },
-  ratingFare: { fontSize: 14, color: '#1D9E75', fontWeight: '600', marginBottom: 16 },
+  ratingFare: { fontSize: 14, color: c.green, fontWeight: '600', marginBottom: 16 },
   receiptBox: { backgroundColor: '#F0FDF7', borderRadius: 8, padding: 12, marginBottom: 16, width: '100%' },
   receiptRow: { fontSize: 13, color: c.text, marginBottom: 4 },
   receiptValue: { fontWeight: '600', color: c.text },
   receiptDiscount: { fontWeight: '600', color: '#e53e3e' },
   receiptRowTotal: { fontSize: 14, color: '#085041', fontWeight: '700', marginTop: 4, borderTopWidth: 1, borderTopColor: '#C6F6E4', paddingTop: 4 },
-  receiptTotal: { color: '#1D9E75' },
+  receiptTotal: { color: c.green },
   starsRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
   ratingLabel: { fontSize: 14, color: c.textSecondary, marginBottom: 12, height: 20 },
   ratingCommentInput: { borderWidth: 1, borderColor: c.inputBorder, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, color: c.text, backgroundColor: c.input, width: '100%', minHeight: 70, textAlignVertical: 'top', marginBottom: 16 },
-  submitRatingButton: { backgroundColor: '#1D9E75', paddingVertical: 14, paddingHorizontal: 40, borderRadius: 10, alignItems: 'center', width: '100%', marginBottom: 10 },
+  submitRatingButton: { backgroundColor: c.green, paddingVertical: 14, paddingHorizontal: 40, borderRadius: 10, alignItems: 'center', width: '100%', marginBottom: 10 },
   submitRatingText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   skipRatingButton: { paddingVertical: 10 },
   skipRatingText: { color: c.textSecondary, fontSize: 14 },
@@ -2656,10 +2635,10 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
   suggestionFare: { fontSize: 13, color: c.green, fontWeight: '700' },
   sectionLabel: { fontSize: 11, fontWeight: '700', color: c.textSecondary, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4, backgroundColor: c.input, textTransform: 'uppercase', letterSpacing: 0.5 },
   suggestionsLoader: { alignSelf: 'center', marginBottom: 6 },
-  tricycleMarker: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1D9E75', borderWidth: 3, borderColor: 'white', justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: '#1D9E75', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 8 },
+  tricycleMarker: { width: 44, height: 44, borderRadius: 22, backgroundColor: c.green, borderWidth: 3, borderColor: 'white', justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: c.green, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.4, shadowRadius: 8 },
   tricycleEmoji: { fontSize: 20 },
   trackingMarkerWrap: { width: 50, height: 50, justifyContent: 'center', alignItems: 'center' },
-  pulseCircle: { position: 'absolute', width: 50, height: 50, borderRadius: 25, backgroundColor: '#1D9E75' },
+  pulseCircle: { position: 'absolute', width: 50, height: 50, borderRadius: 25, backgroundColor: c.green },
   bellBtn: { position: 'absolute', top: 12, right: 12, zIndex: 10, width: 40, height: 40, borderRadius: 20, backgroundColor: c.card, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 },
   locateMeBtn: { position: 'absolute', right: 16, bottom: 16, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 6 },
   bellBadge: { position: 'absolute', top: 0, right: 0, backgroundColor: c.red, borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3 },
