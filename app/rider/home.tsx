@@ -156,6 +156,16 @@ const PRAGYA_COLOR_MAP: { [key: string]: string } = {
   orange: '#FF9500', silver: '#8E8E93',
 };
 
+const haversineDistanceKm = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
 // Zone centers used for pickup zone detection (radius-based until zone_settings has boundaries)
 const ZONE_CENTERS: Record<string, { lat: number; lng: number; radiusKm: number; name: string }> = {
   '30853fd6-cafa-4a12-9a82-db209ad6c450': { lat: 7.3349, lng: -2.3123, radiusKm: 15, name: 'Sunyani' },
@@ -165,14 +175,7 @@ const ZONE_CENTERS: Record<string, { lat: number; lng: number; radiusKm: number;
 };
 
 const calculateETA = (driverLat: number, driverLng: number, riderLat: number, riderLng: number) => {
-  const R = 6371;
-  const dLat = (riderLat - driverLat) * Math.PI / 180;
-  const dLng = (riderLng - driverLng) * Math.PI / 180;
-  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(driverLat * Math.PI / 180) * Math.cos(riderLat * Math.PI / 180) *
-    Math.sin(dLng/2) * Math.sin(dLng/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  const distanceKm = R * c;
+  const distanceKm = haversineDistanceKm(driverLat, driverLng, riderLat, riderLng);
   const etaMinutes = Math.round((distanceKm / 20) * 60);
   return etaMinutes < 1 ? '< 1 min' : `~${etaMinutes} min`;
 };
@@ -221,7 +224,6 @@ export default function RiderHomeScreen() {
   const rideSubscription = useRef<any>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const dispatchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [declinedDriverIds, setDeclinedDriverIds] = useState<string[]>([]);
   const [dispatchAttempt, setDispatchAttempt] = useState(0);
   const driverLocationSubscription = useRef<any>(null);
   const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
@@ -466,10 +468,20 @@ export default function RiderHomeScreen() {
   }, []);
 
   const requestLocationPermission = async () => {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission Denied', 'Location permission is required.'); return; }
-    getCurrentLocation();
-    startLocationWatcher();
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Location Required', 'Please enable location to use PragyaGo.');
+        return false;
+      }
+      getCurrentLocation();
+      startLocationWatcher();
+      return true;
+    } catch (e) {
+      console.error('Location permission error');
+      Alert.alert('Error', 'Could not access location. Please check your settings.');
+      return false;
+    }
   };
 
   // Keeps userLat/userLng/location current for the whole session — not gated on
@@ -666,23 +678,12 @@ export default function RiderHomeScreen() {
 
   const detectZoneFromCoordinates = async (lat: number, lng: number): Promise<string | null> => {
     try {
-      // Check which zone the coordinates fall within
-      const haversineDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
-        const R = 6371;
-        const dLat = (lat2 - lat1) * Math.PI / 180;
-        const dLng = (lng2 - lng1) * Math.PI / 180;
-        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-          Math.sin(dLng / 2) * Math.sin(dLng / 2);
-        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      };
-
       // Find zone where rider is within radius
       let closestZoneId: string | null = null;
       let closestDistance = Infinity;
 
       for (const [zoneId, center] of Object.entries(ZONE_CENTERS)) {
-        const distance = haversineDistance(lat, lng, center.lat, center.lng);
+        const distance = haversineDistanceKm(lat, lng, center.lat, center.lng);
         if (distance <= center.radiusKm && distance < closestDistance) {
           closestDistance = distance;
           closestZoneId = zoneId;
@@ -697,7 +698,7 @@ export default function RiderHomeScreen() {
       let nearestDistance = Infinity;
 
       for (const [zoneId, center] of Object.entries(ZONE_CENTERS)) {
-        const distance = haversineDistance(lat, lng, center.lat, center.lng);
+        const distance = haversineDistanceKm(lat, lng, center.lat, center.lng);
         if (distance < nearestDistance) {
           nearestDistance = distance;
           nearestZoneId = zoneId;
@@ -903,107 +904,110 @@ export default function RiderHomeScreen() {
   }, [destination, stops, selectedDestCoords, pickupLat, pickupLng]);
 
   const subscribeToRideUpdates = async (rideId: string) => {
-    if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
-    const channel = supabase
-      .channel(`ride-update-${rideId}-${Date.now()}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides' },
-        async (payload) => {
-          console.log('Ride UPDATE received, status:', payload.new?.status);
-          const ride = payload.new;
-          if (ride.id !== rideId) return;
-          setCurrentRide(ride);
-          setRideStatus(ride.status);
+    try {
+      if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
+      const channel = supabase
+        .channel(`ride-update-${rideId}-${Date.now()}`)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides', filter: `id=eq.${rideId}` },
+          async (payload) => {
+            console.log('Ride UPDATE received, status:', payload.new?.status);
+            const ride = payload.new;
+            if (ride.id !== rideId) return;
+            setCurrentRide(ride);
+            setRideStatus(ride.status);
 
-          if (ride.status === 'accepted' && ride.driver_id) {
-            if (dispatchTimeoutRef.current) {
-              clearTimeout(dispatchTimeoutRef.current);
-              dispatchTimeoutRef.current = null;
-            }
-            setDeclinedDriverIds([]);
-            setDispatchAttempt(0);
-            Alert.alert('Driver Found!', 'Your Pragya driver is on the way!');
-            await fetchDriverInfo(ride.driver_id);
-            await subscribeToDriverLocation(ride.driver_id);
-
-            // Start tracking immediately rather than waiting for the driver's next location ping
-            const { data: driverRow } = await supabase
-              .from('drivers')
-              .select('current_lat, current_lng')
-              .eq('id', ride.driver_id)
-              .single();
-            if (driverRow?.current_lat && driverRow?.current_lng) {
-              const driverCoords = { latitude: driverRow.current_lat, longitude: driverRow.current_lng };
-              setDriverLocation(driverCoords);
-              driverLocationAnim.timing({
-                ...driverCoords,
-                latitudeDelta: 0.01,
-                longitudeDelta: 0.01,
-                duration: 500,
-                useNativeDriver: false,
-              } as any).start();
-              const pickupTarget = ride.pickup_lat
-                ? { latitude: ride.pickup_lat, longitude: ride.pickup_lng }
-                : locationRef.current;
-              if (pickupTarget) {
-                await fetchRoute(driverCoords.latitude, driverCoords.longitude, pickupTarget.latitude, pickupTarget.longitude);
+            if (ride.status === 'accepted' && ride.driver_id) {
+              if (dispatchTimeoutRef.current) {
+                clearTimeout(dispatchTimeoutRef.current);
+                dispatchTimeoutRef.current = null;
               }
+              setDispatchAttempt(0);
+              Alert.alert('Driver Found!', 'Your Pragya driver is on the way!');
+              await fetchDriverInfo(ride.driver_id);
+              await subscribeToDriverLocation(ride.driver_id);
+
+              // Start tracking immediately rather than waiting for the driver's next location ping
+              const { data: driverRow } = await supabase
+                .from('drivers')
+                .select('current_lat, current_lng')
+                .eq('id', ride.driver_id)
+                .single();
+              if (driverRow?.current_lat && driverRow?.current_lng) {
+                const driverCoords = { latitude: driverRow.current_lat, longitude: driverRow.current_lng };
+                setDriverLocation(driverCoords);
+                driverLocationAnim.timing({
+                  ...driverCoords,
+                  latitudeDelta: 0.01,
+                  longitudeDelta: 0.01,
+                  duration: 500,
+                  useNativeDriver: false,
+                } as any).start();
+                const pickupTarget = ride.pickup_lat
+                  ? { latitude: ride.pickup_lat, longitude: ride.pickup_lng }
+                  : locationRef.current;
+                if (pickupTarget) {
+                  await fetchRoute(driverCoords.latitude, driverCoords.longitude, pickupTarget.latitude, pickupTarget.longitude);
+                }
+              }
+            } else if (ride.status === 'rider_boarding') {
+              setShowDriverCard(false);
+              Vibration.vibrate([0, 400, 150, 400]);
+            } else if (ride.status === 'in_progress') {
+              setShowDriverCard(false);
+              Alert.alert('Ride Started! 🎉', 'You are now on your way.');
+            } else if (ride.status === 'arrived_destination' || ride.status === 'payment_pending') {
+              // Driver has reached the destination — stop live route/pulse tracking,
+              // but leave the driver marker visible at its last known position.
+              if (pulseLoopRef.current) { pulseLoopRef.current.stop(); pulseLoopRef.current = null; }
+              pulseAnim.setValue(0);
+              setRoutePoints([]);
+              setRouteDistance(null);
+              const newFare = ride.final_fare_ghs || ride.fare_ghs;
+              setFinalFare(newFare);
+              // paymentPanel handles the rest automatically (rideStatus is already set above,
+              // and it renders whenever rideStatus is 'arrived_destination' or 'payment_pending')
+              if (ride.final_fare_ghs && Math.abs(ride.final_fare_ghs - ride.fare_ghs) > 0.5) {
+                setShowFareAcceptModal(true);
+              }
+            } else if (ride.status === 'completed') {
+              setShowDriverCard(false);
+              setShowFareAcceptModal(false);
+              setCompletedRide(ride);
+              setShowReceiptModal(true);
+              sendReceiptEmail(ride);
+              setCurrentRide(null);
+              setRideStatus('');
+              setRiderConfirmedPayment(false);
+              setFinalFare(null);
+              setHasBoarded(false);
+              if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
+              if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
+              if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
+              stopDriverTracking();
+              await resetAfterRide();
+            } else if (ride.status === 'cancelled') {
+              Alert.alert('Ride Cancelled', 'Your ride was cancelled.');
+              setShowDriverCard(false);
+              setShowFareAcceptModal(false);
+              setCurrentRide(null);
+              setRideStatus('');
+              setDriverInfo(null);
+              setEta(null);
+              setFinalFare(null);
+              setHasBoarded(false);
+              if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
+              if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
+              if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
+              stopDriverTracking();
             }
-          } else if (ride.status === 'rider_boarding') {
-            setShowDriverCard(false);
-            Vibration.vibrate([0, 400, 150, 400]);
-          } else if (ride.status === 'in_progress') {
-            setShowDriverCard(false);
-            Alert.alert('Ride Started! 🎉', 'You are now on your way.');
-          } else if (ride.status === 'arrived_destination' || ride.status === 'payment_pending') {
-            // Driver has reached the destination — stop live route/pulse tracking,
-            // but leave the driver marker visible at its last known position.
-            if (pulseLoopRef.current) { pulseLoopRef.current.stop(); pulseLoopRef.current = null; }
-            pulseAnim.setValue(0);
-            setRoutePoints([]);
-            setRouteDistance(null);
-            const newFare = ride.final_fare_ghs || ride.fare_ghs;
-            setFinalFare(newFare);
-            // paymentPanel handles the rest automatically (rideStatus is already set above,
-            // and it renders whenever rideStatus is 'arrived_destination' or 'payment_pending')
-            if (ride.final_fare_ghs && Math.abs(ride.final_fare_ghs - ride.fare_ghs) > 0.5) {
-              setShowFareAcceptModal(true);
-            }
-          } else if (ride.status === 'completed') {
-            setShowDriverCard(false);
-            setShowFareAcceptModal(false);
-            setCompletedRide(ride);
-            setShowReceiptModal(true);
-            sendReceiptEmail(ride);
-            setCurrentRide(null);
-            setRideStatus('');
-            setRiderConfirmedPayment(false);
-            setFinalFare(null);
-            setHasBoarded(false);
-            if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
-            if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
-            if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
-            stopDriverTracking();
-            await resetAfterRide();
-          } else if (ride.status === 'cancelled') {
-            Alert.alert('Ride Cancelled', 'Your ride was cancelled.');
-            setShowDriverCard(false);
-            setShowFareAcceptModal(false);
-            setCurrentRide(null);
-            setRideStatus('');
-            setDriverInfo(null);
-            setEta(null);
-            setFinalFare(null);
-            setHasBoarded(false);
-            if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
-            if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
-            if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
-            stopDriverTracking();
-          }
-        });
-    channel.subscribe((status) => {
-      console.log('Rider subscription status:', status);
-    });
-    rideSubscription.current = channel;
+          });
+      channel.subscribe((status) => {
+        console.log('Rider subscription status:', status);
+      });
+      rideSubscription.current = channel;
+    } catch (e) {
+      console.error('Ride subscription error');
+    }
   };
 
   const pollRideStatus = async (rideId: string) => {
@@ -1304,7 +1308,6 @@ export default function RiderHomeScreen() {
         if (currentRideRow?.status === 'requested') {
           // Driver didn't accept - try next driver
           const newExcludedIds = [...excludedIds, driver.driver_id];
-          setDeclinedDriverIds(newExcludedIds);
           setDispatchAttempt(prev => prev + 1);
           dispatchToNearestDriver(rideId, newExcludedIds);
         }
@@ -1389,7 +1392,6 @@ export default function RiderHomeScreen() {
         setLastRequestTime(Date.now());
         setHasBoarded(false);
         setBoardingLoading(false);
-        setDeclinedDriverIds([]);
         setDispatchAttempt(0);
         await subscribeToRideUpdates(ride.id);
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
@@ -1405,7 +1407,10 @@ export default function RiderHomeScreen() {
         setDestination(''); setStops([]); setFareEstimate(null); setFareBreakdown(null); setDiscountResult(null); setOriginalFare(null);
         setPickupLocation('My Current Location'); setPickupLat(null); setPickupLng(null);
       }
-    } catch (error) { Alert.alert('Error', 'Could not request ride.'); }
+    } catch (error: any) {
+      console.error('Ride request error:', error?.code || 'unknown');
+      Alert.alert('Error', error?.message || 'Could not request ride. Please try again.');
+    }
     finally { setRequesting(false); }
   };
 

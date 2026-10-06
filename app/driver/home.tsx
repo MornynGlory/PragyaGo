@@ -104,7 +104,7 @@ import { useTheme } from '@/lib/theme'
 import { supabase } from '@/lib/supabase'
 import { getDriverToken, sendPushNotification } from '@/lib/notifications'
 
-const GOOGLE_API_KEY = (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k') ?? ''
+const GOOGLE_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? ''
 
 const MIN_DISTANCE_METERS = 5
 
@@ -161,6 +161,7 @@ export default function DriverHome() {
   const queueChannelRef = useRef<any>(null)
   const lastSentLocationRef = useRef<{ lat: number; lng: number }>({ lat: 0, lng: 0 })
   const statusChangingRef = useRef(false)
+  const notifChannelRef = useRef<any>(null)
 
   const [driverName, setDriverName] = useState('Driver')
   const [inQueue, setInQueue] = useState(false)
@@ -175,7 +176,6 @@ export default function DriverHome() {
   const [vehicleVerified, setVehicleVerified] = useState<boolean | null>(null)
   const [unreadCount, setUnreadCount] = useState<number>(0)
   const [isOnline, setIsOnline] = useState<boolean>(false)
-  console.log('Driver home rendered, isOnline:', isOnline)
   const [activeRide, setActiveRide] = useState<any>(null)
   const [rideStatus, setRideStatus] = useState('')
   const [riderInfo, setRiderInfo] = useState<any>(null)
@@ -261,6 +261,7 @@ export default function DriverHome() {
       if (driverRideUpdatesChannelRef.current) supabase.removeChannel(driverRideUpdatesChannelRef.current)
       if (dispatchUpdatesChannelRef.current) supabase.removeChannel(dispatchUpdatesChannelRef.current)
       if (queueChannelRef.current) supabase.removeChannel(queueChannelRef.current)
+      if (notifChannelRef.current) supabase.removeChannel(notifChannelRef.current)
       if (countdownRef.current) clearInterval(countdownRef.current)
       if (locationIntervalRef.current) {
         clearInterval(locationIntervalRef.current)
@@ -314,6 +315,7 @@ export default function DriverHome() {
   useFocusEffect(
     React.useCallback(() => {
       fetchDriverData()
+      if (activeRideRef.current?.id) fetchChatUnreadCount(activeRideRef.current.id)
     }, [])
   )
 
@@ -357,11 +359,14 @@ export default function DriverHome() {
 
       const { data: driverRecord } = await supabase
         .from('drivers')
-        .select('id, commission_owed, vehicle_verified')
+        .select('id, commission_owed, vehicle_verified, rating')
         .eq('profile_id', user.id)
         .single()
       if (driverRecord) {
         driverIdRef.current = driverRecord.id
+        if (driverRecord.rating !== null && driverRecord.rating !== undefined) {
+          setRating(parseFloat(driverRecord.rating))
+        }
         const dbCommission = driverRecord.commission_owed ?? 0
         setCommissionOwed(dbCommission)
         setShowCommissionModal(dbCommission > 0)
@@ -381,9 +386,39 @@ export default function DriverHome() {
           setRideStatus('')
         }
       }
+
+      fetchUnreadCount()
+      subscribeToNotifications()
     } catch (e) {
       console.warn(e)
     }
+  }
+
+  async function fetchUnreadCount() {
+    if (!currentUserIdRef.current) return
+    const { count } = await supabase
+      .from('user_notifications')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', currentUserIdRef.current)
+      .eq('is_read', false)
+
+    if (count !== null) setUnreadCount(count)
+  }
+
+  function subscribeToNotifications() {
+    // fetchDriverData runs on every focus — only subscribe once
+    if (notifChannelRef.current || !currentUserIdRef.current) return
+    notifChannelRef.current = supabase
+      .channel(`driver-notifications:${currentUserIdRef.current}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'user_notifications',
+        filter: `user_id=eq.${currentUserIdRef.current}`,
+      }, () => {
+        fetchUnreadCount()
+      })
+      .subscribe()
   }
 
   async function restoreDriverState() {
@@ -401,6 +436,9 @@ export default function DriverHome() {
 
       if (!driver) return
       driverIdRef.current = driver.id
+      if (driver.rating !== null && driver.rating !== undefined) {
+        setRating(parseFloat(driver.rating))
+      }
 
       // Check for active ride
       const { data: activeRideData } = await supabase
@@ -1095,47 +1133,25 @@ export default function DriverHome() {
   async function handleCompleteRide() {
     if (!activeRide) return
 
-    const finalFare = parseFloat(activeRide?.fare_ghs || '0')
-    const commission = Math.round(finalFare * 0.15 * 100) / 100
-    const driverEarnings = Math.round((finalFare - commission) * 100) / 100
+    // Commission and earnings are calculated server-side
+    const { data, error } = await supabase.rpc('complete_ride_and_deduct_commission', {
+      p_ride_id: activeRide.id,
+      p_driver_id: driverIdRef.current,
+    })
 
-    const { error } = await supabase
-      .from('rides')
-      .update({
-        status: 'completed',
-        driver_confirmed_payment: true,
-        final_fare_ghs: finalFare,
-        completed_at: new Date().toISOString()
-      })
-      .eq('id', activeRide.id)
-
-    if (!error) {
-      // Deduct commission from wallet, credit the driver's share
-      await supabase.rpc('increment_commission', { driver_id: driverIdRef.current, amount: commission })
-      await supabase.rpc('increment_wallet', { driver_id: driverIdRef.current, amount: driverEarnings })
-
-      // Log commission payment
-      await supabase
-        .from('commission_payments')
-        .insert({
-          driver_id: driverIdRef.current,
-          ride_id: activeRide.id,
-          amount: commission,
-          status: 'paid',
-          paid_at: new Date().toISOString(),
-          payment_method: 'auto_deduction'
-        })
-
-      // Reset ride state — isOnline is untouched, so the driver stays online automatically
-      setActiveRide(null)
-      setRideStatus('')
-      Alert.alert(
-        '🎉 Ride Complete!',
-        `Fare: GH₵ ${finalFare}\nYour earnings: GH₵ ${driverEarnings}\nCommission: GH₵ ${commission}`
-      )
-    } else {
+    if (error || !data?.success) {
+      console.error('Complete ride error')
       Alert.alert('Error', 'Could not confirm payment. Please try again.')
+      return
     }
+
+    // Reset ride state — isOnline is untouched, so the driver stays online automatically
+    setActiveRide(null)
+    setRideStatus('')
+    Alert.alert(
+      '🎉 Ride Complete!',
+      `Fare: GH₵ ${data.fare}\nYour earnings: GH₵ ${data.earnings}\nCommission: GH₵ ${data.commission}`
+    )
   }
 
   async function confirmBreakdown() {
@@ -1378,8 +1394,6 @@ export default function DriverHome() {
               strokeWidth={4}
               strokeColor={theme.green}
               onReady={(result) => {
-                console.log('Distance:', result.distance)
-                console.log('Duration:', result.duration)
               }}
             />
           ) : null}
@@ -1436,7 +1450,6 @@ export default function DriverHome() {
                   vehicleVerified === false && styles.fullButtonDisabled,
                 ]}
                 onPress={() => {
-                  console.log('Go Online button tapped!')
                   toggleOnline()
                 }}
               >
@@ -1491,6 +1504,22 @@ export default function DriverHome() {
                     onPress={() => router.push(('/chat/' + activeRide.id) as any)}
                   >
                     <Feather name="message-circle" size={18} color={theme.green} />
+                    {chatUnreadCount > 0 && (
+                      <View style={{
+                        position: 'absolute',
+                        top: -4, right: -4,
+                        backgroundColor: theme.red,
+                        borderRadius: 10,
+                        minWidth: 18, height: 18,
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        paddingHorizontal: 4,
+                      }}>
+                        <Text style={{ color: 'white', fontSize: 10, fontWeight: '700' }}>
+                          {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
+                        </Text>
+                      </View>
+                    )}
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.riderActionBtn, { backgroundColor: theme.blueLight }]}

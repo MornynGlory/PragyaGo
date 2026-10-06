@@ -6,7 +6,7 @@
 import { supabase } from '@/lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -180,7 +180,7 @@ export default function RegisterScreen() {
     }
   };
 
-  const sendOTP = async (phoneNumber: string) => {
+  const sendOTP = async (phoneNumber: string): Promise<boolean> => {
     setSendingOTP(true);
     try {
       const response = await fetch('https://admin.pragyago.com/api/send-otp', {
@@ -192,11 +192,13 @@ export default function RegisterScreen() {
       if (data.success) {
         setRegisteredPhone(phoneNumber);
         setShowOTPScreen(true);
-      } else {
-        Alert.alert('Error', 'Could not send OTP. Please try again.');
+        return true;
       }
+      Alert.alert('Error', 'Could not send OTP. Please try again.');
+      return false;
     } catch {
       Alert.alert('Error', 'Could not send OTP. Please try again.');
+      return false;
     } finally {
       setSendingOTP(false);
     }
@@ -249,8 +251,13 @@ export default function RegisterScreen() {
   };
 
   const resendOTP = async () => {
-    setOtp('');
-    await sendOTP(registeredPhone);
+    try {
+      setOtp('');
+      const sent = await sendOTP(registeredPhone);
+      if (sent) Alert.alert('Code Resent!', `A new verification code has been sent to ${registeredPhone}`);
+    } catch (e) {
+      Alert.alert('Error', 'Network error. Please check your connection.');
+    }
   };
 
   if (checkingTerms) {

@@ -121,6 +121,7 @@ export default function DriverDailyReportsScreen() {
     if (type === 'topup') return 'Top Up';
     if (type === 'commission_deduction') return 'Commission Deduction';
     if (type === 'withdrawal') return 'Withdrawal';
+    if (type === 'earning') return 'Ride Earnings';
     return type;
   };
   const txnColor = (type: string) => {

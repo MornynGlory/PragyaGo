@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -40,8 +40,6 @@ export default function LoginScreen() {
         .eq('phone', phone.trim())
         .maybeSingle();
 
-      console.log('Profile found:', JSON.stringify(profile));
-
       if (!profile) {
         Alert.alert('Error', 'Phone number not registered.');
         return;
@@ -53,10 +51,7 @@ export default function LoginScreen() {
         password,
       });
 
-      console.log('Sign in result:', JSON.stringify(error));
-
       if (error) {
-        console.log('Login failed reason:', error?.message);
         Alert.alert('Login Failed', error.message);
         return;
       }

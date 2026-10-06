@@ -574,7 +574,7 @@ export default function DriverWalletScreen() {
                   <Text style={styles.txnDate}>{formatDate(txn.created_at)}</Text>
                 </View>
                 <Text style={[styles.txnAmount, { color: txnColor(txn.type) }]}>
-                  {txn.type === 'topup' || txn.type === 'refund' ? '+' : '-'}GH₵ {(txn.amount || 0).toFixed(2)}
+                  {txn.type === 'topup' || txn.type === 'refund' || txn.type === 'earning' ? '+' : '-'}GH₵ {(txn.amount || 0).toFixed(2)}
                 </Text>
               </View>
             ))
