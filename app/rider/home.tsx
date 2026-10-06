@@ -1105,24 +1105,14 @@ export default function RiderHomeScreen() {
   const confirmPayment = async (ride: any, fare: number | string) => {
     const fareAmount = typeof fare === 'number' ? fare : parseFloat(String(fare));
     setRiderConfirmedPayment(true);
-    const { data: currentRideData } = await supabase.from('rides').select('driver_confirmed_payment').eq('id', ride.id).single();
-    if (currentRideData?.driver_confirmed_payment) {
-      const { error } = await supabase.from('rides').update({ status: 'completed', completed_at: new Date().toISOString(), rider_confirmed_payment: true }).eq('id', ride.id);
-      if (error) {
-        setRiderConfirmedPayment(false);
-        Alert.alert('Error', 'Could not confirm payment. Please try again.');
-        return;
-      }
-      // Status flips to 'completed' via the realtime subscription, which closes this panel automatically.
-    } else {
-      const { error } = await supabase.from('rides').update({ rider_confirmed_payment: true }).eq('id', ride.id);
-      if (error) {
-        setRiderConfirmedPayment(false);
-        Alert.alert('Error', 'Could not confirm payment. Please try again.');
-        return;
-      }
-      Alert.alert('Payment Confirmed!', 'Waiting for driver to confirm...');
+    // The driver completes the ride (and settles commission server-side) after this flag is set
+    const { error } = await supabase.from('rides').update({ rider_confirmed_payment: true }).eq('id', ride.id);
+    if (error) {
+      setRiderConfirmedPayment(false);
+      Alert.alert('Error', 'Could not confirm payment. Please try again.');
+      return;
     }
+    Alert.alert('Payment Confirmed!', 'Waiting for driver to confirm...');
     if (ride.driver_id) {
       const driverToken = await getDriverToken(ride.driver_id);
       if (driverToken) {
