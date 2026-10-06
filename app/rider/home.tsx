@@ -35,7 +35,7 @@
 // $$ LANGUAGE sql STABLE;
 //
 // Recommended hardening of the existing accept_ride() (see app/driver/home.tsx) so a driver
-// whose 20s dispatch window already expired can't still win a race against whoever it was
+// whose 30s dispatch window already expired can't still win a race against whoever it was
 // reassigned to — add this condition to its UPDATE ... WHERE clause:
 //   AND (dispatched_driver_id IS NULL OR dispatched_driver_id = p_driver_id)
 //
@@ -1272,7 +1272,7 @@ export default function RiderHomeScreen() {
       await supabase.from('rides').update({
         dispatched_driver_id: driver.driver_id,
         dispatch_attempt: excludedIds.length + 1,
-        driver_accept_expires_at: new Date(Date.now() + 20000).toISOString(),
+        driver_accept_expires_at: new Date(Date.now() + 30000).toISOString(),
       }).eq('id', rideId);
 
       // Send push notification to this specific driver
@@ -1302,7 +1302,7 @@ export default function RiderHomeScreen() {
           dispatchToNearestDriver(rideId, newExcludedIds);
         }
         dispatchTimeoutRef.current = null;
-      }, 20000);
+      }, 30000); // 30 seconds for the driver to accept
     } catch (e) {
       console.error('Dispatch error:', e);
     }
@@ -1388,7 +1388,7 @@ export default function RiderHomeScreen() {
         pollIntervalRef.current = setInterval(() => pollRideStatus(ride.id), 5000);
 
         // Sequential dispatch owns the "no driver responded" cancellation + alert from
-        // here — dispatchToNearestDriver cascades through drivers on its own 20s timeout
+        // here — dispatchToNearestDriver cascades through drivers on its own 30s timeout
         // and cancels the ride itself once no more candidates are left.
         dispatchToNearestDriver(ride.id, []);
 

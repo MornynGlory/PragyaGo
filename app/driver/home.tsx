@@ -180,7 +180,7 @@ export default function DriverHome() {
   const [rideStatus, setRideStatus] = useState('')
   const [riderInfo, setRiderInfo] = useState<any>(null)
   const [rideRequest, setRideRequest] = useState<any>(null)
-  const [acceptCountdown, setAcceptCountdown] = useState(20)
+  const [acceptCountdown, setAcceptCountdown] = useState(30)
   const [chatUnreadCount, setChatUnreadCount] = useState(0)
   const [showBreakdownModal, setShowBreakdownModal] = useState(false)
   const [breakdownReason, setBreakdownReason] = useState('')
@@ -798,7 +798,7 @@ export default function DriverHome() {
 
   function startAcceptCountdown() {
     if (countdownRef.current) clearInterval(countdownRef.current)
-    setAcceptCountdown(20)
+    setAcceptCountdown(30)
     countdownRef.current = setInterval(() => {
       setAcceptCountdown(prev => {
         if (prev <= 1) {
@@ -850,7 +850,7 @@ export default function DriverHome() {
       }, async (payload) => {
         const ride = payload.new as any
         // Catches a later dispatch attempt reassigned to this driver (e.g. after an
-        // earlier driver's 20s window expired), not just the very first INSERT.
+        // earlier driver's 30s window expired), not just the very first INSERT.
         if (ride.status === 'requested' && !activeRideRef.current) {
           setRideRequest(ride)
           startAcceptCountdown()
