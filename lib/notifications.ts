@@ -15,80 +15,64 @@ Notifications.setNotificationHandler({
 });
 
 export const registerForPushNotifications = async (): Promise<string | null> => {
-  if (Constants.executionEnvironment === 'storeClient') return null;
-
-  if (!Device.isDevice) return null;
-
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('ride-requests', {
-      name: 'Ride Requests',
-      importance: Notifications.AndroidImportance.MAX,
-      sound: 'default',
-      enableVibrate: true,
-      vibrationPattern: [0, 500, 250, 500, 250, 500],
-      lightColor: '#1D9E75',
-      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-      bypassDnd: true,
-      showBadge: true,
-    });
-    await Notifications.setNotificationChannelAsync('ride-updates', {
-      name: 'Ride Updates',
-      importance: Notifications.AndroidImportance.HIGH,
-      sound: 'default',
-    });
-    await Notifications.setNotificationChannelAsync('payments', {
-      name: 'Payments',
-      importance: Notifications.AndroidImportance.HIGH,
-      sound: 'default',
-    });
-    await Notifications.setNotificationChannelAsync('general', {
-      name: 'General',
-      importance: Notifications.AndroidImportance.DEFAULT,
-      sound: 'default',
-    });
-  }
-
-  const existingPermissions = await Notifications.getPermissionsAsync();
-  const existingStatus =
-    typeof existingPermissions === 'object' && existingPermissions !== null
-      ? 'status' in existingPermissions
-        ? existingPermissions.status
-        : 'granted' in existingPermissions && existingPermissions.granted
-        ? 'granted'
-        : 'denied'
-      : existingPermissions;
-  let finalStatus = existingStatus;
-
-  if (existingStatus !== 'granted') {
-    const requestedPermissions = await Notifications.requestPermissionsAsync();
-    finalStatus =
-      typeof requestedPermissions === 'object' && requestedPermissions !== null
-        ? 'status' in requestedPermissions
-          ? requestedPermissions.status
-          : 'granted' in requestedPermissions && requestedPermissions.granted
-          ? 'granted'
-          : 'denied'
-        : requestedPermissions;
-  }
-
-  if (finalStatus !== 'granted') return null;
-
-  const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
-
-  let token: string;
   try {
-    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
-    token = tokenData.data;
-  } catch {
+    if (Constants.executionEnvironment === 'storeClient') return null;
+
+    if (!Device.isDevice) return null;
+
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('ride-requests', {
+        name: 'Ride Requests',
+        importance: Notifications.AndroidImportance.MAX,
+        sound: 'default',
+        enableVibrate: true,
+        vibrationPattern: [0, 500, 250, 500, 250, 500],
+        lightColor: '#1D9E75',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        bypassDnd: true,
+        showBadge: true,
+      });
+      await Notifications.setNotificationChannelAsync('ride-updates', {
+        name: 'Ride Updates',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: 'default',
+      });
+      await Notifications.setNotificationChannelAsync('payments', {
+        name: 'Payments',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: 'default',
+      });
+      await Notifications.setNotificationChannelAsync('general', {
+        name: 'General',
+        importance: Notifications.AndroidImportance.DEFAULT,
+        sound: 'default',
+      });
+    }
+
+    const { status } = await Notifications.getPermissionsAsync();
+    let finalStatus = status;
+
+    if (finalStatus !== 'granted') {
+      const { status: newStatus } = await Notifications.requestPermissionsAsync();
+      finalStatus = newStatus;
+    }
+
+    if (finalStatus !== 'granted') return null;
+
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
+    const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (token && user) {
+      const { error } = await supabase.from('profiles').update({ push_token: token }).eq('id', user.id);
+      if (error) console.error('Push token save error');
+    }
+
+    return token;
+  } catch (e) {
+    console.error('Push notification registration error');
     return null;
   }
-
-  const { data: { user } } = await supabase.auth.getUser();
-  if (user) {
-    await supabase.from('profiles').update({ push_token: token }).eq('id', user.id);
-  }
-
-  return token;
 };
 
 export const sendPushNotification = async (

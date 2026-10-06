@@ -9,13 +9,14 @@ export interface FareResult {
   breakdown: string;
 }
 
-export interface FinalFareResult {
-  finalFare: number;
-  difference: number;
-  increased: boolean;
-}
-
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
+
+const FARE_MULTIPLIER = 4;
+const FARE_MARKUP = 1.85;
+
+// Escape LIKE wildcards so user input is matched literally
+const escapeForLike = (str: string): string =>
+  str.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 
 async function getGoogleDistance(
   pickupLat: number,
@@ -67,19 +68,20 @@ export async function calculateZoneFare(
 
   // STEP 1: Look up base fare from zone_fares table
   if (zoneId && destination.trim()) {
+    const safeDestination = escapeForLike(destination.trim());
     const { data: fareMatch } = await supabase
       .from('zone_fares')
       .select('base_fare, to_location')
       .eq('zone_id', zoneId)
-      .ilike('to_location', `%${destination.trim()}%`)
+      .ilike('to_location', `%${safeDestination}%`)
       .limit(1)
       .single();
 
     if (fareMatch) {
       const baseFare = Math.round(fareMatch.base_fare * 100) / 100;
       // STEP 2: Calculate rider price: baseFare × 4 × 1.85
-      const multipliedFare = Math.round(baseFare * 4 * 100) / 100;
-      const riderFare = Math.round(multipliedFare * 1.85 * 100) / 100;
+      const multipliedFare = Math.round(baseFare * FARE_MULTIPLIER * 100) / 100;
+      const riderFare = Math.round(multipliedFare * FARE_MARKUP * 100) / 100;
       return {
         baseFare,
         multipliedFare,
@@ -93,8 +95,8 @@ export async function calculateZoneFare(
 
   // Fallback: distance-based base fare
   const baseFare = Math.round(expectedDistanceKm * fallbackPerKm * 100) / 100;
-  const multipliedFare = Math.round(baseFare * 4 * 100) / 100;
-  const riderFare = Math.round(multipliedFare * 1.85 * 100) / 100;
+  const multipliedFare = Math.round(baseFare * FARE_MULTIPLIER * 100) / 100;
+  const riderFare = Math.round(multipliedFare * FARE_MARKUP * 100) / 100;
   return {
     baseFare,
     multipliedFare,
@@ -105,23 +107,6 @@ export async function calculateZoneFare(
   };
 }
 
-export function calculateFinalFare(
-  originalFare: number,
-  expectedDistanceKm: number,
-  actualDistanceKm: number
-): FinalFareResult {
-  if (expectedDistanceKm <= 0) {
-    return { finalFare: originalFare, difference: 0, increased: false };
-  }
-  const ratio = Math.max(0.5, Math.min(2.0, actualDistanceKm / expectedDistanceKm));
-  const finalFare = Math.round(originalFare * ratio * 100) / 100;
-  return {
-    finalFare,
-    difference: Math.round((finalFare - originalFare) * 100) / 100,
-    increased: finalFare > originalFare,
-  };
-}
-
 export async function getFareSuggestions(
   zoneId: string | string[] | null,
   query: string
@@ -129,15 +114,16 @@ export async function getFareSuggestions(
   if (!zoneId || !query.trim()) return [];
   const ids = Array.isArray(zoneId) ? zoneId : [zoneId];
   if (ids.length === 0) return [];
+  const safeQuery = escapeForLike(query.trim());
   const { data } = await supabase
     .from('zone_fares')
     .select('to_location, base_fare')
     .in('zone_id', ids)
-    .ilike('to_location', `%${query.trim()}%`)
+    .ilike('to_location', `%${safeQuery}%`)
     .limit(8);
   return (data ?? []).map((row: { to_location: string; base_fare: number }) => ({
     to_location: row.to_location,
     base_fare: row.base_fare,
-    rider_fare: Math.round(row.base_fare * 4 * 1.85 * 100) / 100,
+    rider_fare: Math.round(row.base_fare * FARE_MULTIPLIER * FARE_MARKUP * 100) / 100,
   }));
 }
