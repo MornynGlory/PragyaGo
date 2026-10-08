@@ -7,7 +7,7 @@
         "projectId": "37f04c7b-e897-46db-9d14-0afed27a55f4"
       }
     },
-    "version": "1.2.0",
+    "version": "1.2.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "pragyago",
@@ -25,7 +25,12 @@
         "backgroundColor": "#1D9E75"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.mornynglory.pragyago"
+      "package": "com.mornynglory.pragyago",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyCVOaCgGucjGUokQilWaK93ZZgT41h821k"
+        }
+      }
     },
     "web": {
       "output": "static",

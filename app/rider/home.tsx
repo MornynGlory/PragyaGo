@@ -1,69 +1,11 @@
-// Run in Supabase SQL:
-// ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by TEXT;
-//
-// --- Sequential driver dispatch (Feature 1) ---
-// ALTER TABLE rides ADD COLUMN IF NOT EXISTS dispatched_driver_id UUID REFERENCES drivers(id);
-// ALTER TABLE rides ADD COLUMN IF NOT EXISTS dispatch_attempt INT DEFAULT 0;
-// ALTER TABLE rides ADD COLUMN IF NOT EXISTS driver_accept_expires_at TIMESTAMPTZ;
-//
-// CREATE OR REPLACE FUNCTION find_next_driver(
-//   p_pickup_lat NUMERIC,
-//   p_pickup_lng NUMERIC,
-//   p_zone_id UUID,
-//   p_excluded_driver_ids UUID[] DEFAULT NULL
-// ) RETURNS TABLE(driver_id UUID, profile_id UUID, distance_km NUMERIC) AS $$
-//   SELECT
-//     d.id AS driver_id,
-//     d.profile_id,
-//     (
-//       6371 * acos(
-//         LEAST(1, GREATEST(-1,
-//           cos(radians(p_pickup_lat)) * cos(radians(d.current_lat)) *
-//           cos(radians(d.current_lng) - radians(p_pickup_lng)) +
-//           sin(radians(p_pickup_lat)) * sin(radians(d.current_lat))
-//         ))
-//       )
-//     ) AS distance_km
-//   FROM drivers d
-//   WHERE d.is_online = true
-//     AND d.current_lat IS NOT NULL
-//     AND d.current_lng IS NOT NULL
-//     AND (p_zone_id IS NULL OR d.zone_id = p_zone_id)
-//     AND (p_excluded_driver_ids IS NULL OR NOT (d.id = ANY(p_excluded_driver_ids)))
-//   ORDER BY distance_km ASC
-//   LIMIT 1;
-// $$ LANGUAGE sql STABLE;
-//
-// Recommended hardening of the existing accept_ride() (see app/driver/home.tsx) so a driver
-// whose 30s dispatch window already expired can't still win a race against whoever it was
-// reassigned to — add this condition to its UPDATE ... WHERE clause:
-//   AND (dispatched_driver_id IS NULL OR dispatched_driver_id = p_driver_id)
-//
-// --- Emergency SOS (Feature 3) ---
-// CREATE TABLE IF NOT EXISTS sos_alerts (
-//   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-//   ride_id UUID REFERENCES rides(id) ON DELETE SET NULL,
-//   user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-//   user_role TEXT NOT NULL,
-//   lat NUMERIC(10,6) NOT NULL,
-//   lng NUMERIC(10,6) NOT NULL,
-//   triggered_at TIMESTAMPTZ NOT NULL DEFAULT now()
-// );
-// ALTER TABLE rides ADD COLUMN IF NOT EXISTS sos_triggered BOOLEAN DEFAULT false;
-// ALTER TABLE rides ADD COLUMN IF NOT EXISTS sos_triggered_at TIMESTAMPTZ;
-// ALTER TABLE rides ADD COLUMN IF NOT EXISTS sos_location_lat NUMERIC(10,6);
-// ALTER TABLE rides ADD COLUMN IF NOT EXISTS sos_location_lng NUMERIC(10,6);
-// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS emergency_contact_name TEXT;
-// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS emergency_contact_phone TEXT;
-
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { applyDiscount, DiscountResult, recordDiscountUse } from '@/lib/discounts';
-import { useTheme } from '@/lib/theme';
 import { calculateZoneFare, FareResult, getFareSuggestions } from '@/lib/fares';
 import { getDriverToken, sendPushNotification } from '@/lib/notifications';
 import { supabase } from '@/lib/supabase';
+import { useTheme } from '@/lib/theme';
 import { useUnreadMessages } from '@/lib/useUnreadMessages';
 import { Feather } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -224,6 +166,7 @@ export default function RiderHomeScreen() {
   const rideSubscription = useRef<any>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const dispatchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isDispatchingRef = useRef(false);
   const [dispatchAttempt, setDispatchAttempt] = useState(0);
   const driverLocationSubscription = useRef<any>(null);
   const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
@@ -387,6 +330,8 @@ export default function RiderHomeScreen() {
               if (rideSubscription.current) { supabase.removeChannel(rideSubscription.current); rideSubscription.current = null; }
               if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
               if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
+              if (dispatchTimeoutRef.current) { clearTimeout(dispatchTimeoutRef.current); dispatchTimeoutRef.current = null; }
+              isDispatchingRef.current = false;
               stopDriverTracking();
               if (ride.status === 'cancelled') Alert.alert('Ride Cancelled', 'Your ride was cancelled.');
             } else {
@@ -428,6 +373,7 @@ export default function RiderHomeScreen() {
       if (stopDebounceRef.current) clearTimeout(stopDebounceRef.current);
       if (pickupDebounceRef.current) clearTimeout(pickupDebounceRef.current);
       if (dispatchTimeoutRef.current) clearTimeout(dispatchTimeoutRef.current);
+      isDispatchingRef.current = false;
       locationWatcherRef.current?.remove();
     };
   }, []);
@@ -921,6 +867,7 @@ export default function RiderHomeScreen() {
                 clearTimeout(dispatchTimeoutRef.current);
                 dispatchTimeoutRef.current = null;
               }
+              isDispatchingRef.current = false;
               setDispatchAttempt(0);
               Alert.alert('Driver Found!', 'Your Pragya driver is on the way!');
               await fetchDriverInfo(ride.driver_id);
@@ -998,6 +945,8 @@ export default function RiderHomeScreen() {
               if (rideSubscription.current) supabase.removeChannel(rideSubscription.current);
               if (driverLocationSubscription.current) { supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
               if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
+              if (dispatchTimeoutRef.current) { clearTimeout(dispatchTimeoutRef.current); dispatchTimeoutRef.current = null; }
+              isDispatchingRef.current = false;
               stopDriverTracking();
             }
           });
@@ -1238,6 +1187,11 @@ export default function RiderHomeScreen() {
   }
 
   const dispatchToNearestDriver = async (rideId: string, excludedIds: string[] = []) => {
+    if (isDispatchingRef.current) {
+      console.log('Dispatch already in progress, skipping duplicate call');
+      return;
+    }
+    isDispatchingRef.current = true;
     try {
       // Re-fetch pickup coords/zone from the ride row itself rather than closing over
       // component state — this function recurses via setTimeout, and a closure captured
@@ -1257,8 +1211,27 @@ export default function RiderHomeScreen() {
       });
 
       if (rpcError || !nearestDriver || nearestDriver.length === 0) {
-        // No more drivers available
-        await supabase.from('rides').update({ status: 'cancelled', cancellation_reason: 'No drivers available' }).eq('id', rideId);
+        // No more drivers available — scope the cancellation so we never trample a ride
+        // that was already accepted, or that another dispatcher re-claimed, between our
+        // find_next_driver call and now. If excludedIds is non-empty we expect to still
+        // be the active dispatcher (dispatched_driver_id = the last one we tried); if
+        // empty, nobody should have dispatched yet.
+        let cancelQuery = supabase
+          .from('rides')
+          .update({ status: 'cancelled', cancellation_reason: 'No drivers available' })
+          .eq('id', rideId)
+          .eq('status', 'requested');
+        if (excludedIds.length > 0) {
+          cancelQuery = cancelQuery.eq('dispatched_driver_id', excludedIds[excludedIds.length - 1]);
+        } else {
+          cancelQuery = cancelQuery.is('dispatched_driver_id', null);
+        }
+        const { data: cancelled } = await cancelQuery.select('id');
+        if (!cancelled || cancelled.length === 0) {
+          // Someone else (a parallel dispatch, or the driver accepting) already changed
+          // state under us — stand down and leave their result in place.
+          return;
+        }
         setCurrentRide(null);
         setRideStatus('');
         if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
@@ -1268,12 +1241,33 @@ export default function RiderHomeScreen() {
 
       const driver = nearestDriver[0];
 
-      // Update ride with dispatched driver info
-      await supabase.from('rides').update({
-        dispatched_driver_id: driver.driver_id,
-        dispatch_attempt: excludedIds.length + 1,
-        driver_accept_expires_at: new Date(Date.now() + 30000).toISOString(),
-      }).eq('id', rideId);
+      // Conditional dispatch write — if another invocation beat us to it (ride already
+      // dispatched to a different driver, or already accepted/cancelled), bail. This
+      // backstops the in-memory isDispatchingRef flag, which is only held for the few
+      // hundred ms the function body is running, not for the full 60-second window.
+      let dispatchQuery = supabase
+        .from('rides')
+        .update({
+          dispatched_driver_id: driver.driver_id,
+          dispatch_attempt: excludedIds.length + 1,
+          driver_accept_expires_at: new Date(Date.now() + 60000).toISOString(),
+        })
+        .eq('id', rideId)
+        .eq('status', 'requested');
+      if (excludedIds.length > 0) {
+        // Retry — expect the previous driver (last excluded) still owns the row.
+        dispatchQuery = dispatchQuery.eq('dispatched_driver_id', excludedIds[excludedIds.length - 1]);
+      } else {
+        // First attempt — nobody should have dispatched yet.
+        dispatchQuery = dispatchQuery.is('dispatched_driver_id', null);
+      }
+      const { data: dispatchResult } = await dispatchQuery.select('id');
+      if (!dispatchResult || dispatchResult.length === 0) {
+        // Another dispatch already claimed this ride — stand down and don't schedule
+        // our own 60-second timeout (that would otherwise fire later and start another
+        // dispatch cascade on top of theirs).
+        return;
+      }
 
       // Send push notification to this specific driver
       const driverToken = await getDriverToken(driver.driver_id);
@@ -1302,9 +1296,11 @@ export default function RiderHomeScreen() {
           dispatchToNearestDriver(rideId, newExcludedIds);
         }
         dispatchTimeoutRef.current = null;
-      }, 30000); // 30 seconds for the driver to accept
+      }, 60000); // 60 seconds for the driver to accept
     } catch (e) {
       console.error('Dispatch error:', e);
+    } finally {
+      isDispatchingRef.current = false;
     }
   };
 
@@ -1447,6 +1443,8 @@ export default function RiderHomeScreen() {
       if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
       if (driverLocationSubscription.current) { await supabase.removeChannel(driverLocationSubscription.current); driverLocationSubscription.current = null; }
       if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
+      if (dispatchTimeoutRef.current) { clearTimeout(dispatchTimeoutRef.current); dispatchTimeoutRef.current = null; }
+      isDispatchingRef.current = false;
       stopDriverTracking();
       setShowCancelReasonModal(false);
       setCancelReason('');
