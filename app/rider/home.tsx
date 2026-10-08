@@ -167,6 +167,7 @@ export default function RiderHomeScreen() {
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const dispatchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isDispatchingRef = useRef(false);
+  const requestingRef = useRef(false);
   const [dispatchAttempt, setDispatchAttempt] = useState(0);
   const driverLocationSubscription = useRef<any>(null);
   const locationRef = useRef<{ latitude: number; longitude: number } | null>(null);
@@ -1187,11 +1188,13 @@ export default function RiderHomeScreen() {
   }
 
   const dispatchToNearestDriver = async (rideId: string, excludedIds: string[] = []) => {
+    console.log('[DISPATCH] Called with rideId:', rideId, 'excludedIds:', excludedIds.length);
     if (isDispatchingRef.current) {
       console.log('Dispatch already in progress, skipping duplicate call');
       return;
     }
     isDispatchingRef.current = true;
+    console.log('[DISPATCH] Guard passed, proceeding');
     try {
       // Re-fetch pickup coords/zone from the ride row itself rather than closing over
       // component state — this function recurses via setTimeout, and a closure captured
@@ -1209,8 +1212,10 @@ export default function RiderHomeScreen() {
         p_zone_id: rideRow.zone_id,
         p_excluded_driver_ids: excludedIds.length > 0 ? excludedIds : null,
       });
+      console.log('[DISPATCH] find_next_driver result:', nearestDriver?.length, 'error:', rpcError?.message);
 
       if (rpcError || !nearestDriver || nearestDriver.length === 0) {
+        console.log('[DISPATCH] Cancelling ride - no drivers available');
         // No more drivers available — scope the cancellation so we never trample a ride
         // that was already accepted, or that another dispatcher re-claimed, between our
         // find_next_driver call and now. If excludedIds is non-empty we expect to still
@@ -1262,7 +1267,9 @@ export default function RiderHomeScreen() {
         dispatchQuery = dispatchQuery.is('dispatched_driver_id', null);
       }
       const { data: dispatchResult } = await dispatchQuery.select('id');
+      console.log('[DISPATCH] DB update result rows:', dispatchResult?.length ?? 0);
       if (!dispatchResult || dispatchResult.length === 0) {
+        console.log('[DISPATCH] Lost DB race, another dispatcher won, returning');
         // Another dispatch already claimed this ride — stand down and don't schedule
         // our own 60-second timeout (that would otherwise fire later and start another
         // dispatch cascade on top of theirs).
@@ -1281,8 +1288,10 @@ export default function RiderHomeScreen() {
         );
       }
 
-      // Set 20 second timeout - if driver doesn't accept, try next
+      // Set 60 second timeout - if driver doesn't accept, try next
+      console.log('[DISPATCH] Scheduling 60s timeout for driver:', driver.driver_id);
       dispatchTimeoutRef.current = setTimeout(async () => {
+        console.log('[DISPATCH] Timeout fired, checking ride status');
         const { data: currentRideRow } = await supabase
           .from('rides')
           .select('status')
@@ -1305,6 +1314,10 @@ export default function RiderHomeScreen() {
   };
 
   const requestRide = async () => {
+    if (requestingRef.current) return; // synchronous guard — instant, no re-render lag
+    requestingRef.current = true;
+    setRequesting(true);
+    try {
     if (!destination.trim()) { Alert.alert('Enter Destination', 'Please enter your final destination.'); return; }
     if (!location) { Alert.alert('Location Error', 'Could not get your location.'); return; }
     if (!fareEstimate) { Alert.alert('Estimate Fare', 'Please estimate fare first.'); return; }
@@ -1398,6 +1411,10 @@ export default function RiderHomeScreen() {
       Alert.alert('Error', error?.message || 'Could not request ride. Please try again.');
     }
     finally { setRequesting(false); }
+    } finally {
+      requestingRef.current = false;
+      setRequesting(false);
+    }
   };
 
   const handleShareRide = async () => {

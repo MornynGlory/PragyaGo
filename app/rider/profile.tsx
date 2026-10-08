@@ -1,23 +1,3 @@
-// Run in Supabase SQL:
-// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT false;
-// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS deletion_requested_at TIMESTAMPTZ;
-// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS deletion_reason TEXT;
-// CREATE TABLE IF NOT EXISTS account_deletions (
-//   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-//   user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-//   role TEXT NOT NULL,
-//   reason TEXT,
-//   go_cash_balance NUMERIC(10,2) DEFAULT 0,
-//   refund_eligible BOOLEAN DEFAULT false,
-//   refund_amount NUMERIC(10,2) DEFAULT 0,
-//   refund_status TEXT DEFAULT 'not_applicable',
-//   deletion_requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-//   grace_period_ends_at TIMESTAMPTZ NOT NULL,
-//   status TEXT NOT NULL DEFAULT 'pending',
-//   cancelled_at TIMESTAMPTZ,
-//   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-// );
-
 import { supabase } from '@/lib/supabase'
 import { useTheme } from '@/lib/theme'
 import { Feather } from '@expo/vector-icons'

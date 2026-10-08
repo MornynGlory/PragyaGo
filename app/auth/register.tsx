@@ -1,8 +1,3 @@
-// Run in Supabase SQL:
-// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
-// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS terms_version TEXT;
-// ALTER TABLE profiles ADD COLUMN IF NOT EXISTS privacy_accepted_at TIMESTAMPTZ;
-
 import { supabase } from '@/lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';

@@ -1,6 +1,3 @@
-// Run in Supabase SQL:
-// insert into storage.buckets (id, name, public) values ('profile-pictures', 'profile-pictures', true);
-
 import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/theme';
 import { Feather } from '@expo/vector-icons';

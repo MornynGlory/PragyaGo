@@ -1,17 +1,3 @@
-// Run in Supabase SQL:
-// CREATE TABLE IF NOT EXISTS platform_settings (
-//   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-//   minimum_version TEXT NOT NULL DEFAULT '1.0.0',
-//   latest_version TEXT NOT NULL DEFAULT '1.0.0',
-//   force_update BOOLEAN NOT NULL DEFAULT false,
-//   force_update_message TEXT,
-//   soft_update_message TEXT,
-//   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-// );
-// -- This table is read with .single(), so seed exactly one row:
-// INSERT INTO platform_settings (minimum_version, latest_version, force_update_message, soft_update_message)
-// VALUES ('1.0.0', '1.1.5', 'Please update to continue using PragyaGo.', 'A new version is available with improvements and fixes.');
-
 import { Feather } from '@expo/vector-icons'
 import * as Notifications from 'expo-notifications'
 import { Stack, useRouter } from 'expo-router'

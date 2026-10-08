@@ -1,10 +1,3 @@
-// Run in Supabase SQL:
-// ALTER TABLE drivers ADD COLUMN IF NOT EXISTS license_url TEXT;
-// ALTER TABLE drivers ADD COLUMN IF NOT EXISTS insurance_url TEXT;
-// ALTER TABLE drivers ADD COLUMN IF NOT EXISTS roadworthy_url TEXT;
-// ALTER TABLE drivers ADD COLUMN IF NOT EXISTS vehicle_verified BOOLEAN DEFAULT false;
-// ALTER TABLE drivers ADD COLUMN IF NOT EXISTS vehicle_verification_status TEXT DEFAULT 'pending';
-
 import { supabase } from '@/lib/supabase';
 import { Feather } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
