@@ -78,6 +78,7 @@ export default function DriverHome() {
   const activeRideRef = useRef<any>(null)
   const driverIdRef = useRef<string | null>(null)
   const currentUserIdRef = useRef<string | null>(null)
+  const profileIdRef = useRef<string | null>(null)
   const locationIntervalRef = useRef<any>(null)
   const queueChannelRef = useRef<any>(null)
   const lastSentLocationRef = useRef<{ lat: number; lng: number }>({ lat: 0, lng: 0 })
@@ -271,6 +272,7 @@ export default function DriverHome() {
         return
       }
       currentUserIdRef.current = user.id
+      profileIdRef.current = user.id
       const { data: profile } = await supabase
         .from('profiles')
         .select('full_name')
@@ -348,6 +350,7 @@ export default function DriverHome() {
       const user = sessionData?.session?.user
       if (!user) return
       currentUserIdRef.current = user.id
+      profileIdRef.current = user.id
 
       const { data: driver } = await supabase
         .from('drivers')
@@ -945,7 +948,7 @@ export default function DriverHome() {
       const { data, error } = await supabase.rpc('accept_ride', {
         p_ride_id: rideRequest.id,
         p_driver_id: driverIdRef.current,
-        p_profile_id: driverIdRef.current
+        p_profile_id: profileIdRef.current
       })
 
       if (error) {
