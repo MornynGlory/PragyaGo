@@ -954,6 +954,10 @@ export default function DriverHome() {
         p_profile_id: profileIdRef.current
       })
 
+      console.log('[ACCEPT] driverIdRef:', driverIdRef.current)
+      console.log('[ACCEPT] profileIdRef:', profileIdRef.current)
+      console.log('[ACCEPT] RPC result - data:', JSON.stringify(data), 'error:', JSON.stringify(error))
+
       if (error) {
         Alert.alert('Error', 'Could not accept ride. Please try again.')
         setRideRequest(null)
