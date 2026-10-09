@@ -79,6 +79,7 @@ export default function DriverHome() {
   const driverIdRef = useRef<string | null>(null)
   const currentUserIdRef = useRef<string | null>(null)
   const profileIdRef = useRef<string | null>(null)
+  const driverZoneRef = useRef<string | null>(null)
   const locationIntervalRef = useRef<any>(null)
   const queueChannelRef = useRef<any>(null)
   const lastSentLocationRef = useRef<{ lat: number; lng: number }>({ lat: 0, lng: 0 })
@@ -282,11 +283,12 @@ export default function DriverHome() {
 
       const { data: driverRecord } = await supabase
         .from('drivers')
-        .select('id, commission_owed, vehicle_verified, rating')
+        .select('id, commission_owed, vehicle_verified, rating, zone_id')
         .eq('profile_id', user.id)
         .single()
       if (driverRecord) {
         driverIdRef.current = driverRecord.id
+        driverZoneRef.current = driverRecord.zone_id
         if (driverRecord.rating !== null && driverRecord.rating !== undefined) {
           setRating(parseFloat(driverRecord.rating))
         }
@@ -360,6 +362,7 @@ export default function DriverHome() {
 
       if (!driver) return
       driverIdRef.current = driver.id
+      driverZoneRef.current = driver.zone_id
       if (driver.rating !== null && driver.rating !== undefined) {
         setRating(parseFloat(driver.rating))
       }
@@ -748,9 +751,8 @@ export default function DriverHome() {
         table: 'rides',
       }, async (payload) => {
         const ride = payload.new as any
-        // Sequential dispatch (rider/home.tsx's dispatchToNearestDriver) only ever targets
-        // one driver at a time — ignore INSERTs not dispatched to this driver.
-        if (ride.status === 'requested' && !activeRideRef.current && ride.dispatched_driver_id === driverIdRef.current) {
+        if (ride.status !== 'requested') return
+        if (!activeRideRef.current && ride.zone_id === driverZoneRef.current) {
           setRideRequest(ride)
           startAcceptCountdown()
           await sendRideRequestNotification(ride)

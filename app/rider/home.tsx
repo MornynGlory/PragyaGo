@@ -1187,128 +1187,48 @@ export default function RiderHomeScreen() {
     )
   }
 
-  const dispatchToNearestDriver = async (rideId: string, excludedIds: string[] = []) => {
-    console.log('[DISPATCH] Called with rideId:', rideId, 'excludedIds:', excludedIds.length);
-    if (isDispatchingRef.current) {
-      console.log('Dispatch already in progress, skipping duplicate call');
-      return;
-    }
+  const dispatchToNearestDriver = async (rideId: string) => {
+    if (isDispatchingRef.current) return;
     isDispatchingRef.current = true;
-    console.log('[DISPATCH] Guard passed, proceeding');
+
     try {
-      // Re-fetch pickup coords/zone from the ride row itself rather than closing over
-      // component state — this function recurses via setTimeout, and a closure captured
-      // at the first call would go stale across re-renders.
       const { data: rideRow } = await supabase
         .from('rides')
-        .select('pickup_lat, pickup_lng, zone_id, pickup_address, dropoff_address')
+        .select('zone_id, status')
         .eq('id', rideId)
         .single();
-      if (!rideRow) return;
 
-      const { data: nearestDriver, error: rpcError } = await supabase.rpc('find_next_driver', {
-        p_pickup_lat: rideRow.pickup_lat,
-        p_pickup_lng: rideRow.pickup_lng,
-        p_zone_id: rideRow.zone_id,
-        p_excluded_driver_ids: excludedIds.length > 0 ? excludedIds : null,
-      });
-      console.log('[DISPATCH] find_next_driver result:', nearestDriver?.length, 'error:', rpcError?.message);
+      if (!rideRow || rideRow.status !== 'requested') return;
 
-      if (rpcError || !nearestDriver || nearestDriver.length === 0) {
-        console.log('[DISPATCH] Cancelling ride - no drivers available');
-        // No more drivers available — scope the cancellation so we never trample a ride
-        // that was already accepted, or that another dispatcher re-claimed, between our
-        // find_next_driver call and now. If excludedIds is non-empty we expect to still
-        // be the active dispatcher (dispatched_driver_id = the last one we tried); if
-        // empty, nobody should have dispatched yet.
-        let cancelQuery = supabase
-          .from('rides')
-          .update({ status: 'cancelled', cancellation_reason: 'No drivers available' })
-          .eq('id', rideId)
-          .eq('status', 'requested');
-        if (excludedIds.length > 0) {
-          cancelQuery = cancelQuery.eq('dispatched_driver_id', excludedIds[excludedIds.length - 1]);
-        } else {
-          cancelQuery = cancelQuery.is('dispatched_driver_id', null);
-        }
-        const { data: cancelled } = await cancelQuery.select('id');
-        if (!cancelled || cancelled.length === 0) {
-          // Someone else (a parallel dispatch, or the driver accepting) already changed
-          // state under us — stand down and leave their result in place.
-          return;
-        }
-        setCurrentRide(null);
-        setRideStatus('');
-        if (pollIntervalRef.current) { clearInterval(pollIntervalRef.current); pollIntervalRef.current = null; }
-        Alert.alert('No Drivers Available', 'All nearby drivers are busy. Please try again in a few minutes.');
-        return;
-      }
-
-      const driver = nearestDriver[0];
-
-      // Conditional dispatch write — if another invocation beat us to it (ride already
-      // dispatched to a different driver, or already accepted/cancelled), bail. This
-      // backstops the in-memory isDispatchingRef flag, which is only held for the few
-      // hundred ms the function body is running, not for the full 60-second window.
-      let dispatchQuery = supabase
-        .from('rides')
-        .update({
-          dispatched_driver_id: driver.driver_id,
-          dispatch_attempt: excludedIds.length + 1,
-          driver_accept_expires_at: new Date(Date.now() + 60000).toISOString(),
-        })
-        .eq('id', rideId)
-        .eq('status', 'requested');
-      if (excludedIds.length > 0) {
-        // Retry — expect the previous driver (last excluded) still owns the row.
-        dispatchQuery = dispatchQuery.eq('dispatched_driver_id', excludedIds[excludedIds.length - 1]);
-      } else {
-        // First attempt — nobody should have dispatched yet.
-        dispatchQuery = dispatchQuery.is('dispatched_driver_id', null);
-      }
-      const { data: dispatchResult } = await dispatchQuery.select('id');
-      console.log('[DISPATCH] DB update result rows:', dispatchResult?.length ?? 0);
-      if (!dispatchResult || dispatchResult.length === 0) {
-        console.log('[DISPATCH] Lost DB race, another dispatcher won, returning');
-        // Another dispatch already claimed this ride — stand down and don't schedule
-        // our own 60-second timeout (that would otherwise fire later and start another
-        // dispatch cascade on top of theirs).
-        return;
-      }
-
-      // Send push notification to this specific driver
-      const driverToken = await getDriverToken(driver.driver_id);
-      if (driverToken) {
-        await sendPushNotification(
-          driverToken,
-          '🛺 New Ride Request!',
-          `Pickup: ${rideRow.pickup_address}\nTo: ${rideRow.dropoff_address}`,
-          { type: 'ride_request', rideId },
-          'ride-requests'
-        );
-      }
-
-      // Set 60 second timeout - if driver doesn't accept, try next
-      console.log('[DISPATCH] Scheduling 60s timeout for driver:', driver.driver_id);
+      // Broadcast model: all online drivers in the zone see the ride via their
+      // realtime subscription. We just set a 2-minute cancellation backstop.
       dispatchTimeoutRef.current = setTimeout(async () => {
-        console.log('[DISPATCH] Timeout fired, checking ride status');
-        const { data: currentRideRow } = await supabase
+        const { data: check } = await supabase
           .from('rides')
           .select('status')
           .eq('id', rideId)
           .single();
 
-        if (currentRideRow?.status === 'requested') {
-          // Driver didn't accept - try next driver
-          const newExcludedIds = [...excludedIds, driver.driver_id];
-          setDispatchAttempt(prev => prev + 1);
-          dispatchToNearestDriver(rideId, newExcludedIds);
+        if (check?.status === 'requested') {
+          await supabase.from('rides')
+            .update({
+              status: 'cancelled',
+              cancellation_reason: 'No drivers accepted',
+            })
+            .eq('id', rideId)
+            .eq('status', 'requested');
+
+          setCurrentRide(null);
+          setRideStatus('');
+          isDispatchingRef.current = false;
+          Alert.alert(
+            'No Drivers Available',
+            'No drivers accepted your ride. Please try again.'
+          );
         }
-        dispatchTimeoutRef.current = null;
-      }, 60000); // 60 seconds for the driver to accept
+      }, 120000);
     } catch (e) {
-      console.error('Dispatch error:', e);
-    } finally {
+      console.error('Dispatch error');
       isDispatchingRef.current = false;
     }
   };
@@ -1399,7 +1319,7 @@ export default function RiderHomeScreen() {
         // Sequential dispatch owns the "no driver responded" cancellation + alert from
         // here — dispatchToNearestDriver cascades through drivers on its own 30s timeout
         // and cancels the ride itself once no more candidates are left.
-        dispatchToNearestDriver(ride.id, []);
+        dispatchToNearestDriver(ride.id);
 
         if (discountResult?.discount) await recordDiscountUse(discountResult.discount.id);
         Alert.alert('Ride Requested 🛺', stops.length > 0 ? `Finding a driver... ${stops.length} stop(s) added.` : 'Finding a nearby driver...');
