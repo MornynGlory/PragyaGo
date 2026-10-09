@@ -1064,11 +1064,15 @@ export default function DriverHome() {
   async function handleCompleteRide() {
     if (!activeRide) return
 
+    console.log('[COMPLETE] ride id:', activeRide?.id, 'driver id:', driverIdRef.current)
+
     // Commission and earnings are calculated server-side
     const { data, error } = await supabase.rpc('complete_ride_and_deduct_commission', {
       p_ride_id: activeRide.id,
       p_driver_id: driverIdRef.current,
     })
+
+    console.log('[COMPLETE] data:', JSON.stringify(data), 'error:', JSON.stringify(error))
 
     if (error || !data?.success) {
       console.error('Complete ride error')
