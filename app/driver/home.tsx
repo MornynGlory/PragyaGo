@@ -942,6 +942,7 @@ export default function DriverHome() {
   }
 
   const acceptRide = async () => {
+    console.log('[ACCEPT] Function called, rideRequest:', rideRequest?.id)
     if (!rideRequest) return
     if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null }
 
@@ -1557,7 +1558,10 @@ export default function DriverHome() {
 
             <View style={styles.modalActions}>
               <Pressable style={styles.declineButton} onPress={declineRide}><Text>Decline</Text></Pressable>
-              <Pressable style={[styles.acceptButton, { backgroundColor: theme.green }]} onPress={acceptRide}><Text style={{ color: '#fff' }}>Accept</Text></Pressable>
+              <Pressable style={[styles.acceptButton, { backgroundColor: theme.green }]} onPress={() => {
+                console.log('[ACCEPT BUTTON] Tapped!')
+                acceptRide()
+              }}><Text style={{ color: '#fff' }}>Accept</Text></Pressable>
             </View>
           </View>
         </View>
