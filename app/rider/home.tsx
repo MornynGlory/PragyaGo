@@ -1698,9 +1698,45 @@ export default function RiderHomeScreen() {
             shadowOffset: { width: 0, height: -4 },
             shadowOpacity: 0.1,
             shadowRadius: 12,
+            maxHeight: '70%',
           }}
         >
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
+          {['accepted', 'rider_boarding'].includes(rideStatus) ? (
+            <View style={{
+              backgroundColor: rideStatus === 'rider_boarding' ? theme.green : theme.card,
+              borderWidth: rideStatus === 'rider_boarding' ? 0 : 1,
+              borderColor: theme.border,
+              borderRadius: 14,
+              paddingVertical: 14,
+              paddingHorizontal: 16,
+              marginBottom: 12,
+              alignItems: 'center',
+            }}>
+              <Text style={{
+                fontSize: 16,
+                fontWeight: '700',
+                color: rideStatus === 'rider_boarding' ? '#fff' : theme.text,
+              }}>
+                {rideStatus === 'rider_boarding' ? '🛺 Driver has arrived!' : '🛺 Driver is on the way'}
+              </Text>
+            </View>
+          ) : null}
+          {rideStatus === 'requested' && (
+            <TouchableOpacity
+              style={{
+                marginTop: 12,
+                paddingVertical: 12,
+                borderRadius: 10,
+                borderWidth: 1,
+                borderColor: theme.red,
+                alignItems: 'center',
+              }}
+              onPress={handleCancelRide}
+            >
+              <Text style={{ color: theme.red, fontWeight: '600' }}>Cancel Ride</Text>
+            </TouchableOpacity>
+          )}
           {driverInfo && ['accepted', 'rider_boarding', 'in_progress'].includes(rideStatus) ? (
         <View style={styles.driverInlineCard}>
           <View style={styles.driverInlineTopRow}>
@@ -1816,11 +1852,6 @@ export default function RiderHomeScreen() {
             ) : null}
           </View>
           <View style={styles.rideActions}>
-            {rideStatus === 'requested' ? (
-              <TouchableOpacity style={styles.cancelButton} onPress={() => setShowCancelReasonModal(true)}>
-                <Text style={styles.cancelButtonText}>Cancel Ride</Text>
-              </TouchableOpacity>
-            ) : null}
             {driverInfo && (rideStatus === 'accepted' || rideStatus === 'rider_boarding') ? (
               <TouchableOpacity style={styles.viewDriverButton} onPress={() => setShowDriverCard(true)}>
                 <Text style={styles.viewDriverButtonText}>View Driver</Text>

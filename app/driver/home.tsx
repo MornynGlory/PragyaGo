@@ -5,7 +5,6 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  Linking,
   AppStateStatus,
   View,
   Text,
@@ -109,7 +108,6 @@ export default function DriverHome() {
   const [breakdownReason, setBreakdownReason] = useState('')
   const [otherBreakdownReason, setOtherBreakdownReason] = useState('')
   const [reportingBreakdown, setReportingBreakdown] = useState(false)
-  const [sosSending, setSosSending] = useState(false)
   const [distanceToPickup, setDistanceToPickup] = useState<string | null>(null)
   const [etaToPickup, setEtaToPickup] = useState<string | null>(null)
   const distanceIntervalRef = useRef<any>(null)
@@ -813,7 +811,6 @@ export default function DriverHome() {
         if (ride.status === 'completed') {
           setEarnings(prev => prev + (ride.final_fare_ghs || ride.fare_ghs))
           setRidesCount(prev => prev + 1)
-          Alert.alert('Ride Complete!', `GH₵ ${ride.final_fare_ghs || ride.fare_ghs} earned!`)
         }
         if (ride.status === 'cancelled') {
           setRideRequest(null)
@@ -829,116 +826,6 @@ export default function DriverHome() {
       })
       .subscribe()
     driverRideUpdatesChannelRef.current = driverRideChannel
-  }
-
-  const handleSOS = async () => {
-    if (sosSending) return // prevent double tap
-
-    Alert.alert(
-      '🚨 Emergency SOS',
-      'Are you in danger? This will alert PragyaGo and your emergency contact.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Send SOS',
-          style: 'destructive',
-          onPress: async () => {
-            setSosSending(true)
-            try {
-              // Get current location - fall back to last known if it fails
-              let lat = userLat
-              let lng = userLng
-
-              try {
-                const location = await Location.getCurrentPositionAsync({
-                  accuracy: Location.Accuracy.Balanced,
-                })
-                lat = location.coords.latitude
-                lng = location.coords.longitude
-              } catch (e) {
-                console.error('Location error - using last known')
-              }
-
-              if (!lat || !lng) {
-                Alert.alert(
-                  'Location Unavailable',
-                  'Could not get your location. Please call 191 directly.',
-                  [{ text: 'Call 191', onPress: () => Linking.openURL('tel:191') }]
-                )
-                return
-              }
-
-              const { data: { user } } = await supabase.auth.getUser()
-              if (!user) {
-                Alert.alert(
-                  'SOS Failed',
-                  'Could not send SOS alert. Please call emergency services directly.',
-                  [
-                    { text: 'Call Police (191)', onPress: () => Linking.openURL('tel:191') },
-                    { text: 'Call Ambulance (193)', onPress: () => Linking.openURL('tel:193') },
-                  ]
-                )
-                return
-              }
-
-              const rideId = activeRide?.id || null
-
-              // Save SOS alert
-              const { error: sosError } = await supabase
-                .from('sos_alerts')
-                .insert({
-                  ride_id: rideId,
-                  user_id: user.id,
-                  user_role: 'driver',
-                  lat,
-                  lng,
-                  triggered_at: new Date().toISOString(),
-                })
-
-              if (sosError) {
-                Alert.alert(
-                  'SOS Failed',
-                  'Could not send SOS alert. Please call emergency services directly.',
-                  [
-                    { text: 'Call Police (191)', onPress: () => Linking.openURL('tel:191') },
-                    { text: 'Call Ambulance (193)', onPress: () => Linking.openURL('tel:193') },
-                  ]
-                )
-                return
-              }
-
-              // Update ride if active
-              if (rideId) {
-                const { error: rideError } = await supabase.from('rides').update({
-                  sos_triggered: true,
-                  sos_triggered_at: new Date().toISOString(),
-                  sos_location_lat: lat,
-                  sos_location_lng: lng,
-                }).eq('id', rideId)
-                if (rideError) console.error('SOS ride update error')
-              }
-
-              Alert.alert(
-                '🚨 SOS Sent!',
-                `Your emergency alert has been sent to PragyaGo support.\n\nYour location has been recorded.\n\nPlease call Ghana Police: 191\nAmbulance: 193\nFire: 192`,
-                [
-                  { text: 'Call Police (191)', onPress: () => Linking.openURL('tel:191') },
-                  { text: 'OK' },
-                ]
-              )
-            } catch (e) {
-              Alert.alert(
-                'SOS Failed',
-                'Could not send SOS alert. Please call emergency services directly.',
-                [{ text: 'Call 191', onPress: () => Linking.openURL('tel:191') }]
-              )
-            } finally {
-              setSosSending(false)
-            }
-          },
-        },
-      ]
-    )
   }
 
   const acceptRide = async () => {
@@ -1238,28 +1125,6 @@ export default function DriverHome() {
       </SafeAreaView>
 
       <View style={styles.mapContainer}>
-        {activeRide ? (
-          <TouchableOpacity
-            onPress={handleSOS}
-            style={{
-              position: 'absolute',
-              top: insets.top + 16,
-              right: 16,
-              width: 52, height: 52,
-              borderRadius: 26,
-              backgroundColor: theme.red,
-              justifyContent: 'center',
-              alignItems: 'center',
-              elevation: 8,
-              shadowColor: theme.red,
-              shadowOpacity: 0.5,
-              shadowRadius: 8,
-              zIndex: 100,
-            }}
-          >
-            <Text style={{ color: 'white', fontSize: 11, fontWeight: '900' }}>SOS</Text>
-          </TouchableOpacity>
-        ) : null}
         <MapView
           ref={mapRef}
           style={styles.map}
