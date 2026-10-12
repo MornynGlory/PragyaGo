@@ -14,6 +14,8 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  Linking,
+  Platform,
 } from 'react-native'
 import { useFocusEffect, useRouter } from 'expo-router'
 import * as Location from 'expo-location'
@@ -396,7 +398,7 @@ export default function DriverHome() {
     if (rideStatus === 'accepted') return 'Heading to Pickup'
     if (rideStatus === 'rider_boarding') return 'Waiting for Rider to Board'
     if (rideStatus === 'in_progress') return 'Ride in Progress'
-    if (rideStatus === 'arrived_destination') return 'Arrived at Destination'
+    if (rideStatus === 'arrived_destination') return 'At Destination'
     if (rideStatus === 'payment_pending') return 'Confirm Payment'
     return 'Active Ride'
   }
@@ -1058,7 +1060,7 @@ export default function DriverHome() {
     }
     if (rideStatus === 'arrived_destination' || rideStatus === 'payment_pending') {
       if (activeRide?.rider_confirmed_payment) {
-        return { label: 'Payment Confirmed', color: theme.green, action: handleCompleteRide }
+        return { label: 'Confirm Payment Received', color: theme.green, action: handleCompleteRide }
       }
       return {
         label: 'Waiting for Payment...',
@@ -1349,6 +1351,34 @@ export default function DriverHome() {
                 <Feather name="check-circle" size={20} color={theme.green} />
                 <Text style={{ color: theme.green, fontWeight: '700', fontSize: 15 }}>Payment Confirmed!</Text>
               </View>
+            ) : null}
+
+            {(rideStatus === 'accepted' || rideStatus === 'in_progress') && activeRide ? (
+              <TouchableOpacity
+                onPress={() => {
+                  const lat = rideStatus === 'in_progress' ? activeRide.dropoff_lat : activeRide.pickup_lat
+                  const lng = rideStatus === 'in_progress' ? activeRide.dropoff_lng : activeRide.pickup_lng
+                  const url = Platform.OS === 'ios'
+                    ? `maps:?daddr=${lat},${lng}`
+                    : `google.navigation:q=${lat},${lng}`
+                  Linking.openURL(url)
+                }}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  backgroundColor: theme.blue,
+                  borderRadius: 12,
+                  paddingVertical: 12,
+                  marginBottom: 8,
+                }}
+              >
+                <Feather name="navigation" size={18} color="white" />
+                <Text style={{ color: 'white', fontWeight: '700', fontSize: 15 }}>
+                  {rideStatus === 'in_progress' ? 'Navigate to Destination' : 'Navigate to Pickup'}
+                </Text>
+              </TouchableOpacity>
             ) : null}
 
             {actionButton ? (

@@ -1702,26 +1702,6 @@ export default function RiderHomeScreen() {
           }}
         >
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
-          {['accepted', 'rider_boarding'].includes(rideStatus) ? (
-            <View style={{
-              backgroundColor: rideStatus === 'rider_boarding' ? theme.green : theme.card,
-              borderWidth: rideStatus === 'rider_boarding' ? 0 : 1,
-              borderColor: theme.border,
-              borderRadius: 14,
-              paddingVertical: 14,
-              paddingHorizontal: 16,
-              marginBottom: 12,
-              alignItems: 'center',
-            }}>
-              <Text style={{
-                fontSize: 16,
-                fontWeight: '700',
-                color: rideStatus === 'rider_boarding' ? '#fff' : theme.text,
-              }}>
-                {rideStatus === 'rider_boarding' ? '🛺 Driver has arrived!' : '🛺 Driver is on the way'}
-              </Text>
-            </View>
-          ) : null}
           {rideStatus === 'requested' && (
             <TouchableOpacity
               style={{
@@ -1797,8 +1777,7 @@ export default function RiderHomeScreen() {
       {currentRide && rideStatus === 'rider_boarding' ? (
         <View style={styles.boardingPanel}>
           <Feather name="check-circle" size={32} color={theme.green} />
-          <Text style={styles.boardingTitle}>Your driver has arrived!</Text>
-          <Text style={styles.boardingSubtitle}>Confirm once you're on board to start your ride.</Text>
+          <Text style={styles.boardingTitle}>Your driver is waiting outside</Text>
           {hasBoarded || currentRide.rider_confirmed_boarding ? (
             <Text style={styles.boardingWaitingText}>Waiting for driver to start the ride...</Text>
           ) : (
@@ -1834,69 +1813,62 @@ export default function RiderHomeScreen() {
         </View>
       ) : null}
 
-        <View style={styles.rideStatusBanner}>
-          <Text style={styles.rideStatusText}>{getRideStatusLabel()}</Text>
-          {rideStatus === 'requested' ? (
-            <Text style={styles.dispatchAttemptText}>
-              {dispatchAttempt > 0 ? `Trying another driver... (${dispatchAttempt})` : 'Finding your driver...'}
-            </Text>
-          ) : null}
-          <Text style={styles.rideStatusSub}>To: {currentRide.dropoff_address}</Text>
-          {(currentRide.stops?.length ?? 0) > 0 ? (
-            <Text style={styles.rideStatusStops}>{`Stops: ${currentRide.stops.map((s: any) => s.address).join(' → ')}`}</Text>
-          ) : null}
-          <View style={styles.fareRow}>
-            <Text style={styles.rideStatusFare}>GH₵ {displayFare}</Text>
-            {!!finalFare && finalFare !== currentRide.fare_ghs ? (
-              <Text style={styles.originalFare}>(est. GH₵ {currentRide.fare_ghs})</Text>
+        {!['arrived_destination', 'payment_pending', 'rider_boarding'].includes(rideStatus) ? (
+          <View style={styles.rideStatusBanner}>
+            {rideStatus === 'in_progress' ? (
+              <>
+                <Text style={styles.rideStatusSub}>To: {currentRide.dropoff_address}</Text>
+                {(currentRide.stops?.length ?? 0) > 0 ? (
+                  <Text style={styles.rideStatusStops}>{`Stops: ${currentRide.stops.map((s: any) => s.address).join(' → ')}`}</Text>
+                ) : null}
+              </>
             ) : null}
-          </View>
-          <View style={styles.rideActions}>
-            {driverInfo && (rideStatus === 'accepted' || rideStatus === 'rider_boarding') ? (
-              <TouchableOpacity style={styles.viewDriverButton} onPress={() => setShowDriverCard(true)}>
-                <Text style={styles.viewDriverButtonText}>View Driver</Text>
+
+            {rideStatus === 'requested' ? (
+              <View style={styles.fareRow}>
+                <Text style={styles.rideStatusFare}>GH₵ {displayFare}</Text>
+              </View>
+            ) : null}
+
+            {driverInfo && (rideStatus === 'accepted' || rideStatus === 'in_progress') ? (
+              <TouchableOpacity
+                onPress={handleShareRide}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  paddingVertical: 10,
+                  borderWidth: 1,
+                  borderColor: theme.border,
+                  borderRadius: 10,
+                  marginTop: 8,
+                }}
+              >
+                <Feather name="share-2" size={16} color={theme.textSecondary} />
+                <Text style={{ color: theme.textSecondary, fontSize: 14 }}>Share Ride</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {rideStatus === 'accepted' ? (
+              <TouchableOpacity
+                onPress={handleCancelRide}
+                style={{
+                  borderWidth: 1,
+                  borderColor: theme.red,
+                  borderRadius: 12,
+                  paddingVertical: 12,
+                  alignItems: 'center',
+                  marginTop: 8,
+                }}
+              >
+                <Text style={{ color: theme.red, fontSize: 15, fontWeight: '600' }}>
+                  Cancel Ride
+                </Text>
               </TouchableOpacity>
             ) : null}
           </View>
-
-          {driverInfo ? (
-            <TouchableOpacity
-              onPress={handleShareRide}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                paddingVertical: 10,
-                borderWidth: 1,
-                borderColor: theme.border,
-                borderRadius: 10,
-                marginTop: 8,
-              }}
-            >
-              <Feather name="share-2" size={16} color={theme.textSecondary} />
-              <Text style={{ color: theme.textSecondary, fontSize: 14 }}>Share Ride</Text>
-            </TouchableOpacity>
-          ) : null}
-
-          {rideStatus === 'accepted' || rideStatus === 'rider_boarding' ? (
-            <TouchableOpacity
-              onPress={handleCancelRide}
-              style={{
-                borderWidth: 1,
-                borderColor: theme.red,
-                borderRadius: 12,
-                paddingVertical: 12,
-                alignItems: 'center',
-                marginTop: 8,
-              }}
-            >
-              <Text style={{ color: theme.red, fontSize: 15, fontWeight: '600' }}>
-                Cancel Ride
-              </Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
+        ) : null}
           </ScrollView>
         </View>
       ) : null}
