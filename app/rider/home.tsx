@@ -1068,8 +1068,25 @@ export default function RiderHomeScreen() {
         return;
       }
 
-      Alert.alert('Payment Confirmed!', 'Go Cash payment processed. Waiting for driver to verify...');
       setRiderConfirmedPayment(true);
+      Alert.alert(
+        '✅ Payment Sent!',
+        `GH₵ ${fareAmount} has been deducted from your Go Cash wallet and sent to your driver.`,
+        [{ text: 'OK' }]
+      );
+
+      if (ride.driver_id) {
+        const driverToken = await getDriverToken(ride.driver_id);
+        if (driverToken) {
+          await sendPushNotification(
+            driverToken,
+            '💰 Go Cash Payment Received!',
+            `GH₵ ${fareAmount} has been sent from rider's Go Cash wallet.`,
+            { type: 'payment_confirmed', rideId: ride.id },
+            'ride-updates'
+          );
+        }
+      }
       return;
     }
 
@@ -1520,7 +1537,7 @@ export default function RiderHomeScreen() {
         {currentRide && eta && ['accepted', 'rider_boarding', 'in_progress'].includes(rideStatus) ? (
           <View style={{
             position: 'absolute',
-            top: 64,
+            top: insets.top + 60,
             left: 16,
             right: 16,
             zIndex: 15,
@@ -1587,7 +1604,7 @@ export default function RiderHomeScreen() {
             onPress={handleSOS}
             style={{
               position: 'absolute',
-              top: insets.top + 12,
+              top: insets.top + 70,
               left: 16,
               width: 52, height: 52,
               borderRadius: 26,
@@ -1892,15 +1909,16 @@ export default function RiderHomeScreen() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 6,
-                  paddingVertical: 10,
+                  paddingVertical: 12,
+                  backgroundColor: theme.card,
+                  borderRadius: 10,
                   borderWidth: 1,
                   borderColor: theme.border,
-                  borderRadius: 10,
                   marginTop: 8,
                 }}
               >
-                <Feather name="share-2" size={16} color={theme.textSecondary} />
-                <Text style={{ color: theme.textSecondary, fontSize: 14 }}>Share Ride</Text>
+                <Feather name="share-2" size={16} color={theme.green} />
+                <Text style={{ color: theme.green, fontSize: 14, fontWeight: '600' }}>Share Ride</Text>
               </TouchableOpacity>
             ) : null}
 

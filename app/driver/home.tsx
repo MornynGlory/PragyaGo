@@ -81,6 +81,7 @@ export default function DriverHome() {
   const currentUserIdRef = useRef<string | null>(null)
   const profileIdRef = useRef<string | null>(null)
   const driverZoneRef = useRef<string | null>(null)
+  const reminderShownRef = useRef(false)
   const locationIntervalRef = useRef<any>(null)
   const queueChannelRef = useRef<any>(null)
   const lastSentLocationRef = useRef<{ lat: number; lng: number }>({ lat: 0, lng: 0 })
@@ -803,6 +804,7 @@ export default function DriverHome() {
         // on payload.old, which Supabase only populates fully when REPLICA IDENTITY FULL is set.
         const justBoarded = ride.rider_confirmed_boarding && !activeRideRef.current?.rider_confirmed_boarding
         const justAccepted = ride.status === 'accepted' && activeRideRef.current?.status !== 'accepted'
+        const justStarted = ride.status === 'in_progress' && activeRideRef.current?.status !== 'in_progress'
         // Keep local state in lockstep with the row so handlers never act on a stale ride.
         setActiveRide(ride)
         setRideStatus(ride.status)
@@ -815,8 +817,17 @@ export default function DriverHome() {
             console.error('Could not open navigation')
           })
         }
+        if (justStarted) {
+          const navUrl = Platform.OS === 'ios'
+            ? `maps:?daddr=${ride.dropoff_lat},${ride.dropoff_lng}`
+            : `google.navigation:q=${ride.dropoff_lat},${ride.dropoff_lng}`
+          Linking.openURL(navUrl).catch(() => {
+            console.error('Could not open navigation')
+          })
+        }
 
-        if (justBoarded) {
+        if (justBoarded && !reminderShownRef.current) {
+          reminderShownRef.current = true
           Alert.alert('Rider has boarded!', 'You can now start the ride.')
         }
 
@@ -834,6 +845,7 @@ export default function DriverHome() {
         if (ride.status === 'completed' || ride.status === 'cancelled') {
           setActiveRide(null)
           setRideStatus('')
+          reminderShownRef.current = false
         }
       })
       .subscribe()
@@ -1271,38 +1283,44 @@ export default function DriverHome() {
           </View>
         ) : (
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
+            {rideStatus === 'accepted' ? (
+              <View style={{ padding: 16 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                  <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: theme.green, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                    <Text style={{ color: 'white', fontSize: 18, fontWeight: '700' }}>
+                      {riderInfo?.full_name?.charAt(0) || '?'}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, fontWeight: '700', color: theme.text }}>{riderInfo?.full_name || 'Rider'}</Text>
+                    <Text style={{ fontSize: 13, color: theme.textSecondary }} numberOfLines={1}>{activeRide?.pickup_address}</Text>
+                  </View>
+                  {distanceToPickup ? (
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={{ fontSize: 18, fontWeight: '800', color: theme.green }}>{distanceToPickup}</Text>
+                      <Text style={{ fontSize: 12, color: theme.textSecondary }}>{etaToPickup}</Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={{ backgroundColor: theme.greenLight, borderRadius: 10, padding: 12, alignItems: 'center', marginBottom: 12 }}>
+                  <Text style={{ fontSize: 22, fontWeight: '900', color: theme.green }}>GH₵ {activeRide?.fare_ghs}</Text>
+                  <Text style={{ fontSize: 12, color: theme.textSecondary }}>{activeRide?.payment_method === 'cash' ? '💵 Cash' : '📱 Go Cash'}</Text>
+                </View>
+
+                <TouchableOpacity
+                  style={{ backgroundColor: theme.green, borderRadius: 14, paddingVertical: 16, alignItems: 'center' }}
+                  onPress={() => handleArrivedAtPickup()}
+                >
+                  <Text style={{ color: 'white', fontSize: 16, fontWeight: '700' }}>I've Arrived at Pickup</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+            <>
             <View style={styles.rowBetween}>
               <Text style={[styles.rideStatus, { color: theme.text }]}>{getStatusLabel()}</Text>
               <View style={styles.fareBadge}><Text style={{ color: '#fff' }}>GH₵ {activeRide.fare ?? '0.00'}</Text></View>
             </View>
-
-            {rideStatus === 'accepted' ? (
-              <View style={{
-                backgroundColor: theme.greenLight,
-                borderRadius: 12,
-                padding: 12,
-                marginBottom: 12,
-                flexDirection: 'row',
-                justifyContent: 'space-around',
-                alignItems: 'center',
-              }}>
-                <View style={{ alignItems: 'center' }}>
-                  <Feather name="navigation" size={20} color={theme.green} />
-                  <Text style={{ color: theme.green, fontSize: 18, fontWeight: '800', marginTop: 4 }}>
-                    {distanceToPickup || '--'}
-                  </Text>
-                  <Text style={{ color: theme.textSecondary, fontSize: 12 }}>Distance</Text>
-                </View>
-                <View style={{ width: 1, height: 40, backgroundColor: theme.border }} />
-                <View style={{ alignItems: 'center' }}>
-                  <Feather name="clock" size={20} color={theme.green} />
-                  <Text style={{ color: theme.green, fontSize: 18, fontWeight: '800', marginTop: 4 }}>
-                    {etaToPickup || '--'}
-                  </Text>
-                  <Text style={{ color: theme.textSecondary, fontSize: 12 }}>ETA</Text>
-                </View>
-              </View>
-            ) : null}
 
             {riderInfo && ['accepted', 'rider_boarding', 'in_progress', 'arrived_destination', 'payment_pending'].includes(rideStatus) ? (
               <View style={[styles.riderInfoRow, { borderColor: theme.border }]}>
@@ -1357,38 +1375,27 @@ export default function DriverHome() {
             </View>
 
             {(rideStatus === 'arrived_destination' || rideStatus === 'payment_pending') && activeRide?.rider_confirmed_payment ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                <Feather name="check-circle" size={20} color={theme.green} />
-                <Text style={{ color: theme.green, fontWeight: '700', fontSize: 15 }}>Payment Confirmed!</Text>
-              </View>
-            ) : null}
-
-            {(rideStatus === 'accepted' || rideStatus === 'in_progress') && activeRide ? (
-              <TouchableOpacity
-                onPress={() => {
-                  const lat = rideStatus === 'in_progress' ? activeRide.dropoff_lat : activeRide.pickup_lat
-                  const lng = rideStatus === 'in_progress' ? activeRide.dropoff_lng : activeRide.pickup_lng
-                  const url = Platform.OS === 'ios'
-                    ? `maps:?daddr=${lat},${lng}`
-                    : `google.navigation:q=${lat},${lng}`
-                  Linking.openURL(url)
-                }}
-                style={{
-                  flexDirection: 'row',
+              activeRide?.payment_method === 'go_cash' ? (
+                <View style={{
+                  backgroundColor: '#D1FAE5',
+                  borderRadius: 10,
+                  padding: 12,
+                  marginBottom: 12,
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                  backgroundColor: theme.blue,
-                  borderRadius: 12,
-                  paddingVertical: 12,
-                  marginBottom: 8,
-                }}
-              >
-                <Feather name="navigation" size={18} color="white" />
-                <Text style={{ color: 'white', fontWeight: '700', fontSize: 15 }}>
-                  {rideStatus === 'in_progress' ? 'Navigate to Destination' : 'Navigate to Pickup'}
-                </Text>
-              </TouchableOpacity>
+                }}>
+                  <Text style={{ color: '#065F46', fontWeight: '700', fontSize: 15 }}>
+                    ✅ Go Cash Payment Received
+                  </Text>
+                  <Text style={{ color: '#065F46', fontSize: 13, marginTop: 4 }}>
+                    GH₵ {activeRide?.fare_ghs} deducted from rider's wallet
+                  </Text>
+                </View>
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <Feather name="check-circle" size={20} color={theme.green} />
+                  <Text style={{ color: theme.green, fontWeight: '700', fontSize: 15 }}>Payment Confirmed!</Text>
+                </View>
+              )
             ) : null}
 
             {actionButton ? (
@@ -1419,6 +1426,8 @@ export default function DriverHome() {
               >
                 <Text style={{ color: '#d9534f' }}>Report Breakdown</Text>
               </TouchableOpacity>
+            )}
+            </>
             )}
           </ScrollView>
         )}
