@@ -802,9 +802,19 @@ export default function DriverHome() {
         // effect), so this reliably catches the false->true transition without depending
         // on payload.old, which Supabase only populates fully when REPLICA IDENTITY FULL is set.
         const justBoarded = ride.rider_confirmed_boarding && !activeRideRef.current?.rider_confirmed_boarding
+        const justAccepted = ride.status === 'accepted' && activeRideRef.current?.status !== 'accepted'
         // Keep local state in lockstep with the row so handlers never act on a stale ride.
         setActiveRide(ride)
         setRideStatus(ride.status)
+
+        if (justAccepted) {
+          const navUrl = Platform.OS === 'ios'
+            ? `maps:?daddr=${ride.pickup_lat},${ride.pickup_lng}`
+            : `google.navigation:q=${ride.pickup_lat},${ride.pickup_lng}`
+          Linking.openURL(navUrl).catch(() => {
+            console.error('Could not open navigation')
+          })
+        }
 
         if (justBoarded) {
           Alert.alert('Rider has boarded!', 'You can now start the ride.')
@@ -1460,7 +1470,7 @@ export default function DriverHome() {
             </View>
 
             <View style={styles.modalActions}>
-              <Pressable style={styles.declineButton} onPress={declineRide}><Text>Decline</Text></Pressable>
+              <Pressable style={styles.declineButton} onPress={declineRide}><Text style={{ color: theme.text, fontWeight: '600' }}>Decline</Text></Pressable>
               <Pressable style={[styles.acceptButton, { backgroundColor: theme.green }]} onPress={() => {
                 console.log('[ACCEPT BUTTON] Tapped!')
                 acceptRide()

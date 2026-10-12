@@ -1053,16 +1053,41 @@ export default function RiderHomeScreen() {
   };
 
   const confirmPayment = async (ride: any, fare: number | string) => {
-    const fareAmount = typeof fare === 'number' ? fare : parseFloat(String(fare));
+    const fareAmount = typeof fare === 'string' ? parseFloat(fare) : fare;
+
+    if (ride.payment_method === 'go_cash') {
+      const { data, error } = await supabase.rpc('process_go_cash_payment', {
+        p_ride_id: ride.id,
+        p_rider_id: ride.rider_id,
+        p_driver_id: ride.driver_id,
+        p_amount: fareAmount,
+      });
+
+      if (error || !data?.success) {
+        Alert.alert('Payment Failed', data?.error || 'Could not process Go Cash payment. Please try again.');
+        return;
+      }
+
+      Alert.alert('Payment Confirmed!', 'Go Cash payment processed. Waiting for driver to verify...');
+      setRiderConfirmedPayment(true);
+      return;
+    }
+
+    // Cash payment - existing flow unchanged
     setRiderConfirmedPayment(true);
-    // The driver completes the ride (and settles commission server-side) after this flag is set
-    const { error } = await supabase.from('rides').update({ rider_confirmed_payment: true }).eq('id', ride.id);
-    if (error) {
+    const { error: updateError } = await supabase
+      .from('rides')
+      .update({ rider_confirmed_payment: true })
+      .eq('id', ride.id);
+
+    if (updateError) {
       setRiderConfirmedPayment(false);
       Alert.alert('Error', 'Could not confirm payment. Please try again.');
       return;
     }
+
     Alert.alert('Payment Confirmed!', 'Waiting for driver to confirm...');
+
     if (ride.driver_id) {
       const driverToken = await getDriverToken(ride.driver_id);
       if (driverToken) {
@@ -1483,7 +1508,7 @@ export default function RiderHomeScreen() {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
       {!keyboardVisible && (
       <View style={styles.mapContainer}>
-        <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/notifications' as any)}>
+        <TouchableOpacity style={[styles.bellBtn, { top: insets.top + 12, right: 16 }]} onPress={() => router.push('/notifications' as any)}>
           <Feather name="bell" size={22} color={theme.text} />
           {unreadCount > 0 ? (
             <View style={styles.bellBadge}>
@@ -1562,8 +1587,8 @@ export default function RiderHomeScreen() {
             onPress={handleSOS}
             style={{
               position: 'absolute',
-              top: insets.top + 16,
-              right: 16,
+              top: insets.top + 12,
+              left: 16,
               width: 52, height: 52,
               borderRadius: 26,
               backgroundColor: theme.red,
@@ -1797,20 +1822,49 @@ export default function RiderHomeScreen() {
       ) : null}
 
       {currentRide && ['arrived_destination', 'payment_pending'].includes(rideStatus) ? (
-        <View style={styles.paymentPanel}>
-          <Text style={styles.paymentPanelLabel}>Amount Due</Text>
-          <Text style={styles.paymentPanelFare}>GH₵ {displayFare}</Text>
-          <Text style={styles.paymentPanelMethod}>
-            {currentRide.payment_method === 'cash' ? 'Cash' : 'Go Cash'}
-          </Text>
-          {!riderConfirmedPayment ? (
-            <TouchableOpacity style={styles.paymentPanelButton} onPress={() => confirmPayment(currentRide, displayFare)}>
-              <Text style={styles.paymentPanelButtonText}>I've Paid</Text>
-            </TouchableOpacity>
-          ) : (
-            <Text style={styles.boardingWaitingText}>Payment confirmed! Waiting for driver to verify...</Text>
-          )}
-        </View>
+        currentRide.payment_method === 'go_cash' ? (
+          <View style={styles.paymentPanel}>
+            <Text style={{ color: theme.green, fontSize: 16, fontWeight: '700', textAlign: 'center' }}>
+              GH₵ {displayFare}
+            </Text>
+            <Text style={{ color: theme.textSecondary, fontSize: 13, textAlign: 'center', marginTop: 4 }}>
+              Payment will be deducted from your Go Cash wallet
+            </Text>
+            {!riderConfirmedPayment ? (
+              <TouchableOpacity
+                onPress={() => confirmPayment(currentRide, displayFare)}
+                style={{
+                  backgroundColor: theme.green,
+                  borderRadius: 12,
+                  paddingVertical: 14,
+                  alignItems: 'center',
+                  marginTop: 12,
+                }}
+              >
+                <Text style={{ color: 'white', fontWeight: '700', fontSize: 16 }}>
+                  Confirm Go Cash Payment
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={{ color: theme.textSecondary, fontSize: 13, textAlign: 'center', marginTop: 8 }}>
+                Payment confirmed! Waiting for driver to verify...
+              </Text>
+            )}
+          </View>
+        ) : (
+          <View style={styles.paymentPanel}>
+            <Text style={styles.paymentPanelLabel}>Amount Due</Text>
+            <Text style={styles.paymentPanelFare}>GH₵ {displayFare}</Text>
+            <Text style={styles.paymentPanelMethod}>Cash</Text>
+            {!riderConfirmedPayment ? (
+              <TouchableOpacity style={styles.paymentPanelButton} onPress={() => confirmPayment(currentRide, displayFare)}>
+                <Text style={styles.paymentPanelButtonText}>I've Paid</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.boardingWaitingText}>Payment confirmed! Waiting for driver to verify...</Text>
+            )}
+          </View>
+        )
       ) : null}
 
         {!['arrived_destination', 'payment_pending', 'rider_boarding'].includes(rideStatus) ? (
