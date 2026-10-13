@@ -15,7 +15,6 @@ import {
   Pressable,
   ScrollView,
   Linking,
-  Platform,
 } from 'react-native'
 import { useFocusEffect, useRouter } from 'expo-router'
 import * as Location from 'expo-location'
@@ -810,17 +809,13 @@ export default function DriverHome() {
         setRideStatus(ride.status)
 
         if (justAccepted) {
-          const navUrl = Platform.OS === 'ios'
-            ? `maps:?daddr=${ride.pickup_lat},${ride.pickup_lng}`
-            : `google.navigation:q=${ride.pickup_lat},${ride.pickup_lng}`
+          const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${ride.pickup_lat},${ride.pickup_lng}&travelmode=driving`
           Linking.openURL(navUrl).catch(() => {
             console.error('Could not open navigation')
           })
         }
         if (justStarted) {
-          const navUrl = Platform.OS === 'ios'
-            ? `maps:?daddr=${ride.dropoff_lat},${ride.dropoff_lng}`
-            : `google.navigation:q=${ride.dropoff_lat},${ride.dropoff_lng}`
+          const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${ride.dropoff_lat},${ride.dropoff_lng}&travelmode=driving`
           Linking.openURL(navUrl).catch(() => {
             console.error('Could not open navigation')
           })

@@ -155,6 +155,7 @@ export default function RiderHomeScreen() {
   const [ratingComment, setRatingComment] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
   const [riderConfirmedPayment, setRiderConfirmedPayment] = useState(false);
+  const [goCashBalance, setGoCashBalance] = useState<number>(0);
   // Supabase serializes Postgres `numeric` columns as strings, so despite the DB
   // value being a fare amount, final_fare_ghs/fare_ghs can arrive here as either type.
   const [finalFare, setFinalFare] = useState<number | string | null>(null);
@@ -1052,6 +1053,23 @@ export default function RiderHomeScreen() {
     }
   };
 
+  const fetchGoCashBalance = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase
+      .from('profiles')
+      .select('go_cash_balance')
+      .eq('id', user.id)
+      .single();
+    if (data) setGoCashBalance(parseFloat(data.go_cash_balance || '0'));
+  };
+
+  useEffect(() => {
+    if (rideStatus === 'arrived_destination' || rideStatus === 'payment_pending') {
+      fetchGoCashBalance();
+    }
+  }, [rideStatus]);
+
   const confirmPayment = async (ride: any, fare: number | string) => {
     const fareAmount = typeof fare === 'string' ? parseFloat(fare) : fare;
 
@@ -1069,9 +1087,10 @@ export default function RiderHomeScreen() {
       }
 
       setRiderConfirmedPayment(true);
+      setGoCashBalance(prev => prev - fareAmount);
       Alert.alert(
         '✅ Payment Sent!',
-        `GH₵ ${fareAmount} has been deducted from your Go Cash wallet and sent to your driver.`,
+        `GH₵ ${fareAmount.toFixed(2)} has been deducted from your Go Cash wallet.\n\nRemaining balance: GH₵ ${(goCashBalance - fareAmount).toFixed(2)}`,
         [{ text: 'OK' }]
       );
 
@@ -1604,7 +1623,7 @@ export default function RiderHomeScreen() {
             onPress={handleSOS}
             style={{
               position: 'absolute',
-              top: insets.top + 70,
+              top: insets.top + 120,
               left: 16,
               width: 52, height: 52,
               borderRadius: 26,
@@ -1840,34 +1859,60 @@ export default function RiderHomeScreen() {
 
       {currentRide && ['arrived_destination', 'payment_pending'].includes(rideStatus) ? (
         currentRide.payment_method === 'go_cash' ? (
-          <View style={styles.paymentPanel}>
-            <Text style={{ color: theme.green, fontSize: 16, fontWeight: '700', textAlign: 'center' }}>
-              GH₵ {displayFare}
-            </Text>
-            <Text style={{ color: theme.textSecondary, fontSize: 13, textAlign: 'center', marginTop: 4 }}>
-              Payment will be deducted from your Go Cash wallet
-            </Text>
-            {!riderConfirmedPayment ? (
-              <TouchableOpacity
-                onPress={() => confirmPayment(currentRide, displayFare)}
-                style={{
-                  backgroundColor: theme.green,
-                  borderRadius: 12,
-                  paddingVertical: 14,
-                  alignItems: 'center',
-                  marginTop: 12,
-                }}
-              >
-                <Text style={{ color: 'white', fontWeight: '700', fontSize: 16 }}>
-                  Confirm Go Cash Payment
+          (() => {
+            const fareAmount = typeof displayFare === 'string' ? parseFloat(displayFare) : displayFare;
+            const hasEnoughBalance = goCashBalance >= fareAmount;
+            return (
+              <View style={styles.paymentPanel}>
+                <Text style={{ color: theme.green, fontSize: 16, fontWeight: '700', textAlign: 'center' }}>
+                  GH₵ {displayFare}
                 </Text>
-              </TouchableOpacity>
-            ) : (
-              <Text style={{ color: theme.textSecondary, fontSize: 13, textAlign: 'center', marginTop: 8 }}>
-                Payment confirmed! Waiting for driver to verify...
-              </Text>
-            )}
-          </View>
+                <Text style={{ color: theme.textSecondary, fontSize: 13, textAlign: 'center', marginTop: 4 }}>
+                  Payment will be deducted from your Go Cash wallet
+                </Text>
+                {!riderConfirmedPayment ? (
+                  <>
+                    <Text style={{ color: theme.textSecondary, fontSize: 12, textAlign: 'center', marginBottom: 8, marginTop: 8 }}>
+                      Go Cash Balance: GH₵ {goCashBalance.toFixed(2)}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => {
+                        if (!hasEnoughBalance) {
+                          Alert.alert(
+                            'Insufficient Balance',
+                            `Your Go Cash balance (GH₵ ${goCashBalance.toFixed(2)}) is not enough for this fare (GH₵ ${fareAmount.toFixed(2)}). Please top up your Go Cash wallet.`,
+                            [
+                              { text: 'Top Up', onPress: () => router.push('/rider-screens/gocash' as any) },
+                              { text: 'Pay with Cash', onPress: () => {
+                                supabase.from('rides').update({ payment_method: 'cash' }).eq('id', currentRide?.id);
+                              }},
+                            ]
+                          );
+                          return;
+                        }
+                        confirmPayment(currentRide, displayFare);
+                      }}
+                      style={{
+                        backgroundColor: hasEnoughBalance ? theme.green : theme.border,
+                        borderRadius: 12,
+                        paddingVertical: 14,
+                        alignItems: 'center',
+                        marginTop: 12,
+                      }}
+                    >
+                      <Text style={{ color: hasEnoughBalance ? 'white' : theme.textMuted, fontWeight: '700', fontSize: 16 }}>
+                        {hasEnoughBalance ? 'Confirm Go Cash Payment' : 'Insufficient Balance'}
+                      </Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <Text style={{ color: theme.textSecondary, fontSize: 13, textAlign: 'center', marginTop: 8 }}>
+                    Payment confirmed! Waiting for driver to verify...
+                  </Text>
+                )}
+              </View>
+            );
+          })()
         ) : (
           <View style={styles.paymentPanel}>
             <Text style={styles.paymentPanelLabel}>Amount Due</Text>
