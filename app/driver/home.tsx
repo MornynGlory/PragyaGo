@@ -18,7 +18,7 @@ import {
 } from 'react-native'
 import { useFocusEffect, useRouter } from 'expo-router'
 import * as Location from 'expo-location'
-import MapView, { Marker } from 'react-native-maps'
+import MapView, { Marker, Polyline } from 'react-native-maps'
 import MapViewDirections from 'react-native-maps-directions'
 import { Feather } from '@expo/vector-icons'
 import { useTheme } from '@/lib/theme'
@@ -112,6 +112,9 @@ export default function DriverHome() {
   const [reportingBreakdown, setReportingBreakdown] = useState(false)
   const [distanceToPickup, setDistanceToPickup] = useState<string | null>(null)
   const [etaToPickup, setEtaToPickup] = useState<string | null>(null)
+  const [nextInstruction, setNextInstruction] = useState<string | null>(null)
+  const [nextDistance, setNextDistance] = useState<string | null>(null)
+  const [routePoints, setRoutePoints] = useState<{ latitude: number; longitude: number }[]>([])
   const distanceIntervalRef = useRef<any>(null)
   // Latest driver position, read by the distance interval so it doesn't use stale coords.
   const userLocRef = useRef<{ lat: number | null; lng: number | null }>({ lat: null, lng: null })
@@ -164,6 +167,88 @@ export default function DriverHome() {
 
     return clearDistanceInterval
   }, [rideStatus, activeRide?.id])
+
+  const decodePolyline = (encoded: string) => {
+    const points: { latitude: number; longitude: number }[] = []
+    let index = 0, lat = 0, lng = 0
+
+    while (index < encoded.length) {
+      let shift = 0, result = 0, b: number
+      do {
+        b = encoded.charCodeAt(index++) - 63
+        result |= (b & 0x1f) << shift
+        shift += 5
+      } while (b >= 0x20)
+      lat += result & 1 ? ~(result >> 1) : result >> 1
+
+      shift = 0; result = 0
+      do {
+        b = encoded.charCodeAt(index++) - 63
+        result |= (b & 0x1f) << shift
+        shift += 5
+      } while (b >= 0x20)
+      lng += result & 1 ? ~(result >> 1) : result >> 1
+
+      points.push({ latitude: lat / 1e5, longitude: lng / 1e5 })
+    }
+    return points
+  }
+
+  const fetchDirections = async (fromLat: number, fromLng: number, toLat: number, toLng: number) => {
+    try {
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/directions/json?origin=${fromLat},${fromLng}&destination=${toLat},${toLng}&mode=driving&key=${GOOGLE_API_KEY}`
+      )
+      const data = await response.json()
+
+      if (data.routes && data.routes.length > 0) {
+        const steps = data.routes[0].legs[0].steps
+        const nextStep = steps[0]
+
+        const instruction = nextStep.html_instructions.replace(/<[^>]*>/g, ' ').trim()
+        const distance = nextStep.distance.text
+
+        setNextInstruction(instruction)
+        setNextDistance(distance)
+
+        const points = data.routes[0].overview_polyline.points
+        setRoutePoints(decodePolyline(points))
+      }
+    } catch (e) {
+      console.error('Directions error')
+    }
+  }
+
+  useEffect(() => {
+    if (!activeRide || !(rideStatus === 'accepted' || rideStatus === 'in_progress')) {
+      setNextInstruction(null)
+      setNextDistance(null)
+      setRoutePoints([])
+      return
+    }
+
+    const tick = () => {
+      const { lat, lng } = userLocRef.current
+      if (lat == null || lng == null) return
+      const toLat = rideStatus === 'in_progress' ? parseFloat(activeRide.dropoff_lat) : parseFloat(activeRide.pickup_lat)
+      const toLng = rideStatus === 'in_progress' ? parseFloat(activeRide.dropoff_lng) : parseFloat(activeRide.pickup_lng)
+      if (isNaN(toLat) || isNaN(toLng)) return
+      fetchDirections(lat, lng, toLat, toLng)
+    }
+    tick()
+    const id = setInterval(tick, 10000)
+    return () => clearInterval(id)
+  }, [rideStatus, activeRide?.id])
+
+  useEffect(() => {
+    if (!(rideStatus === 'accepted' || rideStatus === 'in_progress')) return
+    if (userLat == null || userLng == null) return
+    mapRef.current?.animateCamera({
+      center: { latitude: userLat, longitude: userLng },
+      zoom: 17,
+      heading: 0,
+    }, { duration: 1000 })
+  }, [userLat, userLng, rideStatus])
 
   useEffect(() => {
     if (activeRide) {
@@ -1144,6 +1229,34 @@ export default function DriverHome() {
       </SafeAreaView>
 
       <View style={styles.mapContainer}>
+        {(rideStatus === 'accepted' || rideStatus === 'in_progress') && nextInstruction ? (
+          <View style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            backgroundColor: '#1A1A2E',
+            paddingTop: insets.top + 8,
+            paddingBottom: 12,
+            paddingHorizontal: 16,
+            zIndex: 100,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+          }}>
+            <Feather name="navigation" size={24} color="white" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: 'white', fontSize: 16, fontWeight: '700' }}>
+                {nextInstruction}
+              </Text>
+              {nextDistance ? (
+                <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, marginTop: 2 }}>
+                  {nextDistance}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
         <MapView
           ref={mapRef}
           style={styles.map}
@@ -1199,7 +1312,13 @@ export default function DriverHome() {
             </Marker>
           ) : null}
 
-          {activeRide && userLat != null && userLng != null ? (
+          {routePoints.length > 0 && (rideStatus === 'accepted' || rideStatus === 'in_progress') ? (
+            <Polyline
+              coordinates={routePoints}
+              strokeWidth={4}
+              strokeColor={theme.green}
+            />
+          ) : activeRide && userLat != null && userLng != null ? (
             <MapViewDirections
               origin={{
                 latitude: userLat,
