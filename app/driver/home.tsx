@@ -194,28 +194,76 @@ export default function DriverHome() {
     return points
   }
 
-  const fetchDirections = async (fromLat: number, fromLng: number, toLat: number, toLng: number) => {
+  const lastFetchedDestRef = useRef<string | null>(null)
+  const routeStepsRef = useRef<any[]>([])
+  const currentStepIndexRef = useRef(0)
+  const lastCameraUpdateRef = useRef(0)
+  const lastCameraPositionRef = useRef<{ lat: number; lng: number } | null>(null)
+
+  const updateCurrentInstruction = (stepIndex: number) => {
+    const steps = routeStepsRef.current
+    if (!steps || stepIndex >= steps.length) return
+    const step = steps[stepIndex]
+    const instruction = step.html_instructions.replace(/<[^>]*>/g, ' ').trim()
+    setNextInstruction(instruction)
+    setNextDistance(step.distance.text)
+  }
+
+  const fetchRoute = async (toLat: number, toLng: number) => {
+    const { lat, lng } = userLocRef.current
+    if (lat == null || lng == null) return
+    const destKey = `${toLat},${toLng}`
+    if (lastFetchedDestRef.current === destKey) return
+    lastFetchedDestRef.current = destKey
+
     try {
       const response = await fetch(
-        `https://maps.googleapis.com/maps/api/directions/json?origin=${fromLat},${fromLng}&destination=${toLat},${toLng}&mode=driving&key=${GOOGLE_API_KEY}`
+        `https://maps.googleapis.com/maps/api/directions/json?origin=${lat},${lng}&destination=${toLat},${toLng}&mode=driving&key=${GOOGLE_API_KEY}`
       )
       const data = await response.json()
-
-      if (data.routes && data.routes.length > 0) {
-        const steps = data.routes[0].legs[0].steps
-        const nextStep = steps[0]
-
-        const instruction = nextStep.html_instructions.replace(/<[^>]*>/g, ' ').trim()
-        const distance = nextStep.distance.text
-
-        setNextInstruction(instruction)
-        setNextDistance(distance)
-
-        const points = data.routes[0].overview_polyline.points
-        setRoutePoints(decodePolyline(points))
+      if (data.routes?.length > 0) {
+        routeStepsRef.current = data.routes[0].legs[0].steps
+        currentStepIndexRef.current = 0
+        updateCurrentInstruction(0)
+        setRoutePoints(decodePolyline(data.routes[0].overview_polyline.points))
       }
     } catch (e) {
-      console.error('Directions error')
+      console.error('Route fetch error')
+    }
+  }
+
+  const distanceToPolyline = (lat: number, lng: number, points: { latitude: number; longitude: number }[]) => {
+    if (!points.length) return 0
+    let min = Infinity
+    for (const p of points) {
+      const d = calculateDistance(lat, lng, p.latitude, p.longitude)
+      if (d < min) min = d
+    }
+    return min
+  }
+
+  const checkStepAdvance = (driverLat: number, driverLng: number) => {
+    const steps = routeStepsRef.current
+    const currentIndex = currentStepIndexRef.current
+    if (!steps || currentIndex >= steps.length) return
+
+    const currentStep = steps[currentIndex]
+    const endLat = currentStep.end_location.lat
+    const endLng = currentStep.end_location.lng
+    const distToStepEnd = calculateDistance(driverLat, driverLng, endLat, endLng)
+    if (distToStepEnd < 30 && currentIndex + 1 < steps.length) {
+      currentStepIndexRef.current = currentIndex + 1
+      updateCurrentInstruction(currentIndex + 1)
+    }
+
+    if (routePoints.length > 0) {
+      const distFromRoute = distanceToPolyline(driverLat, driverLng, routePoints)
+      if (distFromRoute > 50 && activeRide) {
+        lastFetchedDestRef.current = null
+        const destLat = rideStatus === 'accepted' ? parseFloat(activeRide.pickup_lat) : parseFloat(activeRide.dropoff_lat)
+        const destLng = rideStatus === 'accepted' ? parseFloat(activeRide.pickup_lng) : parseFloat(activeRide.dropoff_lng)
+        if (!isNaN(destLat) && !isNaN(destLng)) fetchRoute(destLat, destLng)
+      }
     }
   }
 
@@ -224,31 +272,16 @@ export default function DriverHome() {
       setNextInstruction(null)
       setNextDistance(null)
       setRoutePoints([])
+      routeStepsRef.current = []
+      currentStepIndexRef.current = 0
+      lastFetchedDestRef.current = null
       return
     }
-
-    const tick = () => {
-      const { lat, lng } = userLocRef.current
-      if (lat == null || lng == null) return
-      const toLat = rideStatus === 'in_progress' ? parseFloat(activeRide.dropoff_lat) : parseFloat(activeRide.pickup_lat)
-      const toLng = rideStatus === 'in_progress' ? parseFloat(activeRide.dropoff_lng) : parseFloat(activeRide.pickup_lng)
-      if (isNaN(toLat) || isNaN(toLng)) return
-      fetchDirections(lat, lng, toLat, toLng)
-    }
-    tick()
-    const id = setInterval(tick, 10000)
-    return () => clearInterval(id)
+    const toLat = rideStatus === 'in_progress' ? parseFloat(activeRide.dropoff_lat) : parseFloat(activeRide.pickup_lat)
+    const toLng = rideStatus === 'in_progress' ? parseFloat(activeRide.dropoff_lng) : parseFloat(activeRide.pickup_lng)
+    if (isNaN(toLat) || isNaN(toLng)) return
+    fetchRoute(toLat, toLng)
   }, [rideStatus, activeRide?.id])
-
-  useEffect(() => {
-    if (!(rideStatus === 'accepted' || rideStatus === 'in_progress')) return
-    if (userLat == null || userLng == null) return
-    mapRef.current?.animateCamera({
-      center: { latitude: userLat, longitude: userLng },
-      zoom: 17,
-      heading: 0,
-    }, { duration: 1000 })
-  }, [userLat, userLng, rideStatus])
 
   useEffect(() => {
     if (activeRide) {
@@ -539,7 +572,7 @@ export default function DriverHome() {
         const loc = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced
         })
-        const { latitude, longitude } = loc.coords
+        const { latitude, longitude, heading } = loc.coords
         setUserLat(latitude)
         setUserLng(longitude)
 
@@ -560,6 +593,28 @@ export default function DriverHome() {
             .eq('id', driverIdRef.current)
 
           lastSentLocationRef.current = { lat: latitude, lng: longitude }
+        }
+
+        const status = activeRideRef.current?.status
+        if (status === 'accepted' || status === 'in_progress') {
+          checkStepAdvance(latitude, longitude)
+
+          const now = Date.now()
+          const lastPos = lastCameraPositionRef.current
+          const timeSinceLast = now - lastCameraUpdateRef.current
+          if (timeSinceLast > 2000) {
+            const movedEnough = !lastPos ||
+              calculateDistance(latitude, longitude, lastPos.lat, lastPos.lng) > 10
+            if (movedEnough) {
+              lastCameraUpdateRef.current = now
+              lastCameraPositionRef.current = { lat: latitude, lng: longitude }
+              mapRef.current?.animateCamera({
+                center: { latitude, longitude },
+                zoom: 17,
+                heading: heading && heading > 0 ? heading : 0,
+              }, { duration: 800 })
+            }
+          }
         }
       } catch (e) {
         console.log('Location update error:', e)

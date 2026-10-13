@@ -1623,7 +1623,7 @@ export default function RiderHomeScreen() {
             onPress={handleSOS}
             style={{
               position: 'absolute',
-              top: insets.top + 120,
+              top: insets.top + 12,
               left: 16,
               width: 52, height: 52,
               borderRadius: 26,
