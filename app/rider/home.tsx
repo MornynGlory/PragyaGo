@@ -168,6 +168,7 @@ export default function RiderHomeScreen() {
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const dispatchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isDispatchingRef = useRef(false);
+  const handledReofferAttemptRef = useRef(0);
   const requestingRef = useRef(false);
   const [dispatchAttempt, setDispatchAttempt] = useState(0);
   const driverLocationSubscription = useRef<any>(null);
@@ -336,6 +337,8 @@ export default function RiderHomeScreen() {
               isDispatchingRef.current = false;
               stopDriverTracking();
               if (ride.status === 'cancelled') Alert.alert('Ride Cancelled', 'Your ride was cancelled.');
+            } else if (ride.status === 'requested') {
+              await handleDriverCancelled(ride);
             } else {
               setCurrentRide(ride);
               setRideStatus(ride.status);
@@ -851,6 +854,41 @@ export default function RiderHomeScreen() {
     }
   }, [destination, stops, selectedDestCoords, pickupLat, pickupLng]);
 
+  const handleDriverCancelled = async (ride: any) => {
+    if (ride.status !== 'requested' || (ride.dispatch_attempt ?? 0) <= handledReofferAttemptRef.current) {
+      return;
+    }
+    handledReofferAttemptRef.current = ride.dispatch_attempt;
+
+    setCurrentRide(ride);
+    setRideStatus('requested');
+    setShowDriverCard(false);
+    setDriverInfo(null);
+    setEta(null);
+    setHasBoarded(false);
+
+    if (driverLocationSubscription.current) {
+      supabase.removeChannel(driverLocationSubscription.current);
+      driverLocationSubscription.current = null;
+    }
+    stopDriverTracking();
+
+    // Restart the "no drivers accepted" backstop — the first driver's acceptance cleared it,
+    // and we now need it running again while we wait for the re-offer to be picked up.
+    if (dispatchTimeoutRef.current) {
+      clearTimeout(dispatchTimeoutRef.current);
+      dispatchTimeoutRef.current = null;
+    }
+    isDispatchingRef.current = false;
+    dispatchToNearestDriver(ride.id);
+
+    Vibration.vibrate([0, 300, 150, 300]);
+    Alert.alert(
+      'Your driver cancelled',
+      "Don't worry — we're finding you another Pragya nearby."
+    );
+  };
+
   const subscribeToRideUpdates = async (rideId: string) => {
     try {
       if (rideSubscription.current) await supabase.removeChannel(rideSubscription.current);
@@ -861,6 +899,10 @@ export default function RiderHomeScreen() {
             console.log('Ride UPDATE received, status:', payload.new?.status);
             const ride = payload.new;
             if (ride.id !== rideId) return;
+            if (ride.status === 'requested') {
+              await handleDriverCancelled(ride);
+              return;
+            }
             setCurrentRide(ride);
             setRideStatus(ride.status);
 
@@ -965,6 +1007,10 @@ export default function RiderHomeScreen() {
     const { data: ride } = await supabase.from('rides').select('*').eq('id', rideId).single();
     if (ride && ride.status !== rideStatusRef.current) {
       console.log('Poll detected ride status change:', ride.status);
+      if (ride.status === 'requested') {
+        await handleDriverCancelled(ride);
+        return;
+      }
       setCurrentRide(ride);
       setRideStatus(ride.status);
     }
@@ -975,7 +1021,7 @@ export default function RiderHomeScreen() {
     setBoardingLoading(true);
     setHasBoarded(true); // optimistic — hides the button immediately, ahead of the DB round-trip
     try {
-      const { error } = await supabase.from('rides').update({ rider_confirmed_boarding: true }).eq('id', rideId);
+      const { error } = await supabase.from('rides').update({ rider_confirmed_boarding: true }).eq('id', rideId).in('status', ['accepted', 'arrived_pickup', 'rider_boarding']);
       if (error) {
         Alert.alert('Error', error.message);
         setHasBoarded(false);
@@ -1373,6 +1419,7 @@ export default function RiderHomeScreen() {
         setHasBoarded(false);
         setBoardingLoading(false);
         setDispatchAttempt(0);
+        handledReofferAttemptRef.current = 0;
         await subscribeToRideUpdates(ride.id);
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = setInterval(() => pollRideStatus(ride.id), 5000);

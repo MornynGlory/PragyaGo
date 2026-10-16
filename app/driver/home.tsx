@@ -50,6 +50,16 @@ const BREAKDOWN_REASONS = [
   { label: 'Other', exemptFromCommission: false },
 ]
 
+const DRIVER_CANCEL_REASONS = [
+  'Pragya broke down on the way',
+  'Pickup is too far / traffic',
+  'Rider not at pickup / not answering',
+  'Rider asked me to cancel',
+  'Safety concern at pickup',
+  'Personal emergency',
+  'Other',
+]
+
 const customMapStyle = [
   { elementType: 'geometry', stylers: [{ color: '#f0ede6' }] },
   { elementType: 'labels.text.fill', stylers: [{ color: '#4a4a4a' }] },
@@ -109,6 +119,11 @@ export default function DriverHome() {
   const [showBreakdownModal, setShowBreakdownModal] = useState(false)
   const [breakdownReason, setBreakdownReason] = useState('')
   const [otherBreakdownReason, setOtherBreakdownReason] = useState('')
+  const [showCancelModal, setShowCancelModal] = useState(false)
+  const [cancelReason, setCancelReason] = useState('')
+  const [otherCancelReason, setOtherCancelReason] = useState('')
+  const [cancellingRide, setCancellingRide] = useState(false)
+  const cancelledRideIdsRef = useRef<Set<string>>(new Set())
   const [reportingBreakdown, setReportingBreakdown] = useState(false)
   const [distanceToPickup, setDistanceToPickup] = useState<string | null>(null)
   const [etaToPickup, setEtaToPickup] = useState<string | null>(null)
@@ -898,6 +913,21 @@ export default function DriverHome() {
           await sendRideRequestNotification(ride)
         }
       })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'rides',
+      }, async (payload) => {
+        const ride = payload.new as any
+        if (ride.status !== 'requested' || ride.driver_id) return
+        if ((ride.dispatch_attempt ?? 0) < 1) return
+        if (cancelledRideIdsRef.current.has(ride.id)) return
+        if (!activeRideRef.current && ride.zone_id === driverZoneRef.current) {
+          setRideRequest(ride)
+          startAcceptCountdown()
+          await sendRideRequestNotification(ride)
+        }
+      })
       .subscribe((status) => {
         console.log('Driver subscription status:', status)
       })
@@ -1031,6 +1061,65 @@ export default function DriverHome() {
   function declineRide() {
     if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null }
     setRideRequest(null)
+  }
+
+  function closeCancelModal() {
+    setShowCancelModal(false)
+    setCancelReason('')
+    setOtherCancelReason('')
+  }
+
+  async function confirmDriverCancel() {
+    if (!cancelReason) {
+      Alert.alert('Select a reason', 'Please choose a reason for cancelling the ride.')
+      return
+    }
+    if (cancelReason === 'Other' && !otherCancelReason.trim()) {
+      Alert.alert('Enter a reason', 'Please tell us why you are cancelling.')
+      return
+    }
+    const rideId = activeRideRef.current?.id
+    if (!rideId) {
+      Alert.alert('Error', 'No active ride found.')
+      return
+    }
+    const finalReason = cancelReason === 'Other'
+      ? `Other: ${otherCancelReason.trim()}`
+      : cancelReason
+
+    try {
+      setCancellingRide(true)
+      const { data, error } = await supabase.rpc('driver_cancel_ride', {
+        p_ride_id: rideId,
+        p_reason: finalReason,
+      })
+
+      if (error) {
+        Alert.alert('Error', 'Could not cancel the ride. Please check your connection and try again.')
+        return
+      }
+      if (!data?.success) {
+        Alert.alert('Cannot Cancel', data?.error || 'This ride cannot be cancelled.')
+        closeCancelModal()
+        return
+      }
+
+      // Realtime UPDATE won't reach us (driver_id=eq.<me> filter no longer matches since
+      // driver_id is now null), so clear local state ourselves.
+      cancelledRideIdsRef.current.add(rideId)
+      closeCancelModal()
+      setActiveRide(null)
+      setRideStatus('')
+      setRiderInfo(null)
+      setRoutePoints([])
+      reminderShownRef.current = false
+      Alert.alert(
+        'Ride Cancelled',
+        'The ride has been offered to other drivers in your zone. You are still online.'
+      )
+    } finally {
+      setCancellingRide(false)
+    }
   }
 
   const handleArrivedAtPickup = async () => {
@@ -1483,6 +1572,12 @@ export default function DriverHome() {
                 >
                   <Text style={{ color: 'white', fontSize: 16, fontWeight: '700' }}>I've Arrived at Pickup</Text>
                 </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.outlinedButton, { borderColor: '#d9534f', marginTop: 10 }]}
+                  onPress={() => setShowCancelModal(true)}
+                >
+                  <Text style={{ color: '#d9534f' }}>Cancel Ride</Text>
+                </TouchableOpacity>
               </View>
             ) : (
             <>
@@ -1587,6 +1682,15 @@ export default function DriverHome() {
                 ) : null}
               </>
             ) : null}
+
+            {(rideStatus === 'rider_boarding' || rideStatus === 'arrived_pickup') && !activeRide?.rider_confirmed_boarding && (
+              <TouchableOpacity
+                style={[styles.outlinedButton, { borderColor: '#d9534f' }]}
+                onPress={() => setShowCancelModal(true)}
+              >
+                <Text style={{ color: '#d9534f' }}>Cancel Ride</Text>
+              </TouchableOpacity>
+            )}
 
             {rideStatus === 'in_progress' && (
               <TouchableOpacity
@@ -1843,6 +1947,93 @@ export default function DriverHome() {
                 {reportingBreakdown
                   ? <ActivityIndicator color="#fff" />
                   : <Text style={{ fontSize: 15, fontWeight: '700', color: '#fff' }}>Report Breakdown</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showCancelModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!cancellingRide) closeCancelModal() }}
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 24,
+        }}>
+          <View style={{
+            backgroundColor: theme.card,
+            borderRadius: 16,
+            padding: 20,
+            width: '100%',
+            maxHeight: '85%',
+          }}>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: theme.text, marginBottom: 4 }}>
+              Cancel this ride?
+            </Text>
+            <Text style={{ fontSize: 13, color: theme.textSecondary, marginBottom: 16 }}>
+              The ride will be offered to other drivers in your zone. Cancellations are recorded and reviewed.
+            </Text>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 320 }}>
+              {DRIVER_CANCEL_REASONS.map((reason) => (
+                <TouchableOpacity
+                  key={reason}
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 12 }}
+                  onPress={() => setCancelReason(reason)}
+                >
+                  <View style={{
+                    width: 20, height: 20, borderRadius: 10,
+                    borderWidth: 2,
+                    borderColor: cancelReason === reason ? theme.green : theme.border,
+                    justifyContent: 'center', alignItems: 'center',
+                  }}>
+                    {cancelReason === reason ? (
+                      <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.green }} />
+                    ) : null}
+                  </View>
+                  <Text style={{ fontSize: 14, color: theme.text, flex: 1 }}>{reason}</Text>
+                </TouchableOpacity>
+              ))}
+
+              {cancelReason === 'Other' ? (
+                <TextInput
+                  style={{
+                    borderWidth: 1, borderColor: theme.border, borderRadius: 10,
+                    paddingHorizontal: 14, paddingVertical: 12, fontSize: 14,
+                    color: theme.text, backgroundColor: theme.background2,
+                    minHeight: 70, textAlignVertical: 'top', marginTop: 12,
+                  }}
+                  placeholder="Tell us why..."
+                  placeholderTextColor={theme.textMuted}
+                  value={otherCancelReason}
+                  onChangeText={setOtherCancelReason}
+                  multiline
+                />
+              ) : null}
+            </ScrollView>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
+              <TouchableOpacity
+                style={{ flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', backgroundColor: theme.background2 }}
+                onPress={closeCancelModal}
+                disabled={cancellingRide}
+              >
+                <Text style={{ fontSize: 15, fontWeight: '600', color: theme.textSecondary }}>Keep Ride</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center', backgroundColor: '#d9534f' }}
+                onPress={confirmDriverCancel}
+                disabled={cancellingRide}
+              >
+                {cancellingRide
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={{ fontSize: 15, fontWeight: '700', color: '#fff' }}>Cancel Ride</Text>}
               </TouchableOpacity>
             </View>
           </View>
