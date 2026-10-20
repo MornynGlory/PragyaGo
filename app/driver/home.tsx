@@ -14,7 +14,6 @@ import {
   Modal,
   Pressable,
   ScrollView,
-  Linking,
 } from 'react-native'
 import { useFocusEffect, useRouter } from 'expo-router'
 import * as Location from 'expo-location'
@@ -972,24 +971,9 @@ export default function DriverHome() {
         // effect), so this reliably catches the false->true transition without depending
         // on payload.old, which Supabase only populates fully when REPLICA IDENTITY FULL is set.
         const justBoarded = ride.rider_confirmed_boarding && !activeRideRef.current?.rider_confirmed_boarding
-        const justAccepted = ride.status === 'accepted' && activeRideRef.current?.status !== 'accepted'
-        const justStarted = ride.status === 'in_progress' && activeRideRef.current?.status !== 'in_progress'
         // Keep local state in lockstep with the row so handlers never act on a stale ride.
         setActiveRide(ride)
         setRideStatus(ride.status)
-
-        if (justAccepted) {
-          const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${ride.pickup_lat},${ride.pickup_lng}&travelmode=driving`
-          Linking.openURL(navUrl).catch(() => {
-            console.error('Could not open navigation')
-          })
-        }
-        if (justStarted) {
-          const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${ride.dropoff_lat},${ride.dropoff_lng}&travelmode=driving`
-          Linking.openURL(navUrl).catch(() => {
-            console.error('Could not open navigation')
-          })
-        }
 
         if (justBoarded && !reminderShownRef.current) {
           reminderShownRef.current = true
