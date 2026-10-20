@@ -1,5 +1,11 @@
-import { applyDiscount, DiscountResult, recordDiscountUse } from '@/lib/discounts';
-import { calculateZoneFare, FareResult, getFareSuggestions } from '@/lib/fares';
+import { FareResult, getFareSuggestions } from '@/lib/fares';
+
+type DiscountResult = {
+  discount: { id: string } | null;
+  discountAmount: number;
+  finalFare: number;
+  message: string | null;
+};
 import { getDriverToken, sendPushNotification } from '@/lib/notifications';
 import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/theme';
@@ -141,6 +147,11 @@ export default function RiderHomeScreen() {
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
   const [fareBreakdown, setFareBreakdown] = useState<FareResult | null>(null);
   const [calculatingFare, setCalculatingFare] = useState(false);
+  const [quoteId, setQuoteId] = useState<string | null>(null);
+  const [quoteExpiresAt, setQuoteExpiresAt] = useState<string | null>(null);
+  const [distanceEstimated, setDistanceEstimated] = useState(false);
+  const [fareError, setFareError] = useState<string | null>(null);
+  const quoteRequestIdRef = useRef(0);
   const [requesting, setRequesting] = useState(false);
   const [lastRequestTime, setLastRequestTime] = useState(0);
   const [currentRide, setCurrentRide] = useState<any>(null);
@@ -789,57 +800,95 @@ export default function RiderHomeScreen() {
     if (stops.length >= 3) { Alert.alert('Maximum 3 stops allowed'); return; }
     setStops([...stops, newStop.trim()]);
     setNewStop('');
-    if (fareEstimate) {
-      setFareEstimate(prev => prev ? Math.round((prev + 2) * 10) / 10 : prev);
-      if (originalFare !== null) setOriginalFare(prev => prev !== null ? Math.round((prev + 2) * 10) / 10 : prev);
-    }
   };
 
   const removeStop = (index: number) => {
     setStops(stops.filter((_, i) => i !== index));
-    if (fareEstimate) {
-      setFareEstimate(prev => prev ? Math.round((prev - 2) * 10) / 10 : prev);
-      if (originalFare !== null) setOriginalFare(prev => prev !== null ? Math.round((prev - 2) * 10) / 10 : prev);
-    }
   };
 
-  const calculateFareAuto = async () => {
-    if (!destination.trim()) {
-      setFareEstimate(null);
-      setFareBreakdown(null);
-      setDiscountResult(null);
-      setOriginalFare(null);
-      return;
-    }
-    setCalculatingFare(true);
+  const clearFareState = () => {
+    setFareEstimate(null);
+    setFareBreakdown(null);
     setDiscountResult(null);
     setOriginalFare(null);
-    setFareBreakdown(null);
+    setQuoteId(null);
+    setQuoteExpiresAt(null);
+    setDistanceEstimated(false);
+  };
+
+  const calculateFareAuto = async (): Promise<{ id: string; expiresAt: string | null } | null> => {
+    if (!destination.trim()) {
+      clearFareState();
+      setFareError(null);
+      return null;
+    }
+    const resolvedPickupLat = pickupLat ?? location?.latitude;
+    const resolvedPickupLng = pickupLng ?? location?.longitude;
+    if (!selectedDestCoords || resolvedPickupLat == null || resolvedPickupLng == null) {
+      clearFareState();
+      setFareError('Choose your destination from the suggestions');
+      return null;
+    }
+
+    const requestId = ++quoteRequestIdRef.current;
+    setCalculatingFare(true);
+    setFareError(null);
     try {
-      const fareResult = await calculateZoneFare(
-        zoneIdRef.current, destination, stops.length,
-        pickupLat ?? location?.latitude ?? 0,
-        pickupLng ?? location?.longitude ?? 0,
-        selectedDestCoords?.lat, selectedDestCoords?.lng
-      );
-      setFareBreakdown(fareResult);
-      const userId = userIdRef.current;
-      if (userId) {
-        const disc = await applyDiscount(userId, destination, fareResult.riderFare);
-        if (disc.discount) {
-          setDiscountResult(disc);
-          setOriginalFare(fareResult.riderFare);
-          setFareEstimate(disc.finalFare);
-        } else {
-          setFareEstimate(fareResult.riderFare);
-        }
-      } else {
-        setFareEstimate(fareResult.riderFare);
+      const { data, error } = await supabase.functions.invoke('quote-fare', {
+        body: {
+          pickup_lat: resolvedPickupLat,
+          pickup_lng: resolvedPickupLng,
+          dropoff_lat: selectedDestCoords.lat,
+          dropoff_lng: selectedDestCoords.lng,
+          destination,
+          stops_count: stops.length,
+        },
+      });
+
+      if (requestId !== quoteRequestIdRef.current) return null; // stale
+
+      if (error || !data || data.error) {
+        clearFareState();
+        setFareError("Couldn't get a fare. Please try again.");
+        return null;
       }
+
+      const breakdown: FareResult = {
+        baseFare: data.base_fare,
+        multipliedFare: data.multiplied_fare,
+        riderFare: data.rider_fare,
+        expectedDistanceKm: data.distance_km,
+        source: data.fare_source,
+        breakdown: data.breakdown,
+      };
+      setFareBreakdown(breakdown);
+      setDistanceEstimated(!!data.distance_estimated);
+
+      if (data.discount_amount > 0) {
+        setDiscountResult({
+          discount: { id: 'server' },
+          discountAmount: data.discount_amount,
+          finalFare: data.final_fare,
+          message: data.discount_message ?? null,
+        });
+        setOriginalFare(data.rider_fare);
+      } else {
+        setDiscountResult(null);
+        setOriginalFare(null);
+      }
+      setFareEstimate(data.final_fare);
+      setQuoteId(data.quote_id);
+      setQuoteExpiresAt(data.expires_at ?? null);
+      return { id: data.quote_id, expiresAt: data.expires_at ?? null };
     } catch (_) {
-      // silent failure — user can try again by reselecting destination
+      if (requestId !== quoteRequestIdRef.current) return null;
+      clearFareState();
+      setFareError("Couldn't get a fare. Please try again.");
+      return null;
     } finally {
-      setCalculatingFare(false);
+      if (requestId === quoteRequestIdRef.current) {
+        setCalculatingFare(false);
+      }
     }
   };
 
@@ -847,10 +896,8 @@ export default function RiderHomeScreen() {
     if (destination.trim().length > 0) {
       calculateFareAuto();
     } else {
-      setFareEstimate(0);
-      setFareBreakdown(null);
-      setDiscountResult(null);
-      setOriginalFare(null);
+      clearFareState();
+      setFareError(null);
     }
   }, [destination, stops, selectedDestCoords, pickupLat, pickupLng]);
 
@@ -1386,54 +1433,76 @@ export default function RiderHomeScreen() {
         ? await reverseGeocode(resolvedPickupLat, resolvedPickupLng)
         : pickupLocation;
 
-      let zoneId = await detectZoneFromCoordinates(resolvedPickupLat, resolvedPickupLng);
-
-      const { data: ride, error } = await supabase
-        .from('rides')
-        .insert([{
-          rider_id: user.id,
-          pickup_lat: resolvedPickupLat,
-          pickup_lng: resolvedPickupLng,
-          pickup_address: pickupAddress,
-          dropoff_lat: selectedDestCoords?.lat ?? location.latitude + 0.01,
-          dropoff_lng: selectedDestCoords?.lng ?? location.longitude + 0.01,
-          dropoff_address: destination,
-          stops: allStops, current_stop: 0,
-          status: 'requested', fare_ghs: originalFare ?? fareEstimate,
-          estimated_fare: fareEstimate,
-          expected_distance_km: fareBreakdown?.expectedDistanceKm ?? null,
-          payment_method: paymentMethod,
-          zone_id: zoneId,
-          created_at: new Date().toISOString(),
-          ...(discountResult?.discount ? {
-            discount_id: discountResult.discount.id,
-            discount_amount: discountResult.discountAmount,
-            discounted_fare: discountResult.finalFare,
-          } : {}),
-        }])
-        .select().single();
-      if (error || !ride) { Alert.alert('Error', error?.message ?? 'Could not create ride request. Please try again.'); }
-      else {
-        setCurrentRide(ride); setRideStatus('requested');
-        setLastRequestTime(Date.now());
-        setHasBoarded(false);
-        setBoardingLoading(false);
-        setDispatchAttempt(0);
-        handledReofferAttemptRef.current = 0;
-        await subscribeToRideUpdates(ride.id);
-        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = setInterval(() => pollRideStatus(ride.id), 5000);
-
-        // Sequential dispatch owns the "no driver responded" cancellation + alert from
-        // here — dispatchToNearestDriver cascades through drivers on its own 30s timeout
-        // and cancels the ride itself once no more candidates are left.
-        dispatchToNearestDriver(ride.id);
-
-        if (discountResult?.discount) await recordDiscountUse(discountResult.discount.id);
-        Alert.alert('Ride Requested 🛺', stops.length > 0 ? `Finding a driver... ${stops.length} stop(s) added.` : 'Finding a nearby driver...');
-        setDestination(''); setStops([]); setFareEstimate(null); setFareBreakdown(null); setDiscountResult(null); setOriginalFare(null);
-        setPickupLocation('My Current Location'); setPickupLat(null); setPickupLng(null);
+      // Require a fresh quote. Re-quote when within 30s of expiry (or missing).
+      let activeQuoteId = quoteId;
+      const expiryMs = quoteExpiresAt ? new Date(quoteExpiresAt).getTime() : 0;
+      if (!activeQuoteId || expiryMs - Date.now() < 30_000) {
+        const q = await calculateFareAuto();
+        if (!q) {
+          Alert.alert('Error', "Couldn't get a fare. Please try again.");
+          return;
+        }
+        activeQuoteId = q.id;
       }
+
+      const { data: rpcResult, error: rpcError } = await supabase.rpc('create_ride_from_quote', {
+        p_quote_id: activeQuoteId,
+        p_pickup_address: pickupAddress,
+        p_dropoff_address: destination,
+        p_stops: allStops,
+        p_payment_method: paymentMethod,
+      });
+
+      if (rpcError) {
+        Alert.alert('Error', rpcError.message ?? 'Could not create ride request. Please try again.');
+        return;
+      }
+
+      if (!rpcResult?.success) {
+        const code = rpcResult?.error;
+        if (code === 'quote_expired' || code === 'quote_used' || code === 'quote_not_found') {
+          const q = await calculateFareAuto();
+          if (q) {
+            Alert.alert('Fare updated', `Your fare is now GH₵ ${fareEstimate?.toFixed(2) ?? '--'}. Tap Request again to confirm.`);
+          } else {
+            Alert.alert('Error', "Couldn't refresh the fare. Please try again.");
+          }
+          return;
+        }
+        if (code === 'discount_unavailable') {
+          const q = await calculateFareAuto();
+          if (q) {
+            Alert.alert('Discount no longer available', `Your fare is now GH₵ ${fareEstimate?.toFixed(2) ?? '--'}. Tap Request again to confirm.`);
+          } else {
+            Alert.alert('Error', "Couldn't refresh the fare. Please try again.");
+          }
+          return;
+        }
+        Alert.alert('Error', code || 'Could not create ride request. Please try again.');
+        return;
+      }
+
+      const ride = rpcResult.ride;
+      setCurrentRide(ride); setRideStatus('requested');
+      setLastRequestTime(Date.now());
+      setHasBoarded(false);
+      setBoardingLoading(false);
+      setDispatchAttempt(0);
+      handledReofferAttemptRef.current = 0;
+      await subscribeToRideUpdates(ride.id);
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = setInterval(() => pollRideStatus(ride.id), 5000);
+
+      // Sequential dispatch owns the "no driver responded" cancellation + alert from
+      // here — dispatchToNearestDriver cascades through drivers on its own 30s timeout
+      // and cancels the ride itself once no more candidates are left.
+      dispatchToNearestDriver(ride.id);
+
+      Alert.alert('Ride Requested 🛺', stops.length > 0 ? `Finding a driver... ${stops.length} stop(s) added.` : 'Finding a nearby driver...');
+      setDestination(''); setStops([]);
+      clearFareState();
+      setFareError(null);
+      setPickupLocation('My Current Location'); setPickupLat(null); setPickupLng(null);
     } catch (error: any) {
       console.error('Ride request error:', error?.code || 'unknown');
       Alert.alert('Error', error?.message || 'Could not request ride. Please try again.');
@@ -2248,7 +2317,17 @@ export default function RiderHomeScreen() {
                 <Text style={styles.fareBadgeAmount}>GH₵ {fareEstimate.toFixed(2)}</Text>
                 <Text style={styles.fareBadgeLabel}>Estimated Fare</Text>
               </View>
+              {distanceEstimated ? (
+                <Text style={{ fontSize: 12, color: theme.textSecondary, marginTop: 6, textAlign: 'center' }}>
+                  Couldn't measure the distance — fare is an estimate.
+                </Text>
+              ) : null}
             </View>
+          ) : null}
+          {!calculatingFare && !fareEstimate && fareError ? (
+            <Text style={{ fontSize: 13, color: theme.textSecondary, textAlign: 'center', marginVertical: 12 }}>
+              {fareError}
+            </Text>
           ) : null}
           <View style={styles.paymentContainer}>
             <Text style={styles.paymentLabel}>Payment Method</Text>
