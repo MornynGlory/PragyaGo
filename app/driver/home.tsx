@@ -20,6 +20,8 @@ import * as Location from 'expo-location'
 import MapView, { Marker, Polyline } from 'react-native-maps'
 import MapViewDirections from 'react-native-maps-directions'
 import { Feather } from '@expo/vector-icons'
+import TurnCard from '@/components/navigation/TurnCard'
+import NavBottomBar from '@/components/navigation/NavBottomBar'
 import { useTheme } from '@/lib/theme'
 import { supabase } from '@/lib/supabase'
 import { getDriverToken, sendPushNotification } from '@/lib/notifications'
@@ -129,6 +131,11 @@ export default function DriverHome() {
   const [nextInstruction, setNextInstruction] = useState<string | null>(null)
   const [nextDistance, setNextDistance] = useState<string | null>(null)
   const [routePoints, setRoutePoints] = useState<{ latitude: number; longitude: number }[]>([])
+  const [currentManeuver, setCurrentManeuver] = useState<string | undefined>(undefined)
+  const [thenInstruction, setThenInstruction] = useState<string | null>(null)
+  const [thenManeuver, setThenManeuver] = useState<string | undefined>(undefined)
+  const [routeSummary, setRouteSummary] = useState<{ duration: string | null; distance: string | null; arrival: string | null }>({ duration: null, distance: null, arrival: null })
+  const [liveDistanceText, setLiveDistanceText] = useState<string | null>(null)
   const distanceIntervalRef = useRef<any>(null)
   // Latest driver position, read by the distance interval so it doesn't use stale coords.
   const userLocRef = useRef<{ lat: number | null; lng: number | null }>({ lat: null, lng: null })
@@ -221,6 +228,35 @@ export default function DriverHome() {
     const instruction = step.html_instructions.replace(/<[^>]*>/g, ' ').trim()
     setNextInstruction(instruction)
     setNextDistance(step.distance.text)
+    setLiveDistanceText(step.distance.text)
+    setCurrentManeuver(step.maneuver)
+
+    const next = steps[stepIndex + 1]
+    if (next) {
+      setThenInstruction(next.html_instructions.replace(/<[^>]*>/g, ' ').trim())
+      setThenManeuver(next.maneuver)
+    } else {
+      setThenInstruction(null)
+      setThenManeuver(undefined)
+    }
+  }
+
+  const formatLiveDistance = (meters: number): string => {
+    if (meters < 1000) {
+      const rounded = Math.max(0, Math.round(meters / 10) * 10)
+      return `${rounded} m`
+    }
+    return `${(meters / 1000).toFixed(1)} km`
+  }
+
+  const formatArrivalTime = (durationSec: number): string => {
+    const d = new Date(Date.now() + durationSec * 1000)
+    let hours = d.getHours()
+    const minutes = d.getMinutes()
+    const ampm = hours >= 12 ? 'PM' : 'AM'
+    hours = hours % 12
+    if (hours === 0) hours = 12
+    return `${hours}:${minutes.toString().padStart(2, '0')} ${ampm}`
   }
 
   const fetchRoute = async (toLat: number, toLng: number) => {
@@ -236,10 +272,16 @@ export default function DriverHome() {
       )
       const data = await response.json()
       if (data.routes?.length > 0) {
-        routeStepsRef.current = data.routes[0].legs[0].steps
+        const leg = data.routes[0].legs[0]
+        routeStepsRef.current = leg.steps
         currentStepIndexRef.current = 0
         updateCurrentInstruction(0)
         setRoutePoints(decodePolyline(data.routes[0].overview_polyline.points))
+        setRouteSummary({
+          duration: leg.duration?.text ?? null,
+          distance: leg.distance?.text ?? null,
+          arrival: leg.duration?.value != null ? formatArrivalTime(leg.duration.value) : null,
+        })
       }
     } catch (e) {
       console.error('Route fetch error')
@@ -265,6 +307,7 @@ export default function DriverHome() {
     const endLat = currentStep.end_location.lat
     const endLng = currentStep.end_location.lng
     const distToStepEnd = calculateDistance(driverLat, driverLng, endLat, endLng)
+    setLiveDistanceText(formatLiveDistance(distToStepEnd))
     if (distToStepEnd < 30 && currentIndex + 1 < steps.length) {
       currentStepIndexRef.current = currentIndex + 1
       updateCurrentInstruction(currentIndex + 1)
@@ -286,6 +329,11 @@ export default function DriverHome() {
       setNextInstruction(null)
       setNextDistance(null)
       setRoutePoints([])
+      setCurrentManeuver(undefined)
+      setThenInstruction(null)
+      setThenManeuver(undefined)
+      setRouteSummary({ duration: null, distance: null, arrival: null })
+      setLiveDistanceText(null)
       routeStepsRef.current = []
       currentStepIndexRef.current = 0
       lastFetchedDestRef.current = null
@@ -1358,32 +1406,14 @@ export default function DriverHome() {
 
       <View style={styles.mapContainer}>
         {(rideStatus === 'accepted' || rideStatus === 'in_progress') && nextInstruction ? (
-          <View style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            backgroundColor: '#1A1A2E',
-            paddingTop: insets.top + 8,
-            paddingBottom: 12,
-            paddingHorizontal: 16,
-            zIndex: 100,
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 12,
-          }}>
-            <Feather name="navigation" size={24} color="white" />
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: 'white', fontSize: 16, fontWeight: '700' }}>
-                {nextInstruction}
-              </Text>
-              {nextDistance ? (
-                <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, marginTop: 2 }}>
-                  {nextDistance}
-                </Text>
-              ) : null}
-            </View>
-          </View>
+          <TurnCard
+            instruction={nextInstruction}
+            distanceText={liveDistanceText ?? nextDistance}
+            maneuver={currentManeuver}
+            thenInstruction={thenInstruction}
+            thenManeuver={thenManeuver}
+            topInset={insets.top}
+          />
         ) : null}
         <MapView
           ref={mapRef}
@@ -1523,6 +1553,27 @@ export default function DriverHome() {
               </TouchableOpacity>
             )}
           </View>
+        ) : (rideStatus === 'accepted' || rideStatus === 'in_progress') && activeRide ? (
+          <NavBottomBar
+            mode={rideStatus === 'in_progress' ? 'to_destination' : 'to_pickup'}
+            theme={theme as any}
+            bottomInset={insets.bottom}
+            durationText={routeSummary.duration}
+            distanceText={routeSummary.distance}
+            arrivalTimeText={routeSummary.arrival}
+            riderName={riderInfo?.full_name || 'Rider'}
+            riderInitial={riderInfo?.full_name?.charAt(0) || '?'}
+            chatUnreadCount={chatUnreadCount}
+            pickupAddress={activeRide.pickup_address || 'Pickup'}
+            dropoffAddress={activeRide.dropoff_address || 'Destination'}
+            fareText={String(activeRide.fare_ghs ?? '0.00')}
+            paymentMethod={activeRide.payment_method}
+            onPressChat={() => router.push(('/chat/' + activeRide.id) as any)}
+            onPressCall={() => router.push(('/call/' + activeRide.id) as any)}
+            onPressPrimary={() => (rideStatus === 'in_progress' ? handleArrivedAtDestination() : handleArrivedAtPickup())}
+            onPressCancel={rideStatus === 'accepted' ? () => setShowCancelModal(true) : undefined}
+            onPressBreakdown={rideStatus === 'in_progress' ? () => setShowBreakdownModal(true) : undefined}
+          />
         ) : (
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
             {rideStatus === 'accepted' ? (
