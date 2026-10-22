@@ -132,27 +132,40 @@ serve(async (req) => {
       if (zs?.stop_fee != null) stopFee = zs.stop_fee;
     }
 
-    // --- Distance via Google Distance Matrix ---
+    // --- Distance via Google Routes API (the legacy Distance Matrix API is not
+    //     enabled for this project). Road distance only, no traffic: cheapest tier. ---
     let distanceKm = 2;
     let distanceEstimated = true;
     const googleKey = Deno.env.get('GOOGLE_MAPS_SERVER_KEY') ?? '';
     if (googleKey) {
       try {
-        const url =
-          `https://maps.googleapis.com/maps/api/distancematrix/json` +
-          `?origins=${pickup_lat},${pickup_lng}` +
-          `&destinations=${dropoff_lat},${dropoff_lng}` +
-          `&mode=driving&key=${googleKey}`;
-        const r = await fetch(url);
+        const r = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': googleKey,
+            'X-Goog-FieldMask': 'routes.distanceMeters',
+          },
+          body: JSON.stringify({
+            origin: { location: { latLng: { latitude: pickup_lat, longitude: pickup_lng } } },
+            destination: { location: { latLng: { latitude: dropoff_lat, longitude: dropoff_lng } } },
+            travelMode: 'DRIVE',
+            routingPreference: 'TRAFFIC_UNAWARE',
+          }),
+        });
         const d = await r.json();
-        if (d?.status === 'OK' && d.rows?.[0]?.elements?.[0]?.status === 'OK') {
-          distanceKm = d.rows[0].elements[0].distance.value / 1000;
+        const meters = d?.routes?.[0]?.distanceMeters;
+        if (r.ok && typeof meters === 'number' && meters > 0) {
+          distanceKm = meters / 1000;
           distanceEstimated = false;
+        } else if (r.ok) {
+          // No drivable route found (e.g. a destination cars can't reach).
+          console.error('routes_api no_route');
         } else {
-          console.error('distance_matrix non_ok', d?.status, d?.rows?.[0]?.elements?.[0]?.status);
+          console.error('routes_api error', r.status, d?.error?.status, d?.error?.message);
         }
       } catch (e) {
-        console.error('distance_matrix fetch failed', (e as Error)?.message);
+        console.error('routes_api fetch failed', (e as Error)?.message);
       }
     } else {
       console.error('GOOGLE_MAPS_SERVER_KEY missing');
