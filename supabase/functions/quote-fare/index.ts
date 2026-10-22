@@ -6,18 +6,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const FARE_MULTIPLIER = 4;
-const FARE_MARKUP = 1.85;
-const FALLBACK_PER_KM_DEFAULT = 1.5;
-const STOP_FEE_DEFAULT = 2;
 const MAX_STOPS_DEFAULT = 3;
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
-const round1 = (n: number) => Math.round(n * 10) / 10;
 
-// Mirrors lib/fares.ts
-const escapeForLike = (s: string): string =>
-  s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 
 const isFiniteNumber = (v: unknown): v is number =>
   typeof v === 'number' && Number.isFinite(v);
@@ -120,18 +111,6 @@ serve(async (req) => {
       }
     }
 
-    let fallbackPerKm = FALLBACK_PER_KM_DEFAULT;
-    let stopFee = STOP_FEE_DEFAULT;
-    if (zoneId) {
-      const { data: zs } = await admin
-        .from('zone_settings')
-        .select('fallback_per_km, stop_fee')
-        .eq('zone_id', zoneId)
-        .maybeSingle();
-      if (zs?.fallback_per_km != null) fallbackPerKm = zs.fallback_per_km;
-      if (zs?.stop_fee != null) stopFee = zs.stop_fee;
-    }
-
     // --- Distance via Google Routes API (the legacy Distance Matrix API is not
     //     enabled for this project). Road distance only, no traffic: cheapest tier. ---
     let distanceKm = 2;
@@ -171,31 +150,23 @@ serve(async (req) => {
       console.error('GOOGLE_MAPS_SERVER_KEY missing');
     }
 
-    // --- Base fare: zone_fares match or distance fallback ---
-    let baseFare = 0;
-    let fareSource: 'zone_table' | 'distance' = 'distance';
-
-    if (zoneId) {
-      const safeDest = escapeForLike(destination);
-      const { data: fareMatch } = await admin
-        .from('zone_fares')
-        .select('base_fare, to_location')
-        .eq('zone_id', zoneId)
-        .ilike('to_location', `%${safeDest}%`)
-        .limit(1)
-        .maybeSingle();
-      if (fareMatch) {
-        baseFare = round2(fareMatch.base_fare);
-        fareSource = 'zone_table';
-      }
+    // --- Seat fare: one formula in the database (pragya_fare) ---
+    //   minimum = seat fare × 4 × (1 + markup %), covering the first minimum_km;
+    //   each km beyond = minimum ÷ minimum_km; + stop fee per stop; rounded UP to whole cedis.
+    const { data: pf, error: pfError } = await admin.rpc('pragya_fare', {
+      p_zone_id: zoneId,
+      p_distance_km: distanceKm,
+      p_stops: stops_count,
+    });
+    if (pfError || !pf || typeof pf.fare !== 'number') {
+      console.error('pragya_fare failed', pfError?.message);
+      return errorResponse('internal_error', 500);
     }
-    if (fareSource === 'distance') {
-      baseFare = round2(distanceKm * fallbackPerKm);
-    }
-
-    const multipliedFare = round2(baseFare * FARE_MULTIPLIER);
-    const stopsCharge = round2(stops_count * stopFee);
-    const riderFare = round2(multipliedFare * FARE_MARKUP + stopsCharge);
+    const fareSource = 'seat_fare';
+    const baseFare = Number(pf.seat_fare);          // stored in fare_quotes.base_fare
+    const multipliedFare = Number(pf.minimum_fare); // kept for the app's breakdown shape
+    const stopsCharge = Number(pf.stops_charge);
+    const riderFare = Number(pf.fare);              // whole cedis
 
     // --- Discount (mirrors lib/discounts.ts) ---
     const nowIso = new Date().toISOString();
@@ -237,8 +208,9 @@ serve(async (req) => {
     let discountMessage: string | null = null;
     let discountId: string | null = null;
     if (bestDiscount) {
-      discountAmount = round1(riderFare * bestDiscount.percentage / 100);
-      finalFare = round1(riderFare - discountAmount);
+      // Whole cedis: the rider's price is rounded UP; the discount is whatever is left.
+      finalFare = Math.ceil(riderFare * (1 - Number(bestDiscount.percentage) / 100));
+      discountAmount = riderFare - finalFare;
       discountId = bestDiscount.id;
       if (bestDiscount.type === 'new_user') {
         discountMessage = `🎁 New rider discount: ${bestDiscount.percentage}% off your first ride!`;
@@ -250,7 +222,8 @@ serve(async (req) => {
     }
 
     const breakdown =
-      `Base GHS ${baseFare} × 4 = GHS ${multipliedFare} + 85%` +
+      `Minimum GHS ${pf.minimum_fare} (first ${pf.minimum_km} km)` +
+      (Number(pf.extra_km) > 0 ? ` + ${pf.extra_km} km × GHS ${pf.per_km_rate}` : '') +
       (stops_count > 0 ? ` + stops GHS ${stopsCharge}` : '') +
       ` = GHS ${riderFare}`;
 
@@ -266,7 +239,7 @@ serve(async (req) => {
         dropoff_lng,
         destination_text: destination,
         stops_count,
-        distance_km: distanceKm,
+        distance_km: Math.round(distanceKm * 100) / 100,
         fare_source: fareSource,
         base_fare: baseFare,
         rider_fare: riderFare,
@@ -286,7 +259,7 @@ serve(async (req) => {
       quote_id: quote.id,
       expires_at: quote.expires_at,
       zone_id: zoneId,
-      distance_km: distanceKm,
+      distance_km: Math.round(distanceKm * 100) / 100,
       distance_estimated: distanceEstimated,
       fare_source: fareSource,
       base_fare: baseFare,

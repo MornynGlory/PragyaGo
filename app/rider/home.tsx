@@ -1183,7 +1183,7 @@ export default function RiderHomeScreen() {
       setGoCashBalance(prev => prev - fareAmount);
       Alert.alert(
         '✅ Payment Sent!',
-        `GH₵ ${fareAmount.toFixed(2)} has been deducted from your Go Cash wallet.\n\nRemaining balance: GH₵ ${(goCashBalance - fareAmount).toFixed(2)}`,
+        `GH₵ ${Math.ceil(fareAmount)} has been deducted from your Go Cash wallet.\n\nRemaining balance: GH₵ ${(goCashBalance - fareAmount).toFixed(2)}`,
         [{ text: 'OK' }]
       );
 
@@ -1463,7 +1463,7 @@ export default function RiderHomeScreen() {
         if (code === 'quote_expired' || code === 'quote_used' || code === 'quote_not_found') {
           const q = await calculateFareAuto();
           if (q) {
-            Alert.alert('Fare updated', `Your fare is now GH₵ ${fareEstimate?.toFixed(2) ?? '--'}. Tap Request again to confirm.`);
+            Alert.alert('Fare updated', `Your fare is now GH₵ ${fareEstimate != null ? Math.ceil(fareEstimate) : '--'}. Tap Request again to confirm.`);
           } else {
             Alert.alert('Error', "Couldn't refresh the fare. Please try again.");
           }
@@ -1472,7 +1472,7 @@ export default function RiderHomeScreen() {
         if (code === 'discount_unavailable') {
           const q = await calculateFareAuto();
           if (q) {
-            Alert.alert('Discount no longer available', `Your fare is now GH₵ ${fareEstimate?.toFixed(2) ?? '--'}. Tap Request again to confirm.`);
+            Alert.alert('Discount no longer available', `Your fare is now GH₵ ${fareEstimate != null ? Math.ceil(fareEstimate) : '--'}. Tap Request again to confirm.`);
           } else {
             Alert.alert('Error', "Couldn't refresh the fare. Please try again.");
           }
@@ -1996,7 +1996,7 @@ export default function RiderHomeScreen() {
                         if (!hasEnoughBalance) {
                           Alert.alert(
                             'Insufficient Balance',
-                            `Your Go Cash balance (GH₵ ${goCashBalance.toFixed(2)}) is not enough for this fare (GH₵ ${fareAmount.toFixed(2)}). Please top up your Go Cash wallet.`,
+                            `Your Go Cash balance (GH₵ ${goCashBalance.toFixed(2)}) is not enough for this fare (GH₵ ${Math.ceil(fareAmount)}). Please top up your Go Cash wallet.`,
                             [
                               { text: 'Top Up', onPress: () => router.push('/rider-screens/gocash' as any) },
                               { text: 'Pay with Cash', onPress: () => {
@@ -2314,7 +2314,7 @@ export default function RiderHomeScreen() {
           {fareEstimate ? (
             <View style={styles.fareBadgeWrapper}>
               <View style={styles.fareBadge}>
-                <Text style={styles.fareBadgeAmount}>GH₵ {fareEstimate.toFixed(2)}</Text>
+                <Text style={styles.fareBadgeAmount}>GH₵ {Math.ceil(fareEstimate)}</Text>
                 <Text style={styles.fareBadgeLabel}>Estimated Fare</Text>
               </View>
               {distanceEstimated ? (
