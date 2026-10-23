@@ -1,5 +1,4 @@
 import { supabase } from '@/lib/supabase';
-import { sendOTP } from '@/lib/arkesel';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -11,10 +10,6 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-
-function generateCode(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
 
 function maskPhone(phone: string): string {
   if (phone.length < 6) return phone;
@@ -32,16 +27,37 @@ export default function VerifyPhoneScreen() {
   const [verifying, setVerifying] = useState(false);
   const [verifyError, setVerifyError] = useState('');
   const [cooldown, setCooldown] = useState(0);
+  const [maskedPhoneFromServer, setMaskedPhoneFromServer] = useState<string | null>(null);
   const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     dispatchCode();
     return () => { if (cooldownRef.current) clearInterval(cooldownRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startCooldown = () => {
-    setCooldown(60);
+  const routeByRole = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { router.replace('/' as any); return; }
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+      if (profile?.role === 'driver') {
+        router.replace('/auth/verify-driver' as any);
+      } else {
+        router.replace('/rider/home' as any);
+      }
+    } catch {
+      router.replace('/rider/home' as any);
+    }
+  };
+
+  const startCooldown = (seconds: number) => {
     if (cooldownRef.current) clearInterval(cooldownRef.current);
+    setCooldown(Math.max(0, Math.floor(seconds)));
     cooldownRef.current = setInterval(() => {
       setCooldown(prev => {
         if (prev <= 1) { clearInterval(cooldownRef.current!); return 0; }
@@ -56,30 +72,56 @@ export default function VerifyPhoneScreen() {
     setSendError('');
     setVerifyError('');
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Not authenticated');
+      const { data, error } = await supabase.functions.invoke('otp-send', { body: {} });
 
-      const code = generateCode();
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-
-      const { error: storeError } = await supabase
-        .from('profiles')
-        .update({ otp_code: code, otp_expires_at: expiresAt })
-        .eq('id', user.id);
-      if (storeError) throw storeError;
-
-      const result = await sendOTP(phone ?? '', code);
-      if (!result.success) {
+      if (error || !data) {
         setSendFailed(true);
-        setSendError(result.message ?? 'Could not send SMS. Please try again.');
+        setSendError('Could not send SMS. Please try again.');
+        return;
       }
+
+      if (data.error) {
+        switch (data.error) {
+          case 'too_soon': {
+            const retry = Number(data.retry_after_seconds) || 60;
+            startCooldown(retry);
+            setSendError(`Please wait ${retry}s before requesting another code.`);
+            setSendFailed(false);
+            return;
+          }
+          case 'too_many_requests':
+            setSendFailed(true);
+            setSendError('Too many attempts. Please try again later.');
+            return;
+          case 'no_phone_on_profile':
+            setSendFailed(true);
+            setSendError('No phone number on file. Please contact support.');
+            return;
+          case 'invalid_phone':
+            setSendFailed(true);
+            setSendError('The phone number on your profile looks invalid.');
+            return;
+          case 'sms_failed':
+          default:
+            setSendFailed(true);
+            setSendError('Could not send SMS. Please try again.');
+            return;
+        }
+      }
+
+      if (data.already_verified) {
+        await routeByRole();
+        return;
+      }
+
+      if (data.phone_masked) setMaskedPhoneFromServer(data.phone_masked);
+      startCooldown(Number(data.expires_in_seconds) || 60);
     } catch (err) {
       setSendFailed(true);
       setSendError(err instanceof Error ? err.message : 'Failed to send code. Please try again.');
     } finally {
       setSending(false);
     }
-    startCooldown();
   };
 
   const handleVerify = async () => {
@@ -90,40 +132,55 @@ export default function VerifyPhoneScreen() {
     setVerifying(true);
     setVerifyError('');
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Not authenticated');
+      const { data, error } = await supabase.functions.invoke('otp-verify', {
+        body: { code: enteredCode },
+      });
 
-      const { data: profile, error: fetchError } = await supabase
-        .from('profiles')
-        .select('otp_code, otp_expires_at')
-        .eq('id', user.id)
-        .single();
-      if (fetchError || !profile) throw new Error('Could not fetch verification record.');
-
-      if (!profile.otp_expires_at || new Date(profile.otp_expires_at) < new Date()) {
-        setVerifyError('Code has expired. Please request a new one.');
-        setVerifying(false);
+      if (error || !data) {
+        setVerifyError('Verification failed. Please try again.');
         return;
       }
 
-      if (enteredCode !== profile.otp_code) {
-        setVerifyError('Invalid code. Please try again.');
-        setVerifying(false);
-        return;
+      if (data.error) {
+        switch (data.error) {
+          case 'wrong_code': {
+            const left = data.attempts_left;
+            setVerifyError(typeof left === 'number'
+              ? `Wrong code — ${left} attempt${left === 1 ? '' : 's'} left.`
+              : 'Wrong code. Please try again.');
+            return;
+          }
+          case 'code_expired':
+            setVerifyError('Code expired, tap Resend.');
+            return;
+          case 'no_pending_code':
+            setVerifyError('No pending code. Tap Resend to get a new one.');
+            return;
+          case 'too_many_attempts':
+            setVerifyError('Too many attempts. Tap Resend for a new code.');
+            return;
+          case 'invalid_code_format':
+            setVerifyError('Please enter the 6-digit code.');
+            return;
+          default:
+            setVerifyError('Verification failed. Please try again.');
+            return;
+        }
       }
 
-      const { error: updateError } = await supabase
-        .from('profiles')
-        .update({ phone_verified: true, otp_code: null, otp_expires_at: null })
-        .eq('id', user.id);
-      if (updateError) throw updateError;
-
-      router.replace('/rider/home' as any);
+      if (data.ok) {
+        await routeByRole();
+        return;
+      }
+      setVerifyError('Verification failed. Please try again.');
     } catch (err) {
       setVerifyError(err instanceof Error ? err.message : 'Verification failed. Please try again.');
+    } finally {
       setVerifying(false);
     }
   };
+
+  const displayPhone = maskedPhoneFromServer ?? maskPhone(phone ?? '');
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -132,10 +189,9 @@ export default function VerifyPhoneScreen() {
         <Text style={styles.title}>Verify Your Number</Text>
         <Text style={styles.subtitle}>
           {'We sent a 6-digit code to\n'}
-          <Text style={styles.phoneText}>{maskPhone(phone ?? '')}</Text>
+          <Text style={styles.phoneText}>{displayPhone}</Text>
         </Text>
 
-        {/* Loading state */}
         {sending && (
           <View style={styles.sendingRow}>
             <ActivityIndicator color="#1D9E75" size="small" />
@@ -143,7 +199,6 @@ export default function VerifyPhoneScreen() {
           </View>
         )}
 
-        {/* Send failure — prominent error + Try Again */}
         {sendFailed && !sending && (
           <View style={styles.sendFailedBox}>
             <Text style={styles.sendFailedText}>{sendError || 'Could not send SMS.'}</Text>
@@ -153,7 +208,6 @@ export default function VerifyPhoneScreen() {
           </View>
         )}
 
-        {/* Code input + verify — visible even after failure so user can enter code if SMS arrived anyway */}
         {!sending && (
           <>
             <TextInput
@@ -187,7 +241,6 @@ export default function VerifyPhoneScreen() {
                 : <Text style={styles.verifyButtonText}>Verify</Text>}
             </Pressable>
 
-            {/* Resend only shown when SMS sent successfully; Try Again handles failed sends */}
             {!sendFailed && (
               <Pressable
                 style={styles.resendButton}

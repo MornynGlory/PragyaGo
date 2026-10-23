@@ -33,31 +33,36 @@ export default function LoginScreen() {
 
     setLoading(true);
     try {
-      // Step 1: look up profile by phone
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('id, role, email')
-        .eq('phone', phone.trim())
-        .maybeSingle();
-
-      if (!profile) {
-        Alert.alert('Error', 'Phone number not registered.');
-        return;
-      }
-
-      // Step 2: sign in with the profile's email
-      const { error } = await supabase.auth.signInWithPassword({
-        email: profile.email,
-        password,
+      const { data, error } = await supabase.functions.invoke('auth-login', {
+        body: { phone: phone.trim(), password },
       });
 
-      if (error) {
-        Alert.alert('Login Failed', error.message);
+      if (error || !data) {
+        Alert.alert('Error', 'Could not reach the login service. Please try again.');
         return;
       }
 
-      // Step 3: navigate by role
-      if (profile.role === 'driver') {
+      if (data.error) {
+        if (data.error === 'invalid_credentials') {
+          Alert.alert('Login Failed', 'Phone number or password is incorrect.');
+        } else if (data.error === 'missing_fields') {
+          Alert.alert('Validation', 'Please enter your phone number and password.');
+        } else {
+          Alert.alert('Error', 'Could not sign you in. Please try again.');
+        }
+        return;
+      }
+
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+      });
+      if (sessionError) {
+        Alert.alert('Error', 'Could not start your session. Please try again.');
+        return;
+      }
+
+      if (data.role === 'driver') {
         router.replace('/driver/home' as any);
       } else {
         router.replace('/rider/home' as any);

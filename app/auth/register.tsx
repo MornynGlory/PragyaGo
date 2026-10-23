@@ -44,6 +44,24 @@ export default function RegisterScreen() {
   const [sendingOTP, setSendingOTP] = useState(false);
   const [verifyingOTP, setVerifyingOTP] = useState(false);
   const [registeredPhone, setRegisteredPhone] = useState('');
+  const [otpError, setOtpError] = useState('');
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const resendCooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => { if (resendCooldownRef.current) clearInterval(resendCooldownRef.current); };
+  }, []);
+
+  const startResendCooldown = (seconds: number) => {
+    if (resendCooldownRef.current) clearInterval(resendCooldownRef.current);
+    setResendCooldown(Math.max(0, Math.floor(seconds)));
+    resendCooldownRef.current = setInterval(() => {
+      setResendCooldown(prev => {
+        if (prev <= 1) { clearInterval(resendCooldownRef.current!); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+  };
 
   const driverAnim = useRef(new Animated.Value(0)).current;
 
@@ -138,7 +156,25 @@ export default function RegisterScreen() {
         }
       }
 
-      await sendOTP(phone.trim());
+      // The OTP flow is logged-in-only. signUp usually returns a session, but on projects
+      // where it doesn't we sign in with the password that was just set.
+      if (!data.session) {
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+        if (signInError || !signInData?.session) {
+          Alert.alert(
+            'Email confirmation required',
+            'Your account was created but we could not start a session (email confirmation may be required). Please contact support — the OTP verification flow needs a logged-in user.'
+          );
+          return;
+        }
+      }
+
+      setRegisteredPhone(phone.trim());
+      setShowOTPScreen(true);
+      await sendOtpCode();
     } catch (err) {
       console.error('Registration error:', err);
       Alert.alert('Error', 'An unexpected error occurred during registration');
@@ -175,22 +211,44 @@ export default function RegisterScreen() {
     }
   };
 
-  const sendOTP = async (phoneNumber: string): Promise<boolean> => {
+  const sendOtpCode = async (): Promise<boolean> => {
     setSendingOTP(true);
+    setOtpError('');
     try {
-      const response = await fetch('https://admin.pragyago.com/api/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: phoneNumber }),
-      });
-      const data = await response.json();
-      if (data.success) {
-        setRegisteredPhone(phoneNumber);
-        setShowOTPScreen(true);
+      const { data, error } = await supabase.functions.invoke('otp-send', { body: {} });
+      if (error || !data) {
+        Alert.alert('Error', 'Could not send OTP. Please try again.');
+        return false;
+      }
+      if (data.error) {
+        switch (data.error) {
+          case 'too_soon': {
+            const retry = Number(data.retry_after_seconds) || 60;
+            startResendCooldown(retry);
+            setOtpError(`Please wait ${retry}s before requesting another code.`);
+            return false;
+          }
+          case 'too_many_requests':
+            Alert.alert('Too many attempts', 'Please try again later.');
+            return false;
+          case 'no_phone_on_profile':
+            Alert.alert('Error', 'No phone number on your profile. Please contact support.');
+            return false;
+          case 'invalid_phone':
+            Alert.alert('Error', 'The phone number on your profile looks invalid.');
+            return false;
+          case 'sms_failed':
+          default:
+            Alert.alert('Error', 'Could not send OTP. Please try again.');
+            return false;
+        }
+      }
+      if (data.already_verified) {
+        goToPostVerificationScreen();
         return true;
       }
-      Alert.alert('Error', 'Could not send OTP. Please try again.');
-      return false;
+      startResendCooldown(Number(data.expires_in_seconds) || 60);
+      return true;
     } catch {
       Alert.alert('Error', 'Could not send OTP. Please try again.');
       return false;
@@ -200,24 +258,48 @@ export default function RegisterScreen() {
   };
 
   const verifyOTP = async () => {
-    if (otp.length !== 6) { Alert.alert('Error', 'Please enter the 6-digit code'); return; }
+    if (otp.length !== 6) { setOtpError('Please enter the 6-digit code.'); return; }
     setVerifyingOTP(true);
+    setOtpError('');
     try {
-      const response = await fetch('https://admin.pragyago.com/api/verify-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: registeredPhone, code: otp }),
+      const { data, error } = await supabase.functions.invoke('otp-verify', {
+        body: { code: otp },
       });
-      const data = await response.json();
-      if (data.verified) {
-        await supabase.from('profiles').update({ phone_verified: true }).eq('phone', registeredPhone);
-        Alert.alert('Success', 'Phone verified successfully!');
-        goToPostVerificationScreen();
-      } else {
-        promptBypassVerification();
+      if (error || !data) {
+        setOtpError('Verification failed. Please try again.');
+        return;
       }
-    } catch {
-      promptBypassVerification();
+      if (data.error) {
+        switch (data.error) {
+          case 'wrong_code': {
+            const left = data.attempts_left;
+            setOtpError(typeof left === 'number'
+              ? `Wrong code — ${left} attempt${left === 1 ? '' : 's'} left.`
+              : 'Wrong code. Please try again.');
+            return;
+          }
+          case 'code_expired':
+            setOtpError('Code expired, tap Resend.');
+            return;
+          case 'no_pending_code':
+            setOtpError('No pending code. Tap Resend to get a new one.');
+            return;
+          case 'too_many_attempts':
+            setOtpError('Too many attempts. Tap Resend for a new code.');
+            return;
+          case 'invalid_code_format':
+            setOtpError('Please enter the 6-digit code.');
+            return;
+          default:
+            setOtpError('Verification failed. Please try again.');
+            return;
+        }
+      }
+      if (data.ok) {
+        goToPostVerificationScreen();
+        return;
+      }
+      setOtpError('Verification failed. Please try again.');
     } finally {
       setVerifyingOTP(false);
     }
@@ -231,28 +313,11 @@ export default function RegisterScreen() {
     }
   };
 
-  // TEMPORARY (testing only): Twilio OTP delivery is unreliable right now, so let
-  // the user bypass verification and continue. Remove this once Twilio is upgraded.
-  const promptBypassVerification = () => {
-    Alert.alert('Verification failed', 'Tap OK to continue anyway.', [
-      {
-        text: 'OK',
-        onPress: async () => {
-          await supabase.from('profiles').update({ phone_verified: true }).eq('phone', registeredPhone);
-          goToPostVerificationScreen();
-        },
-      },
-    ]);
-  };
-
   const resendOTP = async () => {
-    try {
-      setOtp('');
-      const sent = await sendOTP(registeredPhone);
-      if (sent) Alert.alert('Code Resent!', `A new verification code has been sent to ${registeredPhone}`);
-    } catch (e) {
-      Alert.alert('Error', 'Network error. Please check your connection.');
-    }
+    if (resendCooldown > 0) return;
+    setOtp('');
+    setOtpError('');
+    await sendOtpCode();
   };
 
   if (checkingTerms) {
@@ -282,7 +347,7 @@ export default function RegisterScreen() {
           <TextInput
             style={styles.otpInput}
             value={otp}
-            onChangeText={setOtp}
+            onChangeText={v => { setOtp(v.replace(/\D/g, '').slice(0, 6)); setOtpError(''); }}
             keyboardType="numeric"
             maxLength={6}
             placeholder="------"
@@ -291,6 +356,12 @@ export default function RegisterScreen() {
             autoFocus
             editable={!verifyingOTP}
           />
+
+          {otpError ? (
+            <Text style={{ color: '#FF6B6B', fontSize: 13, textAlign: 'center', marginBottom: 12 }}>
+              {otpError}
+            </Text>
+          ) : null}
 
           <TouchableOpacity
             style={[styles.registerBtn, (verifyingOTP || sendingOTP) && styles.btnDisabled]}
@@ -307,12 +378,14 @@ export default function RegisterScreen() {
           <TouchableOpacity
             style={styles.resendBtn}
             onPress={resendOTP}
-            disabled={sendingOTP || verifyingOTP}
+            disabled={sendingOTP || verifyingOTP || resendCooldown > 0}
             activeOpacity={0.7}
           >
             {sendingOTP
               ? <ActivityIndicator color="#1D9E75" size="small" />
-              : <Text style={styles.resendBtnText}>Resend code</Text>
+              : <Text style={[styles.resendBtnText, resendCooldown > 0 && { color: '#aaa' }]}>
+                  {resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : 'Resend code'}
+                </Text>
             }
           </TouchableOpacity>
         </View>

@@ -24,7 +24,7 @@ export default function ForgotPasswordScreen() {
   const [loading, setLoading] = useState(false);
   const [focused, setFocused] = useState(false);
   const [sent, setSent] = useState(false);
-  const [sentEmail, setSentEmail] = useState('');
+  const [sentMessage, setSentMessage] = useState('');
 
   const handleSend = async () => {
     if (!phone.trim()) {
@@ -33,27 +33,16 @@ export default function ForgotPasswordScreen() {
     }
     setLoading(true);
     try {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('email')
-        .eq('phone', phone.trim())
-        .maybeSingle();
-
-      if (!profile?.email) {
-        Alert.alert('Not Found', 'No account found with this phone number.');
-        return;
-      }
-
-      const { error } = await supabase.auth.resetPasswordForEmail(profile.email, {
-        redirectTo: 'pragyago://auth/reset-password',
+      const { data, error } = await supabase.functions.invoke('auth-reset', {
+        body: { phone: phone.trim() },
       });
 
-      if (error) {
-        Alert.alert('Error', error.message);
+      if (error || !data) {
+        Alert.alert('Error', 'Something went wrong. Please try again.');
         return;
       }
 
-      setSentEmail(profile.email);
+      setSentMessage(data.message || 'If an account exists for that number, we have sent reset instructions.');
       setSent(true);
     } catch {
       Alert.alert('Error', 'Something went wrong. Please try again.');
@@ -69,9 +58,9 @@ export default function ForgotPasswordScreen() {
         <View style={styles.bgCircleBottom} />
         <View style={styles.successContainer}>
           <Feather name="check-circle" size={64} color="#1D9E75" />
-          <Text style={styles.successTitle}>Check your email!</Text>
+          <Text style={styles.successTitle}>Check your inbox</Text>
           <Text style={styles.successMessage}>
-            {`We sent a password reset link to\n${sentEmail}\n\nOpen the email and tap the link to set a new password.`}
+            {sentMessage}
           </Text>
           <Pressable
             style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]}
