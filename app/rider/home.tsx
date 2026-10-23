@@ -1,4 +1,5 @@
 import { FareResult, getFareSuggestions } from '@/lib/fares';
+import RideSearchingSheet from '@/components/rider/RideSearchingSheet';
 
 type DiscountResult = {
   discount: { id: string } | null;
@@ -901,6 +902,42 @@ export default function RiderHomeScreen() {
     }
   }, [destination, stops, selectedDestCoords, pickupLat, pickupLng]);
 
+  const requestedFitDoneRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (rideStatus !== 'requested' || !currentRide?.id) {
+      requestedFitDoneRef.current = null;
+      return;
+    }
+    if (requestedFitDoneRef.current === currentRide.id) return;
+
+    const pickup = currentRide.pickup_lat != null && currentRide.pickup_lng != null
+      ? { latitude: Number(currentRide.pickup_lat), longitude: Number(currentRide.pickup_lng) }
+      : (userLat != null && userLng != null ? { latitude: userLat, longitude: userLng } : null);
+    if (!pickup) return;
+
+    const points = [pickup];
+    for (const d of nearbyDrivers) {
+      const lat = parseFloat(d.current_lat);
+      const lng = parseFloat(d.current_lng);
+      if (!isNaN(lat) && !isNaN(lng)) points.push({ latitude: lat, longitude: lng });
+    }
+
+    requestedFitDoneRef.current = currentRide.id;
+    startPulseAnimation();
+    if (points.length >= 2) {
+      mapRef.current?.fitToCoordinates(points, {
+        edgePadding: { top: 120, right: 60, bottom: 320, left: 60 },
+        animated: true,
+      });
+    } else {
+      mapRef.current?.animateToRegion({
+        ...pickup,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      });
+    }
+  }, [rideStatus, currentRide?.id, nearbyDrivers.length, userLat, userLng]);
+
   const handleDriverCancelled = async (ride: any) => {
     if (ride.status !== 'requested' || (ride.dispatch_attempt ?? 0) <= handledReofferAttemptRef.current) {
       return;
@@ -930,10 +967,6 @@ export default function RiderHomeScreen() {
     dispatchToNearestDriver(ride.id);
 
     Vibration.vibrate([0, 300, 150, 300]);
-    Alert.alert(
-      'Your driver cancelled',
-      "Don't worry — we're finding you another Pragya nearby."
-    );
   };
 
   const subscribeToRideUpdates = async (rideId: string) => {
@@ -1766,8 +1799,19 @@ export default function RiderHomeScreen() {
           <MapView ref={mapRef} style={styles.map} customMapStyle={customMapStyle} mapType="standard" zoomEnabled={true} scrollEnabled={true}
             initialRegion={{ latitude: location.latitude, longitude: location.longitude, latitudeDelta: 0.05, longitudeDelta: 0.05 }}>
             {userLat != null && userLng != null ? (
-              <Marker coordinate={{ latitude: userLat, longitude: userLng }} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
-                <View style={{ alignItems: 'center', justifyContent: 'center', width: 60, height: 60 }}>
+              <Marker coordinate={{ latitude: userLat, longitude: userLng }} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={rideStatus === 'requested'}>
+                <View style={{ alignItems: 'center', justifyContent: 'center', width: 80, height: 80 }}>
+                  {rideStatus === 'requested' ? (
+                    <Animated.View
+                      style={{
+                        position: 'absolute',
+                        width: 70, height: 70, borderRadius: 35,
+                        backgroundColor: 'rgba(24,95,165,0.25)',
+                        transform: [{ scale: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1.6] }) }],
+                        opacity: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.6, 0] }),
+                      }}
+                    />
+                  ) : null}
                   {/* Outer pulse ring */}
                   <View style={{
                     position: 'absolute',
@@ -1879,21 +1923,19 @@ export default function RiderHomeScreen() {
           }}
         >
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
-          {rideStatus === 'requested' && (
-            <TouchableOpacity
-              style={{
-                marginTop: 12,
-                paddingVertical: 12,
-                borderRadius: 10,
-                borderWidth: 1,
-                borderColor: theme.red,
-                alignItems: 'center',
-              }}
-              onPress={handleCancelRide}
-            >
-              <Text style={{ color: theme.red, fontWeight: '600' }}>Cancel Ride</Text>
-            </TouchableOpacity>
-          )}
+          {rideStatus === 'requested' && currentRide ? (
+            <RideSearchingSheet
+              pickupAddress={currentRide.pickup_address || 'Pickup'}
+              dropoffAddress={currentRide.dropoff_address || 'Destination'}
+              stops={Array.isArray(currentRide.stops) ? currentRide.stops : []}
+              fare={typeof displayFare === 'string' ? parseFloat(displayFare) : (displayFare ?? 0)}
+              paymentMethod={currentRide.payment_method}
+              nearbyCount={nearbyDrivers.length}
+              driverCancelled={(currentRide.dispatch_attempt ?? 0) > 0}
+              onCancel={handleCancelRide}
+              theme={theme as any}
+            />
+          ) : null}
           {driverInfo && ['accepted', 'rider_boarding', 'in_progress'].includes(rideStatus) ? (
         <View style={styles.driverInlineCard}>
           <View style={styles.driverInlineTopRow}>
@@ -2045,7 +2087,7 @@ export default function RiderHomeScreen() {
         )
       ) : null}
 
-        {!['arrived_destination', 'payment_pending', 'rider_boarding'].includes(rideStatus) ? (
+        {!['requested', 'arrived_destination', 'payment_pending', 'rider_boarding'].includes(rideStatus) ? (
           <View style={styles.rideStatusBanner}>
             {rideStatus === 'in_progress' ? (
               <>
