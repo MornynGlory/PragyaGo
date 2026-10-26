@@ -1,37 +1,88 @@
 import { supabase } from '@/lib/supabase';
+import { routeAfterAuth } from '@/lib/routeAfterAuth';
+import { useTheme } from '@/lib/theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   Image,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { TERMS_ACCEPTED_KEY, TERMS_VERSION } from './terms-screen';
 
 const PRAGYA_COLORS = ['Red', 'Blue', 'Yellow', 'Green', 'White', 'Black', 'Orange', 'Silver'];
-
 const COLOR_HEX: Record<string, string> = {
   Red: '#FF3B30', Blue: '#2563eb', Yellow: '#FFD60A', Green: '#34C759',
   White: '#F2F2F7', Black: '#3A3A3C', Orange: '#FF9500', Silver: '#8E8E93',
 };
 
+const GH_MOBILE_PREFIXES = ['020', '023', '024', '025', '026', '027', '028', '029', '050', '053', '054', '055', '056', '057', '059'];
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isGhMobile(digits: string): boolean {
+  if (digits.length !== 10 || !digits.startsWith('0')) return false;
+  return GH_MOBILE_PREFIXES.includes(digits.slice(0, 3));
+}
+
+function formatGhPhone(digits: string): string {
+  const d = digits.slice(0, 10);
+  if (d.length <= 3) return d;
+  if (d.length <= 6) return `${d.slice(0, 3)} ${d.slice(3)}`;
+  return `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}`;
+}
+
+type PasswordRules = {
+  length: boolean;
+  upper: boolean;
+  lower: boolean;
+  digit: boolean;
+  symbol: boolean;
+};
+function passwordRules(pw: string): PasswordRules {
+  return {
+    length: pw.length >= 8,
+    upper: /[A-Z]/.test(pw),
+    lower: /[a-z]/.test(pw),
+    digit: /\d/.test(pw),
+    symbol: /[^A-Za-z0-9]/.test(pw),
+  };
+}
+function passwordScore(pw: string): { score: number; label: 'Weak' | 'Fair' | 'Strong' } {
+  const r = passwordRules(pw);
+  const base = (r.length ? 1 : 0) + (r.upper ? 1 : 0) + (r.lower ? 1 : 0) + (r.digit ? 1 : 0);
+  const bonus = r.symbol && pw.length >= 10 ? 1 : 0;
+  const score = base + bonus;
+  const label: 'Weak' | 'Fair' | 'Strong' = score <= 2 ? 'Weak' : score <= 3 ? 'Fair' : 'Strong';
+  return { score, label };
+}
+function rulesAllPass(pw: string): boolean {
+  const r = passwordRules(pw);
+  return r.length && r.upper && r.lower && r.digit;
+}
+
 export default function RegisterScreen() {
   const router = useRouter();
+  const theme = useTheme();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [phone, setPhone] = useState('');
+  const [phoneDigits, setPhoneDigits] = useState('');
   const [ghanaCardId, setGhanaCardId] = useState('');
   const [plateNumber, setPlateNumber] = useState('');
   const [pragyaColor, setPragyaColor] = useState('');
@@ -39,6 +90,14 @@ export default function RegisterScreen() {
   const [loading, setLoading] = useState(false);
   const [checkingTerms, setCheckingTerms] = useState(true);
   const termsAcceptanceRef = useRef<{ version: string; acceptedAt: string } | null>(null);
+
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+
+  // OTP step
   const [showOTPScreen, setShowOTPScreen] = useState(false);
   const [otp, setOtp] = useState('');
   const [sendingOTP, setSendingOTP] = useState(false);
@@ -48,33 +107,18 @@ export default function RegisterScreen() {
   const [resendCooldown, setResendCooldown] = useState(0);
   const resendCooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // field refs for returnKeyType="next"
+  const emailRef = useRef<TextInput>(null);
+  const phoneRef = useRef<TextInput>(null);
+  const ghanaCardRef = useRef<TextInput>(null);
+  const plateRef = useRef<TextInput>(null);
+  const passwordRef = useRef<TextInput>(null);
+  const confirmRef = useRef<TextInput>(null);
+
   useEffect(() => {
     return () => { if (resendCooldownRef.current) clearInterval(resendCooldownRef.current); };
   }, []);
 
-  const startResendCooldown = (seconds: number) => {
-    if (resendCooldownRef.current) clearInterval(resendCooldownRef.current);
-    setResendCooldown(Math.max(0, Math.floor(seconds)));
-    resendCooldownRef.current = setInterval(() => {
-      setResendCooldown(prev => {
-        if (prev <= 1) { clearInterval(resendCooldownRef.current!); return 0; }
-        return prev - 1;
-      });
-    }, 1000);
-  };
-
-  const driverAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.timing(driverAnim, {
-      toValue: role === 'driver' ? 1 : 0,
-      duration: 250,
-      useNativeDriver: false,
-    }).start();
-  }, [role]);
-
-  // register.tsx is only reachable after accepting terms-screen; guard the direct-link
-  // case (e.g. deep link, stale nav state) by bouncing back if the flag isn't set.
   useEffect(() => {
     (async () => {
       try {
@@ -95,45 +139,110 @@ export default function RegisterScreen() {
     })();
   }, []);
 
+  const startResendCooldown = (seconds: number) => {
+    if (resendCooldownRef.current) clearInterval(resendCooldownRef.current);
+    setResendCooldown(Math.max(0, Math.floor(seconds)));
+    resendCooldownRef.current = setInterval(() => {
+      setResendCooldown(prev => {
+        if (prev <= 1) { clearInterval(resendCooldownRef.current!); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  // ----- field validators -----
+  const nameError = (): string | null => {
+    const parts = fullName.trim().split(/\s+/).filter(Boolean);
+    if (parts.length < 2) return 'Please enter your first and last name.';
+    return null;
+  };
+  const emailError = (): string | null => {
+    const e = email.trim().toLowerCase();
+    if (!e) return 'Email is required.';
+    if (!EMAIL_RE.test(e)) return 'Enter a valid email address.';
+    return null;
+  };
+  const phoneError = (): string | null => {
+    if (!phoneDigits) return 'Phone number is required.';
+    if (!isGhMobile(phoneDigits)) return 'Enter a 10-digit Ghana mobile number (e.g. 024…).';
+    return null;
+  };
+  const passwordError = (): string | null => {
+    if (!password) return 'Password is required.';
+    if (!rulesAllPass(password)) return 'Password does not meet the requirements.';
+    return null;
+  };
+  const confirmError = (): string | null => {
+    if (!confirmPassword) return 'Please confirm your password.';
+    if (confirmPassword !== password) return 'Passwords do not match.';
+    return null;
+  };
+  const driverGhanaCardError = (): string | null => {
+    if (role !== 'driver') return null;
+    if (!ghanaCardId.trim()) return 'Ghana Card ID is required.';
+    return null;
+  };
+  const driverPlateError = (): string | null => {
+    if (role !== 'driver') return null;
+    if (!plateNumber.trim()) return 'Plate number is required.';
+    return null;
+  };
+  const driverColorError = (): string | null => {
+    if (role !== 'driver') return null;
+    if (!pragyaColor) return 'Please pick a colour.';
+    return null;
+  };
+
+  const showErr = (key: string, err: string | null): string | null =>
+    (touched[key] || submitAttempted) ? err : null;
+
+  const formValid =
+    !nameError() && !emailError() && !phoneError() &&
+    !passwordError() && !confirmError() &&
+    !driverGhanaCardError() && !driverPlateError() && !driverColorError();
+
+  const markTouched = (k: string) => setTouched(t => ({ ...t, [k]: true }));
+
+  const friendlySignUpError = (msg: string): string => {
+    const m = (msg || '').toLowerCase();
+    if (m.includes('already registered') || m.includes('user already registered') || m.includes('already exists')) {
+      return 'This email is already registered.';
+    }
+    if (m.includes('password') && m.includes('short')) return "Password doesn't meet the requirements.";
+    if (m.includes('invalid email')) return 'Enter a valid email address.';
+    return 'Something went wrong creating your account. Please try again.';
+  };
+
   const handleRegister = async () => {
-    if (!email.trim() || !password.trim() || !fullName.trim() || !phone.trim()) {
-      Alert.alert('Validation', 'Please fill in all required fields');
-      return;
-    }
-    if (role === 'driver') {
-      if (!ghanaCardId.trim()) { Alert.alert('Validation', 'Please enter your Ghana Card ID'); return; }
-      if (!plateNumber.trim()) { Alert.alert('Validation', 'Please enter your Plate Number'); return; }
-      if (!pragyaColor) { Alert.alert('Validation', 'Please select your Pragya Color'); return; }
-    }
-    if (password !== confirmPassword) { Alert.alert('Validation', 'Passwords do not match'); return; }
-    if (password.length < 6) { Alert.alert('Validation', 'Password must be at least 6 characters'); return; }
+    Keyboard.dismiss();
+    setSubmitAttempted(true);
+    if (!formValid) return;
 
     setLoading(true);
     try {
-      const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
+      const trimmedEmail = email.trim().toLowerCase();
+      const { data, error } = await supabase.auth.signUp({ email: trimmedEmail, password });
       if (error) {
-        const alreadyExists = /already registered|already exists|user already registered/i.test(error.message || '');
-        if (alreadyExists) {
-          await signInExistingAccount();
+        const msg = error.message || '';
+        if (/already registered|already exists|user already registered/i.test(msg)) {
+          await signInExistingAccount(trimmedEmail);
           return;
         }
-        Alert.alert('Registration Error', error.message || 'An error occurred');
+        Alert.alert('Registration Error', friendlySignUpError(msg));
         return;
       }
       if (!data?.user) return;
 
       const { error: profileError } = await supabase.from('profiles').insert([{
         id: data.user.id, role,
-        full_name: fullName.trim(), phone: phone.trim(),
-        email: email.trim(), created_at: new Date().toISOString(),
+        full_name: fullName.trim(), phone: phoneDigits,
+        email: trimmedEmail, created_at: new Date().toISOString(),
       }]);
-
       if (profileError) {
         Alert.alert('Profile Creation Error', 'Account created but profile setup failed. Please try logging in.');
         return;
       }
 
-      // Record the terms acceptance captured on terms-screen now that the profile row exists.
       const acceptedAt = termsAcceptanceRef.current?.acceptedAt ?? new Date().toISOString();
       await supabase.from('profiles').update({
         terms_accepted_at: acceptedAt,
@@ -156,11 +265,9 @@ export default function RegisterScreen() {
         }
       }
 
-      // The OTP flow is logged-in-only. signUp usually returns a session, but on projects
-      // where it doesn't we sign in with the password that was just set.
       if (!data.session) {
         const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
+          email: trimmedEmail,
           password,
         });
         if (signInError || !signInData?.session) {
@@ -172,7 +279,7 @@ export default function RegisterScreen() {
         }
       }
 
-      setRegisteredPhone(phone.trim());
+      setRegisteredPhone(phoneDigits);
       setShowOTPScreen(true);
       await sendOtpCode();
     } catch (err) {
@@ -183,9 +290,10 @@ export default function RegisterScreen() {
     }
   };
 
-  const signInExistingAccount = async () => {
+  const signInExistingAccount = async (emailArg?: string) => {
+    const trimmedEmail = (emailArg ?? email.trim().toLowerCase());
     const { data, error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
+      email: trimmedEmail,
       password,
     });
     if (error || !data?.user) {
@@ -195,20 +303,8 @@ export default function RegisterScreen() {
       );
       return;
     }
-
     Alert.alert('Welcome back!', 'Signing you in...');
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', data.user.id)
-      .single();
-
-    if (profile?.role === 'driver') {
-      router.replace('/driver/home' as any);
-    } else {
-      router.replace('/rider/home' as any);
-    }
+    await routeAfterAuth(router);
   };
 
   const sendOtpCode = async (): Promise<boolean> => {
@@ -243,10 +339,7 @@ export default function RegisterScreen() {
             return false;
         }
       }
-      if (data.already_verified) {
-        goToPostVerificationScreen();
-        return true;
-      }
+      if (data.already_verified) { goToPostVerificationScreen(); return true; }
       startResendCooldown(Number(data.expires_in_seconds) || 60);
       return true;
     } catch {
@@ -262,13 +355,8 @@ export default function RegisterScreen() {
     setVerifyingOTP(true);
     setOtpError('');
     try {
-      const { data, error } = await supabase.functions.invoke('otp-verify', {
-        body: { code: otp },
-      });
-      if (error || !data) {
-        setOtpError('Verification failed. Please try again.');
-        return;
-      }
+      const { data, error } = await supabase.functions.invoke('otp-verify', { body: { code: otp } });
+      if (error || !data) { setOtpError('Verification failed. Please try again.'); return; }
       if (data.error) {
         switch (data.error) {
           case 'wrong_code': {
@@ -278,27 +366,14 @@ export default function RegisterScreen() {
               : 'Wrong code. Please try again.');
             return;
           }
-          case 'code_expired':
-            setOtpError('Code expired, tap Resend.');
-            return;
-          case 'no_pending_code':
-            setOtpError('No pending code. Tap Resend to get a new one.');
-            return;
-          case 'too_many_attempts':
-            setOtpError('Too many attempts. Tap Resend for a new code.');
-            return;
-          case 'invalid_code_format':
-            setOtpError('Please enter the 6-digit code.');
-            return;
-          default:
-            setOtpError('Verification failed. Please try again.');
-            return;
+          case 'code_expired': setOtpError('Code expired, tap Resend.'); return;
+          case 'no_pending_code': setOtpError('No pending code. Tap Resend to get a new one.'); return;
+          case 'too_many_attempts': setOtpError('Too many attempts. Tap Resend for a new code.'); return;
+          case 'invalid_code_format': setOtpError('Please enter the 6-digit code.'); return;
+          default: setOtpError('Verification failed. Please try again.'); return;
         }
       }
-      if (data.ok) {
-        goToPostVerificationScreen();
-        return;
-      }
+      if (data.ok) { goToPostVerificationScreen(); return; }
       setOtpError('Verification failed. Please try again.');
     } finally {
       setVerifyingOTP(false);
@@ -306,11 +381,8 @@ export default function RegisterScreen() {
   };
 
   const goToPostVerificationScreen = () => {
-    if (role === 'driver') {
-      router.replace('/auth/verify-driver' as any);
-    } else {
-      router.replace('/rider/home' as any);
-    }
+    if (role === 'driver') router.replace('/auth/verify-driver' as any);
+    else router.replace('/rider/home' as any);
   };
 
   const resendOTP = async () => {
@@ -320,384 +392,499 @@ export default function RegisterScreen() {
     await sendOtpCode();
   };
 
+  // ---------------- RENDER ----------------
   if (checkingTerms) {
     return (
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]} edges={['top', 'bottom']}>
         <View style={styles.loadingGate}>
-          <ActivityIndicator color="#1D9E75" />
+          <ActivityIndicator color={theme.green} />
         </View>
       </SafeAreaView>
     );
   }
 
+  const pwRules = passwordRules(password);
+  const pwScore = passwordScore(password);
+  const passwordsMatch = confirmPassword.length > 0 && confirmPassword === password;
+
+  // OTP screen
   if (showOTPScreen) {
     return (
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-        <View style={styles.otpContainer}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => setShowOTPScreen(false)}>
-            <Text style={styles.backBtnText}>←</Text>
-          </TouchableOpacity>
-
-          <View style={styles.headerSection}>
-            <Image source={require('@/assets/images/icon.png')} style={styles.logo} resizeMode="contain" />
-            <Text style={styles.title}>Verify your number</Text>
-            <Text style={styles.otpSubtitle}>Enter the 6-digit code sent to{'\n'}{registeredPhone}</Text>
-          </View>
-
-          <TextInput
-            style={styles.otpInput}
-            value={otp}
-            onChangeText={v => { setOtp(v.replace(/\D/g, '').slice(0, 6)); setOtpError(''); }}
-            keyboardType="numeric"
-            maxLength={6}
-            placeholder="------"
-            placeholderTextColor="rgba(255,255,255,0.2)"
-            textAlign="center"
-            autoFocus
-            editable={!verifyingOTP}
-          />
-
-          {otpError ? (
-            <Text style={{ color: '#FF6B6B', fontSize: 13, textAlign: 'center', marginBottom: 12 }}>
-              {otpError}
-            </Text>
-          ) : null}
-
-          <TouchableOpacity
-            style={[styles.registerBtn, (verifyingOTP || sendingOTP) && styles.btnDisabled]}
-            onPress={verifyOTP}
-            disabled={verifyingOTP || sendingOTP}
-            activeOpacity={0.85}
-          >
-            {verifyingOTP
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.registerBtnText}>Verify</Text>
-            }
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.resendBtn}
-            onPress={resendOTP}
-            disabled={sendingOTP || verifyingOTP || resendCooldown > 0}
-            activeOpacity={0.7}
-          >
-            {sendingOTP
-              ? <ActivityIndicator color="#1D9E75" size="small" />
-              : <Text style={[styles.resendBtnText, resendCooldown > 0 && { color: '#aaa' }]}>
-                  {resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : 'Resend code'}
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]} edges={['top', 'bottom']}>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+            <ScrollView
+              contentContainerStyle={styles.otpScroll}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.headerSection}>
+                <Image source={require('@/assets/images/icon.png')} style={styles.logo} resizeMode="contain" />
+                <Text style={[styles.title, { color: theme.text }]}>Verify your number</Text>
+                <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
+                  Enter the 6-digit code sent to{'\n'}{registeredPhone}
                 </Text>
-            }
-          </TouchableOpacity>
-        </View>
+              </View>
+
+              <TextInput
+                style={[styles.otpInput, { backgroundColor: theme.input, borderColor: theme.inputBorder, color: theme.text }]}
+                value={otp}
+                onChangeText={v => { setOtp(v.replace(/\D/g, '').slice(0, 6)); setOtpError(''); }}
+                keyboardType="number-pad"
+                maxLength={6}
+                placeholder="------"
+                placeholderTextColor={theme.placeholder}
+                textAlign="center"
+                autoFocus
+                editable={!verifyingOTP}
+                returnKeyType="done"
+                onSubmitEditing={verifyOTP}
+              />
+
+              {otpError ? (
+                <Text style={{ color: theme.red, fontSize: 13, textAlign: 'center', marginBottom: 12 }}>
+                  {otpError}
+                </Text>
+              ) : null}
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.primaryBtn,
+                  { backgroundColor: theme.green },
+                  (verifyingOTP || sendingOTP) && styles.btnDisabled,
+                  pressed && styles.btnPressed,
+                ]}
+                onPress={verifyOTP}
+                disabled={verifyingOTP || sendingOTP}
+              >
+                {verifyingOTP ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Verify</Text>}
+              </Pressable>
+
+              <TouchableOpacity
+                style={styles.linkBtn}
+                onPress={resendOTP}
+                disabled={sendingOTP || verifyingOTP || resendCooldown > 0}
+              >
+                {sendingOTP ? (
+                  <ActivityIndicator color={theme.green} size="small" />
+                ) : (
+                  <Text style={[
+                    { fontSize: 14, fontWeight: '600', color: theme.green },
+                    (resendCooldown > 0 || verifyingOTP) && { color: theme.textMuted },
+                  ]}>
+                    {resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : 'Resend code'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
+          </TouchableWithoutFeedback>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     );
   }
 
+  // Main sign-up screen
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      {/* Background decorations */}
-      <View style={styles.bgCircleTopRight} />
-      <View style={styles.bgCircleBottomLeft} />
-
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        {/* Back button */}
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.replace('/')} disabled={loading}>
-          <Text style={styles.backBtnText}>←</Text>
-        </TouchableOpacity>
-
-        {/* Logo + heading */}
-        <View style={styles.headerSection}>
-          <Image source={require('@/assets/images/icon.png')} style={styles.logo} resizeMode="contain" />
-          <Text style={styles.title}>Join PragyaGo</Text>
-          <Text style={styles.subtitle}>Create your account in seconds</Text>
-        </View>
-
-        {/* Role selector */}
-        <View style={styles.roleRow}>
-          <TouchableOpacity
-            style={[styles.roleCard, role === 'rider' && styles.roleCardActiveGreen]}
-            onPress={() => setRole('rider')}
-            disabled={loading}
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={styles.scrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
           >
-            <Text style={styles.roleEmoji}>👤</Text>
-            <Text style={[styles.roleTitle, role === 'rider' && styles.roleTitleGreen]}>Rider</Text>
-            <Text style={styles.roleSubtitle}>Book rides easily</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.roleCard, role === 'driver' && styles.roleCardActiveBlue]}
-            onPress={() => setRole('driver')}
-            disabled={loading}
-          >
-            <Text style={styles.roleEmoji}>🛺</Text>
-            <Text style={[styles.roleTitle, role === 'driver' && styles.roleTitleBlue]}>Driver</Text>
-            <Text style={styles.roleSubtitle}>Earn with your Pragya</Text>
-          </TouchableOpacity>
-        </View>
+            <TouchableOpacity
+              style={[styles.backBtn, { backgroundColor: theme.input }]}
+              onPress={() => router.replace('/')}
+              disabled={loading}
+            >
+              <Feather name="arrow-left" size={20} color={theme.text} />
+            </TouchableOpacity>
 
-        {/* Common fields */}
-        <View style={styles.form}>
-          <Text style={styles.fieldLabel}>Full Name</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter your full name"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-            value={fullName}
-            onChangeText={setFullName}
-            editable={!loading}
-          />
+            <View style={styles.headerSection}>
+              <Image source={require('@/assets/images/icon.png')} style={styles.logo} resizeMode="contain" />
+              <Text style={[styles.title, { color: theme.text }]}>Create your account</Text>
+              <Text style={[styles.subtitle, { color: theme.textSecondary }]}>Join PragyaGo in a few seconds</Text>
+            </View>
 
-          <Text style={styles.fieldLabel}>Email</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter your email"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            editable={!loading}
-          />
+            {/* Role segmented control */}
+            <View style={[styles.segment, { backgroundColor: theme.input, borderColor: theme.inputBorder }]}>
+              {(['rider', 'driver'] as const).map((r) => (
+                <Pressable
+                  key={r}
+                  onPress={() => setRole(r)}
+                  disabled={loading}
+                  style={[
+                    styles.segmentItem,
+                    role === r && { backgroundColor: theme.green },
+                  ]}
+                >
+                  <Text style={[
+                    styles.segmentText,
+                    { color: role === r ? '#fff' : theme.textSecondary },
+                  ]}>
+                    {r === 'rider' ? '👤 Rider' : '🛺 Driver'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
 
-          <Text style={styles.fieldLabel}>Phone Number</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="024XXXXXXX"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-            value={phone}
-            onChangeText={setPhone}
-            keyboardType="phone-pad"
-            editable={!loading}
-          />
-
-          {/* Driver details */}
-          {role === 'driver' && (
-            <Animated.View style={[styles.driverSection, {
-              opacity: driverAnim,
-              transform: [{ translateY: driverAnim.interpolate({ inputRange: [0, 1], outputRange: [-12, 0] }) }],
-            }]}>
-              <Text style={styles.driverSectionTitle}>🛺 Driver Details</Text>
-
-              <Text style={styles.fieldLabel}>Ghana Card ID</Text>
+            {/* Full name */}
+            <FieldLabel theme={theme}>Full name</FieldLabel>
+            <InputRow theme={theme} icon="user">
               <TextInput
-                style={styles.input}
-                placeholder="GHA-XXXXXXXXX-X"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-                value={ghanaCardId}
-                onChangeText={setGhanaCardId}
-                autoCapitalize="characters"
+                style={[styles.input, { color: theme.text }]}
+                placeholder="First and last name"
+                placeholderTextColor={theme.placeholder}
+                value={fullName}
+                onChangeText={setFullName}
+                onBlur={() => markTouched('name')}
                 editable={!loading}
+                returnKeyType="next"
+                onSubmitEditing={() => emailRef.current?.focus()}
+                autoCapitalize="words"
               />
+            </InputRow>
+            <ErrorLine theme={theme} msg={showErr('name', nameError())} />
 
-              <Text style={styles.fieldLabel}>Plate Number</Text>
+            {/* Email */}
+            <FieldLabel theme={theme}>Email</FieldLabel>
+            <InputRow theme={theme} icon="mail">
               <TextInput
-                style={styles.input}
-                placeholder="M-21-AW 5615"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-                value={plateNumber}
-                onChangeText={(t) => setPlateNumber(t.toUpperCase())}
-                autoCapitalize="characters"
+                ref={emailRef}
+                style={[styles.input, { color: theme.text }]}
+                placeholder="you@example.com"
+                placeholderTextColor={theme.placeholder}
+                value={email}
+                onChangeText={setEmail}
+                onBlur={() => markTouched('email')}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
                 editable={!loading}
+                returnKeyType="next"
+                onSubmitEditing={() => phoneRef.current?.focus()}
               />
+            </InputRow>
+            <ErrorLine theme={theme} msg={showErr('email', emailError())} />
 
-              <Text style={styles.fieldLabel}>Pragya Color</Text>
-              <View style={styles.colorGrid}>
-                {PRAGYA_COLORS.map((color) => (
-                  <TouchableOpacity
-                    key={color}
-                    style={[
-                      styles.colorChip,
-                      pragyaColor === color && { borderColor: COLOR_HEX[color], backgroundColor: 'rgba(255,255,255,0.1)' },
-                    ]}
-                    onPress={() => setPragyaColor(color)}
-                    disabled={loading}
-                  >
-                    <View style={[
-                      styles.colorDot,
-                      { backgroundColor: COLOR_HEX[color] },
-                      color === 'White' && styles.colorDotWhite,
-                    ]} />
-                    <Text style={[
-                      styles.colorChipText,
-                      pragyaColor === color && { color: COLOR_HEX[color], fontWeight: '700' },
-                    ]}>{color}</Text>
-                  </TouchableOpacity>
-                ))}
+            {/* Phone */}
+            <FieldLabel theme={theme}>Phone number</FieldLabel>
+            <InputRow theme={theme} icon="phone">
+              <TextInput
+                ref={phoneRef}
+                style={[styles.input, { color: theme.text }]}
+                placeholder="024 123 4567"
+                placeholderTextColor={theme.placeholder}
+                value={formatGhPhone(phoneDigits)}
+                onChangeText={v => setPhoneDigits(v.replace(/\D/g, '').slice(0, 10))}
+                onBlur={() => markTouched('phone')}
+                keyboardType="phone-pad"
+                editable={!loading}
+                returnKeyType="next"
+                onSubmitEditing={() => role === 'driver' ? ghanaCardRef.current?.focus() : passwordRef.current?.focus()}
+              />
+            </InputRow>
+            <ErrorLine theme={theme} msg={showErr('phone', phoneError())} />
+
+            {/* Driver block */}
+            {role === 'driver' ? (
+              <View style={[styles.driverSection, { backgroundColor: theme.blueLight, borderColor: theme.blue + '33' }]}>
+                <Text style={[styles.driverSectionTitle, { color: theme.blue }]}>🛺 Your Pragya</Text>
+
+                <FieldLabel theme={theme}>Ghana Card ID</FieldLabel>
+                <InputRow theme={theme} icon="credit-card">
+                  <TextInput
+                    ref={ghanaCardRef}
+                    style={[styles.input, { color: theme.text }]}
+                    placeholder="GHA-XXXXXXXXX-X"
+                    placeholderTextColor={theme.placeholder}
+                    value={ghanaCardId}
+                    onChangeText={setGhanaCardId}
+                    onBlur={() => markTouched('ghanaCard')}
+                    autoCapitalize="characters"
+                    editable={!loading}
+                    returnKeyType="next"
+                    onSubmitEditing={() => plateRef.current?.focus()}
+                  />
+                </InputRow>
+                <ErrorLine theme={theme} msg={showErr('ghanaCard', driverGhanaCardError())} />
+
+                <FieldLabel theme={theme}>Plate number</FieldLabel>
+                <InputRow theme={theme} icon="hash">
+                  <TextInput
+                    ref={plateRef}
+                    style={[styles.input, { color: theme.text }]}
+                    placeholder="M-21-AW 5615"
+                    placeholderTextColor={theme.placeholder}
+                    value={plateNumber}
+                    onChangeText={(t) => setPlateNumber(t.toUpperCase())}
+                    onBlur={() => markTouched('plate')}
+                    autoCapitalize="characters"
+                    editable={!loading}
+                    returnKeyType="next"
+                    onSubmitEditing={() => passwordRef.current?.focus()}
+                  />
+                </InputRow>
+                <ErrorLine theme={theme} msg={showErr('plate', driverPlateError())} />
+
+                <FieldLabel theme={theme}>Pragya colour</FieldLabel>
+                <View style={styles.colorGrid}>
+                  {PRAGYA_COLORS.map((color) => {
+                    const active = pragyaColor === color;
+                    return (
+                      <TouchableOpacity
+                        key={color}
+                        style={[
+                          styles.colorChip,
+                          { borderColor: theme.inputBorder, backgroundColor: theme.input },
+                          active && { borderColor: COLOR_HEX[color], backgroundColor: theme.greenLight },
+                        ]}
+                        onPress={() => { setPragyaColor(color); markTouched('color'); }}
+                        disabled={loading}
+                      >
+                        <View style={[
+                          styles.colorDot,
+                          { backgroundColor: COLOR_HEX[color] },
+                          color === 'White' && { borderWidth: 1, borderColor: theme.border },
+                        ]} />
+                        <Text style={[
+                          { fontSize: 12, color: theme.textSecondary },
+                          active && { color: COLOR_HEX[color], fontWeight: '700' },
+                        ]}>{color}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <ErrorLine theme={theme} msg={showErr('color', driverColorError())} />
+
+                <View style={[styles.driverNote, { backgroundColor: theme.blueLight }]}>
+                  <Text style={{ fontSize: 12, color: theme.blue, lineHeight: 18 }}>
+                    🔒 These details will be locked after registration. Visit any PragyaGo office to make changes.
+                  </Text>
+                </View>
               </View>
+            ) : null}
 
-              <View style={styles.driverNote}>
-                <Text style={styles.driverNoteText}>🔒 These details will be locked after registration. Visit any PragyaGo office to make changes.</Text>
+            {/* Password */}
+            <FieldLabel theme={theme}>Password</FieldLabel>
+            <InputRow theme={theme} icon="lock">
+              <TextInput
+                ref={passwordRef}
+                style={[styles.input, { color: theme.text, flex: 1 }]}
+                placeholder="At least 8 characters"
+                placeholderTextColor={theme.placeholder}
+                value={password}
+                onChangeText={setPassword}
+                onBlur={() => markTouched('password')}
+                secureTextEntry={!showPassword}
+                editable={!loading}
+                returnKeyType="next"
+                onSubmitEditing={() => confirmRef.current?.focus()}
+              />
+              <TouchableOpacity onPress={() => setShowPassword(v => !v)} hitSlop={10}>
+                <Feather name={showPassword ? 'eye-off' : 'eye'} size={18} color={theme.textSecondary} />
+              </TouchableOpacity>
+            </InputRow>
+
+            {password.length > 0 ? (
+              <View style={{ marginTop: 8, marginBottom: 4 }}>
+                <View style={styles.strengthRow}>
+                  {[0, 1, 2].map(i => (
+                    <View
+                      key={i}
+                      style={[
+                        styles.strengthBar,
+                        {
+                          backgroundColor:
+                            pwScore.score > i
+                              ? pwScore.label === 'Strong' ? theme.green : pwScore.label === 'Fair' ? theme.amber : theme.red
+                              : theme.inputBorder,
+                        },
+                      ]}
+                    />
+                  ))}
+                  <Text style={{ marginLeft: 8, fontSize: 12, color: theme.textSecondary }}>
+                    {pwScore.label}
+                  </Text>
+                </View>
+                <View style={{ marginTop: 6, gap: 2 }}>
+                  <RuleRow theme={theme} ok={pwRules.length} label="At least 8 characters" />
+                  <RuleRow theme={theme} ok={pwRules.upper} label="One uppercase letter" />
+                  <RuleRow theme={theme} ok={pwRules.lower} label="One lowercase letter" />
+                  <RuleRow theme={theme} ok={pwRules.digit} label="One number" />
+                  <RuleRow theme={theme} ok={pwRules.symbol} label="One symbol (optional)" optional />
+                </View>
               </View>
-            </Animated.View>
-          )}
+            ) : null}
+            <ErrorLine theme={theme} msg={showErr('password', passwordError())} />
 
-          <Text style={styles.fieldLabel}>Password</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Minimum 6 characters"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            editable={!loading}
-          />
+            {/* Confirm password */}
+            <FieldLabel theme={theme}>Confirm password</FieldLabel>
+            <InputRow theme={theme} icon="lock">
+              <TextInput
+                ref={confirmRef}
+                style={[styles.input, { color: theme.text, flex: 1 }]}
+                placeholder="Re-enter your password"
+                placeholderTextColor={theme.placeholder}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                onBlur={() => markTouched('confirm')}
+                secureTextEntry={!showConfirm}
+                editable={!loading}
+                returnKeyType="done"
+                onSubmitEditing={handleRegister}
+              />
+              <TouchableOpacity onPress={() => setShowConfirm(v => !v)} hitSlop={10}>
+                <Feather name={showConfirm ? 'eye-off' : 'eye'} size={18} color={theme.textSecondary} />
+              </TouchableOpacity>
+            </InputRow>
+            {confirmPassword.length > 0 ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                <Feather
+                  name={passwordsMatch ? 'check-circle' : 'x-circle'}
+                  size={14}
+                  color={passwordsMatch ? theme.green : theme.red}
+                />
+                <Text style={{ fontSize: 12, color: passwordsMatch ? theme.green : theme.red }}>
+                  {passwordsMatch ? 'Passwords match' : 'Passwords do not match'}
+                </Text>
+              </View>
+            ) : null}
+            <ErrorLine theme={theme} msg={showErr('confirm', confirmError())} />
 
-          <Text style={styles.fieldLabel}>Confirm Password</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Confirm your password"
-            placeholderTextColor="rgba(255,255,255,0.35)"
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            secureTextEntry
-            editable={!loading}
-          />
+            {/* Submit */}
+            <Pressable
+              style={({ pressed }) => [
+                styles.primaryBtn,
+                { backgroundColor: theme.green },
+                (!formValid || loading) && styles.btnDisabled,
+                pressed && styles.btnPressed,
+                { marginTop: 24 },
+              ]}
+              onPress={handleRegister}
+              disabled={loading}
+            >
+              {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Create account</Text>}
+            </Pressable>
 
-          {/* Register button */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.registerBtn,
-              role === 'driver' && styles.registerBtnDriver,
-              loading && styles.btnDisabled,
-              pressed && styles.btnPressed,
-            ]}
-            onPress={handleRegister}
-            disabled={loading}
-          >
-            {loading
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.registerBtnText}>Create Account</Text>
-            }
-          </Pressable>
-        </View>
-
-        {/* Sign in link */}
-        <View style={styles.signInRow}>
-          <Text style={styles.signInPrompt}>Already have an account? </Text>
-          <TouchableOpacity onPress={() => router.push('/auth/login')} disabled={loading}>
-            <Text style={styles.signInLink}>Sign In</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
+            <View style={styles.signInRow}>
+              <Text style={{ fontSize: 14, color: theme.textSecondary }}>Already have an account? </Text>
+              <TouchableOpacity onPress={() => router.push('/auth/login')} disabled={loading}>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: theme.green }}>Log in</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
+// ---- small presentational helpers (closed-over theme passed as prop) ----
+
+function FieldLabel({ children, theme }: { children: React.ReactNode; theme: ReturnType<typeof useTheme> }) {
+  return <Text style={{ fontSize: 13, fontWeight: '600', color: theme.textSecondary, marginTop: 14, marginBottom: 6 }}>{children}</Text>;
+}
+
+function InputRow({ children, theme, icon }: { children: React.ReactNode; theme: ReturnType<typeof useTheme>; icon: React.ComponentProps<typeof Feather>['name'] }) {
+  return (
+    <View style={[styles.inputRow, { backgroundColor: theme.input, borderColor: theme.inputBorder }]}>
+      <Feather name={icon} size={16} color={theme.textSecondary} style={{ marginRight: 10 }} />
+      {children}
+    </View>
+  );
+}
+
+function ErrorLine({ msg, theme }: { msg: string | null; theme: ReturnType<typeof useTheme> }) {
+  if (!msg) return null;
+  return <Text style={{ fontSize: 12, color: theme.red, marginTop: 4 }}>{msg}</Text>;
+}
+
+function RuleRow({ ok, label, theme, optional }: { ok: boolean; label: string; theme: ReturnType<typeof useTheme>; optional?: boolean }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      <Feather name={ok ? 'check-circle' : optional ? 'circle' : 'circle'} size={12} color={ok ? theme.green : theme.textMuted} />
+      <Text style={{ fontSize: 12, color: ok ? theme.green : theme.textSecondary }}>{label}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#0D1F2D' },
-  scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 24, paddingBottom: 48 },
+  safeArea: { flex: 1 },
+  scrollContent: { paddingHorizontal: 24, paddingBottom: 40 },
+  otpScroll: { paddingHorizontal: 24, paddingBottom: 48, paddingTop: 24, flexGrow: 1 },
 
-  /* Background */
-  bgCircleTopRight: {
-    position: 'absolute', width: 300, height: 300, borderRadius: 150,
-    backgroundColor: 'rgba(29,158,117,0.06)', top: -60, right: -60,
-  },
-  bgCircleBottomLeft: {
-    position: 'absolute', width: 220, height: 220, borderRadius: 110,
-    backgroundColor: 'rgba(24,95,165,0.07)', bottom: 80, left: -50,
-  },
-
-  /* Back */
   backBtn: {
-    marginTop: 12, marginBottom: 20, width: 40, height: 40,
-    borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.08)',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  backBtnText: { fontSize: 20, color: '#FFFFFF', lineHeight: 24 },
-
-  /* Header */
-  headerSection: { alignItems: 'center', marginBottom: 28 },
-  logo: { width: 50, height: 50, borderRadius: 12, backgroundColor: 'transparent', marginBottom: 12 },
-  title: { fontSize: 28, fontWeight: '900', color: '#FFFFFF', letterSpacing: -0.5, marginBottom: 6 },
-  subtitle: { fontSize: 14, color: 'rgba(255,255,255,0.5)' },
-
-  /* Role selector */
-  roleRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
-  roleCard: {
-    flex: 1, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 14, paddingVertical: 16, paddingHorizontal: 10,
-    alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)',
-  },
-  roleCardActiveGreen: {
-    borderColor: '#1D9E75',
-    backgroundColor: 'rgba(29,158,117,0.15)',
-  },
-  roleCardActiveBlue: {
-    borderColor: '#185FA5',
-    backgroundColor: 'rgba(24,95,165,0.15)',
-  },
-  roleEmoji: { fontSize: 28, marginBottom: 6 },
-  roleTitle: { fontSize: 15, fontWeight: '700', color: 'rgba(255,255,255,0.7)', marginBottom: 2 },
-  roleTitleGreen: { color: '#1D9E75' },
-  roleTitleBlue: { color: '#4DA3FF' },
-  roleSubtitle: { fontSize: 11, color: 'rgba(255,255,255,0.4)', textAlign: 'center' },
-
-  /* Form */
-  form: { gap: 6 },
-  fieldLabel: { fontSize: 13, fontWeight: '600', color: 'rgba(255,255,255,0.6)', marginTop: 10, marginBottom: 6 },
-  input: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 12, paddingHorizontal: 16, paddingVertical: 15,
-    fontSize: 15, color: '#FFFFFF',
+    marginTop: 12, marginBottom: 16, width: 40, height: 40,
+    borderRadius: 20, justifyContent: 'center', alignItems: 'center',
   },
 
-  /* Driver section */
+  headerSection: { alignItems: 'center', marginBottom: 24 },
+  logo: { width: 48, height: 48, borderRadius: 12, marginBottom: 12 },
+  title: { fontSize: 26, fontWeight: '900', letterSpacing: -0.5, marginBottom: 6 },
+  subtitle: { fontSize: 14, textAlign: 'center' },
+
+  segment: {
+    flexDirection: 'row',
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 4,
+    marginBottom: 8,
+  },
+  segmentItem: {
+    flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10,
+  },
+  segmentText: { fontSize: 14, fontWeight: '700' },
+
+  inputRow: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1, borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: Platform.OS === 'ios' ? 14 : 10,
+  },
+  input: { flex: 1, fontSize: 15 },
+
   driverSection: {
-    borderWidth: 1, borderColor: 'rgba(24,95,165,0.2)', borderRadius: 12,
-    padding: 16, marginTop: 10, marginBottom: 4,
-    backgroundColor: 'rgba(24,95,165,0.08)',
+    borderWidth: 1, borderRadius: 12,
+    padding: 14, marginTop: 12, marginBottom: 4,
   },
-  driverSectionTitle: { fontSize: 14, fontWeight: '700', color: '#185FA5', marginBottom: 14 },
-  colorGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
+  driverSectionTitle: { fontSize: 14, fontWeight: '700', marginBottom: 10 },
+  colorGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   colorChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.15)', borderRadius: 20,
-    paddingVertical: 6, paddingHorizontal: 10,
+    borderWidth: 1.5, borderRadius: 20, paddingVertical: 6, paddingHorizontal: 10,
   },
   colorDot: { width: 14, height: 14, borderRadius: 7 },
-  colorDotWhite: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)' },
-  colorChipText: { fontSize: 12, color: 'rgba(255,255,255,0.6)' },
-  driverNote: {
-    backgroundColor: 'rgba(24,95,165,0.12)', borderRadius: 8,
-    padding: 10, marginTop: 8,
+  driverNote: { borderRadius: 8, padding: 10, marginTop: 10 },
+
+  strengthRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  strengthBar: { flex: 1, height: 4, borderRadius: 2 },
+
+  primaryBtn: {
+    borderRadius: 14, paddingVertical: 16, alignItems: 'center',
+    shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 5,
   },
-  driverNoteText: { fontSize: 12, color: '#4DA3FF', lineHeight: 18 },
+  primaryBtnText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.3 },
+  btnDisabled: { opacity: 0.6 },
+  btnPressed: { opacity: 0.9, transform: [{ scale: 0.99 }] },
+
+  linkBtn: { alignItems: 'center', marginTop: 14, paddingVertical: 10 },
+
+  signInRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 20 },
+
+  otpInput: {
+    borderWidth: 1, borderRadius: 12,
+    paddingHorizontal: 16, paddingVertical: 16,
+    fontSize: 30, fontWeight: '700', letterSpacing: 8,
+    marginBottom: 16,
+  },
 
   loadingGate: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-
-  /* Register button */
-  registerBtn: {
-    backgroundColor: '#1D9E75', borderRadius: 14,
-    paddingVertical: 18, alignItems: 'center', marginTop: 20,
-    shadowColor: '#1D9E75', shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4, shadowRadius: 14, elevation: 7,
-  },
-  registerBtnDriver: { backgroundColor: '#185FA5', shadowColor: '#185FA5' },
-  btnDisabled: { opacity: 0.6 },
-  btnPressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
-  registerBtnText: { fontSize: 17, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.3 },
-
-  /* Sign in row */
-  signInRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 24 },
-  signInPrompt: { fontSize: 14, color: 'rgba(255,255,255,0.5)' },
-  signInLink: { fontSize: 14, fontWeight: '700', color: '#1D9E75' },
-
-  /* OTP screen */
-  otpContainer: { flex: 1, paddingHorizontal: 24, paddingBottom: 48 },
-  otpSubtitle: { fontSize: 14, color: 'rgba(255,255,255,0.5)', textAlign: 'center', lineHeight: 20 },
-  otpInput: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 12, paddingHorizontal: 16, paddingVertical: 16,
-    fontSize: 32, fontWeight: '700', letterSpacing: 8,
-    color: '#FFFFFF', marginBottom: 24,
-  },
-  resendBtn: { alignItems: 'center', marginTop: 16, paddingVertical: 10 },
-  resendBtnText: { fontSize: 14, color: '#1D9E75', fontWeight: '600' },
 });

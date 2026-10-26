@@ -1493,6 +1493,11 @@ export default function RiderHomeScreen() {
 
       if (!rpcResult?.success) {
         const code = rpcResult?.error;
+        if (code === 'phone_not_verified') {
+          Alert.alert('Please verify your phone number to continue');
+          router.replace('/auth/verify-phone' as any);
+          return;
+        }
         if (code === 'quote_expired' || code === 'quote_used' || code === 'quote_not_found') {
           const q = await calculateFareAuto();
           if (q) {

@@ -3,10 +3,12 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -32,9 +34,18 @@ export default function VerifyPhoneScreen() {
 
   useEffect(() => {
     dispatchCode();
-    return () => { if (cooldownRef.current) clearInterval(cooldownRef.current); };
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => {
+      if (cooldownRef.current) clearInterval(cooldownRef.current);
+      sub.remove();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleLogout = async () => {
+    try { await supabase.auth.signOut(); } catch {}
+    router.replace('/' as any);
+  };
 
   const routeByRole = async () => {
     try {
@@ -254,6 +265,9 @@ export default function VerifyPhoneScreen() {
             )}
           </>
         )}
+        <TouchableOpacity onPress={handleLogout} style={{ marginTop: 24, paddingVertical: 10 }}>
+          <Text style={{ color: '#888', fontSize: 14, textAlign: 'center' }}>Log out</Text>
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );

@@ -1073,6 +1073,12 @@ export default function DriverHome() {
       }
 
       if (!data.success) {
+        if (data.error === 'phone_not_verified') {
+          Alert.alert('Please verify your phone number to continue')
+          setRideRequest(null)
+          router.replace('/auth/verify-phone' as any)
+          return
+        }
         // Ride was taken by another driver
         Alert.alert('Ride Unavailable', 'This ride has already been taken by another driver.')
         setRideRequest(null)

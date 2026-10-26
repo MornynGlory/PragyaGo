@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { routeAfterAuth } from '@/lib/routeAfterAuth';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
@@ -62,11 +63,7 @@ export default function LoginScreen() {
         return;
       }
 
-      if (data.role === 'driver') {
-        router.replace('/driver/home' as any);
-      } else {
-        router.replace('/rider/home' as any);
-      }
+      await routeAfterAuth(router);
     } catch (err: any) {
       console.error('Login error:', err);
       Alert.alert('Error', 'An unexpected error occurred. Please try again.');

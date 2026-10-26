@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { routeAfterAuth } from '@/lib/routeAfterAuth';
 import { useTheme } from '@/lib/theme';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -59,74 +60,7 @@ export default function LandingScreen() {
     if (resolvingUserIdRef.current === userId) return;
     resolvingUserIdRef.current = userId;
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('role, suspended, suspension_reason, is_deleted')
-        .eq('id', userId)
-        .single();
-
-      if (error || !data?.role) { resolvingUserIdRef.current = null; setLoading(false); return; }
-
-      if (data.suspended) {
-        const reason = data.suspension_reason ?? 'No reason provided.';
-        await supabase.auth.signOut();
-        resolvingUserIdRef.current = null;
-        setLoading(false);
-        Alert.alert('Account Suspended', `Your account has been suspended.\n\nReason: ${reason}\n\nPlease contact PragyaGo support.`);
-        return;
-      }
-
-      if (data.is_deleted) {
-        const { data: deletion } = await supabase
-          .from('account_deletions')
-          .select('id, grace_period_ends_at')
-          .eq('user_id', userId)
-          .eq('status', 'pending')
-          .order('deletion_requested_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        const stillInGracePeriod = deletion?.grace_period_ends_at
-          ? new Date(deletion.grace_period_ends_at).getTime() > Date.now()
-          : false;
-
-        if (stillInGracePeriod) {
-          await supabase.from('profiles').update({
-            is_deleted: false,
-            deletion_requested_at: null,
-            deletion_reason: null,
-          }).eq('id', userId);
-          await supabase.from('account_deletions').update({
-            status: 'cancelled',
-            cancelled_at: new Date().toISOString(),
-          }).eq('id', deletion!.id);
-          Alert.alert('Welcome back!', 'Your account deletion request has been cancelled and your account is active again.');
-          // fall through to normal routing below
-        } else {
-          // Grace period has lapsed. Permanent purge of profile/ride data is a server-side
-          // job (service-role key required) — out of scope for this client app. This just
-          // blocks login; a backend job still needs to do the actual deletion.
-          await supabase.auth.signOut();
-          resolvingUserIdRef.current = null;
-          setLoading(false);
-          Alert.alert('Account Deleted', 'This account was permanently deleted after the 30-day grace period. Please register again if you\'d like to use PragyaGo.');
-          return;
-        }
-      }
-
-      if (data.role === 'driver') {
-        const { data: driver } = await supabase
-          .from('drivers')
-          .select('verification_status')
-          .eq('profile_id', userId)
-          .single();
-        const status = driver?.verification_status;
-        if (status === 'pending') router.replace('/auth/pending' as any);
-        else if (status === 'rejected') router.replace('/auth/rejected' as any);
-        else router.replace('/driver/home' as any);
-      } else {
-        router.replace('/rider/home' as any);
-      }
+      await routeAfterAuth(router);
     } catch {
       resolvingUserIdRef.current = null;
       setLoading(false);
