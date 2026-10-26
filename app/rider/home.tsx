@@ -1148,31 +1148,17 @@ export default function RiderHomeScreen() {
 
   const sendReceiptEmail = async (ride: any) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const riderEmail = user?.email;
-      const driverEmail = driverInfo?.profiles?.email;
-      const recipients = [riderEmail, driverEmail].filter(Boolean);
-      if (recipients.length === 0) return;
-      const finalFareValue = ride.final_fare_ghs || ride.fare_ghs;
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token || !ride?.id) return;
 
-      await fetch('https://admin.pragyago.com/api/send-email', {
+      await fetch('https://admin.pragyago.com/api/ride-receipt', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: recipients,
-          subject: `PragyaGo Ride Receipt - GH₵ ${finalFareValue}`,
-          message: `
-            Ride Receipt
-            Date: ${new Date().toLocaleDateString()}
-            From: ${ride.pickup_address}
-            To: ${ride.dropoff_address}
-            Fare: GH₵ ${finalFareValue}
-            Payment: ${ride.payment_method}
-            Driver: ${driverInfo?.profiles?.full_name || 'Your Driver'}
-            Thank you for riding with PragyaGo!
-          `,
-          fromEmail: 'noreply@pragyago.com'
-        })
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ ride_id: ride.id }),
       });
     } catch (e) {
       console.log('Receipt email error:', e);
