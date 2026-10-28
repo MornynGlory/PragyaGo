@@ -1079,6 +1079,11 @@ export default function DriverHome() {
           router.replace('/auth/verify-phone' as any)
           return
         }
+        if (data.error === 'driver_not_approved') {
+          Alert.alert('Your account is still being reviewed')
+          setRideRequest(null)
+          return
+        }
         // Ride was taken by another driver
         Alert.alert('Ride Unavailable', 'This ride has already been taken by another driver.')
         setRideRequest(null)

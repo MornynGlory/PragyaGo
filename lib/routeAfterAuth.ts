@@ -79,12 +79,14 @@ export async function routeAfterAuth(router: RouterLike): Promise<void> {
   if (profile.role === 'driver') {
     const { data: driver } = await supabase
       .from('drivers')
-      .select('verification_status')
+      .select('verification_status, vehicle_verified')
       .eq('profile_id', user.id)
       .single();
     const status = driver?.verification_status;
-    if (status === 'pending') router.replace('/auth/pending');
+    if (status == null) router.replace('/auth/verify-driver');
+    else if (status === 'pending') router.replace('/auth/pending');
     else if (status === 'rejected') router.replace('/auth/rejected');
+    else if (status === 'approved' && !driver?.vehicle_verified) router.replace('/auth/verify-vehicle');
     else router.replace('/driver/home');
     return;
   }

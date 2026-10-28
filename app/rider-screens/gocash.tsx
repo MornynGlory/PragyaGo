@@ -55,7 +55,12 @@ export default function GoCashScreen() {
   const userEmailRef = useRef('')
   const balanceRef = useRef(0)
 
-  useEffect(() => { fetchWallet() }, [])
+  useEffect(() => { init() }, [])
+
+  const init = async () => {
+    await fetchWallet()
+    await sweepPendingTopUps()
+  }
 
   const fetchWallet = async () => {
     setLoading(true)
@@ -91,53 +96,103 @@ export default function GoCashScreen() {
     }
   }
 
-  const handleTopUp = () => {
+  const sweepPendingTopUps = async () => {
+    try {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const { data: pending } = await supabase
+        .from('wallet_topups')
+        .select('reference')
+        .eq('status', 'pending')
+        .gte('created_at', since)
+      if (!pending || pending.length === 0) return
+      let credited = false
+      for (const row of pending) {
+        if (!row?.reference) continue
+        const { data } = await supabase.functions.invoke('topup-verify', {
+          body: { reference: row.reference },
+        })
+        if (data?.success) credited = true
+      }
+      if (credited) await fetchWallet()
+    } catch (err) {
+      console.log('sweepPendingTopUps error:', err)
+    }
+  }
+
+  const verifyWithRetry = async (reference: string): Promise<
+    | { ok: true; amount: number }
+    | { ok: false; status: 'retry_exhausted' | 'failed' }
+  > => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { data, error } = await supabase.functions.invoke('topup-verify', {
+        body: { reference },
+      })
+      if (!error && data?.success) {
+        return { ok: true, amount: Number(data.amount) || 0 }
+      }
+      const status = data?.status
+      if (status === 'failed' || status === 'abandoned' || status === 'mismatch') {
+        return { ok: false, status: 'failed' }
+      }
+      if (attempt < 4) await new Promise(r => setTimeout(r, 3000))
+    }
+    return { ok: false, status: 'retry_exhausted' }
+  }
+
+  const handleTopUp = async () => {
     const amount = parseFloat(topUpAmount)
     if (!amount || amount < 1) { Alert.alert('Invalid Amount', 'Please enter at least GH₵ 1.'); return }
     if (!momoPhone.trim() || momoPhone.trim().length < 9) { Alert.alert('Phone Required', 'Please enter your Mobile Money number (at least 9 digits).'); return }
     if (!userEmailRef.current) { Alert.alert('Error', 'Could not get your email. Please log in again.'); return }
 
-    const capturedAmount = amount
     const capturedProvider = provider
     const capturedPhone = momoPhone.trim()
-    const reference = `GOCASH_${userIdRef.current.slice(0, 8)}_${Date.now()}`
 
-    setPaystackParams({
-      email: userEmailRef.current,
-      amount: capturedAmount,
-      reference,
-      metadata: { mobile_money_phone: capturedPhone, mobile_money_provider: capturedProvider },
-      onSuccess: async (response: any) => {
-        const txRef = response.reference ?? reference
-        const newBalance = balanceRef.current + capturedAmount
-        setShowPaystack(false)
-        setProcessing(true)
-        try {
-          await supabase.from('profiles').update({ go_cash_balance: newBalance }).eq('id', userIdRef.current)
-          await supabase.from('payments').insert({
-            user_id: userIdRef.current, reference: txRef, amount: capturedAmount,
-            provider: PROVIDER_LABELS[capturedProvider], phone: capturedPhone,
-            type: 'go_cash_topup', status: 'success', created_at: new Date().toISOString(),
-          })
-          await supabase.from('go_cash_transactions').insert({
-            rider_id: userIdRef.current, amount: capturedAmount, type: 'topup',
-            description: `Top up via ${PROVIDER_LABELS[capturedProvider]} MoMo`,
-            reference: txRef, created_at: new Date().toISOString(),
-          })
-          balanceRef.current = newBalance
-          setBalance(newBalance)
-          setTopUpAmount('')
-          Alert.alert('Top Up Successful!', `GH₵ ${capturedAmount.toFixed(2)} added to your Go Cash wallet.`)
-          fetchWallet()
-        } catch {
-          Alert.alert('Balance Update Error', `Payment received (ref: ${txRef}) but balance update failed. Please contact support.`)
-        } finally {
-          setProcessing(false)
-        }
-      },
-      onCancel: () => setShowPaystack(false),
-    })
-    setShowPaystack(true)
+    setProcessing(true)
+    try {
+      const { data: initData, error: initError } = await supabase.functions.invoke('topup-init', {
+        body: { kind: 'go_cash', amount },
+      })
+      if (initError || !initData?.reference) {
+        Alert.alert('Error', 'Could not start the top-up. Please try again.')
+        return
+      }
+
+      const reference: string = initData.reference
+      const serverAmount: number = Number(initData.amount) || amount
+      const email: string = initData.email || userEmailRef.current
+
+      setPaystackParams({
+        email,
+        amount: serverAmount,
+        reference,
+        metadata: { mobile_money_phone: capturedPhone, mobile_money_provider: capturedProvider },
+        onSuccess: async () => {
+          setShowPaystack(false)
+          setProcessing(true)
+          try {
+            const result = await verifyWithRetry(reference)
+            if (result.ok) {
+              setTopUpAmount('')
+              Alert.alert('Top Up Successful!', `GH₵ ${result.amount.toFixed(2)} added to your Go Cash wallet.`)
+              await fetchWallet()
+            } else if (result.status === 'retry_exhausted') {
+              Alert.alert('Payment received', 'It will appear shortly.')
+            } else {
+              Alert.alert('Payment not completed')
+            }
+          } finally {
+            setProcessing(false)
+          }
+        },
+        onCancel: () => setShowPaystack(false),
+      })
+      setShowPaystack(true)
+    } catch {
+      Alert.alert('Error', 'Could not start the top-up. Please try again.')
+    } finally {
+      setProcessing(false)
+    }
   }
 
   const txnIconAndColor = (type: string) => {
@@ -195,7 +250,10 @@ export default function GoCashScreen() {
 
         {/* Top Up Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Top Up via Mobile Money</Text>
+          <Text style={styles.sectionTitle}>Top Up Go Cash</Text>
+          <Text style={styles.topUpNote}>
+            Top-ups can be paid with Mobile Money (MTN MoMo, Telecel Cash, AirtelTigo Money) or card, via Paystack.
+          </Text>
 
           <Text style={styles.fieldLabel}>Network</Text>
           <View style={styles.networkRow}>
@@ -322,7 +380,8 @@ function makeStyles(c: ReturnType<typeof useTheme>) {
     walletBalance: { fontSize: 42, fontWeight: '700', color: '#fff', marginBottom: 4 },
     walletSub: { fontSize: 13, color: 'rgba(255,255,255,0.75)' },
     section: { backgroundColor: c.card, margin: 16, marginTop: 0, borderRadius: 12, padding: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: c.cardBorder },
-    sectionTitle: { fontSize: 16, fontWeight: '600', color: c.text, marginBottom: 14 },
+    sectionTitle: { fontSize: 16, fontWeight: '600', color: c.text, marginBottom: 8 },
+    topUpNote: { fontSize: 13, color: c.textSecondary, lineHeight: 18, marginBottom: 14 },
     fieldLabel: { fontSize: 13, fontWeight: '600', color: c.textSecondary, marginBottom: 8 },
     networkRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
     networkBtn: { flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1.5, borderColor: c.border, alignItems: 'center', backgroundColor: c.card },

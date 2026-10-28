@@ -143,7 +143,7 @@ export default function RiderHomeScreen() {
   const [destination, setDestination] = useState('');
   const [stops, setStops] = useState<string[]>([]);
   const [newStop, setNewStop] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'momo'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'go_cash'>('cash');
   const [nearbyDrivers, setNearbyDrivers] = useState<any[]>([]);
   const [fareEstimate, setFareEstimate] = useState<number | null>(null);
   const [fareBreakdown, setFareBreakdown] = useState<FareResult | null>(null);
@@ -1430,6 +1430,19 @@ export default function RiderHomeScreen() {
       return;
     }
 
+    if (paymentMethod === 'go_cash' && fareEstimate != null && goCashBalance < fareEstimate) {
+      Alert.alert(
+        'Top up Go Cash',
+        `Your Go Cash balance (GH₵ ${goCashBalance.toFixed(2)}) is not enough for this fare (GH₵ ${Math.ceil(fareEstimate)}).`,
+        [
+          { text: 'Top Up', onPress: () => router.push('/rider-screens/gocash' as any) },
+          { text: 'Pay with Cash', onPress: () => setPaymentMethod('cash') },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+      return;
+    }
+
     // nearbyDrivers is kept fresh by a 5s poll (fetchNearbyDrivers) using the same
     // is_online + current_lat/lng filter, so it doubles as the "any driver online" check.
     if (nearbyDrivers.length === 0) {
@@ -1491,6 +1504,10 @@ export default function RiderHomeScreen() {
           } else {
             Alert.alert('Error', "Couldn't refresh the fare. Please try again.");
           }
+          return;
+        }
+        if (code === 'invalid_payment_method') {
+          Alert.alert('Please choose Cash or Go Cash');
           return;
         }
         if (code === 'discount_unavailable') {
@@ -1625,12 +1642,6 @@ export default function RiderHomeScreen() {
       if (error) {
         Alert.alert('Error', 'Could not submit rating. Please try again.');
         return;
-      }
-
-      const { data: ratings } = await supabase.from('ratings').select('score').eq('rated_user', driverInfo.profile_id);
-      if (ratings && ratings.length > 0) {
-        const avgRating = ratings.reduce((sum: number, r: { score: number }) => sum + r.score, 0) / ratings.length;
-        await supabase.from('drivers').update({ rating: Math.round(avgRating * 10) / 10 }).eq('id', driverInfo.id);
       }
 
       // Only close the modal and clear state if the insert actually succeeded
@@ -2368,8 +2379,8 @@ export default function RiderHomeScreen() {
               <TouchableOpacity style={[styles.paymentOption, paymentMethod === 'cash' ? styles.paymentActiveCash : null]} onPress={() => setPaymentMethod('cash')}>
                 <Text style={[styles.paymentText, paymentMethod === 'cash' ? styles.paymentTextActive : null]}>Cash</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.paymentOption, paymentMethod === 'momo' ? styles.paymentActiveMomo : null]} onPress={() => setPaymentMethod('momo')}>
-                <Text style={[styles.paymentText, paymentMethod === 'momo' ? styles.paymentTextActive : null]}>Go Cash</Text>
+              <TouchableOpacity style={[styles.paymentOption, paymentMethod === 'go_cash' ? styles.paymentActiveMomo : null]} onPress={() => setPaymentMethod('go_cash')}>
+                <Text style={[styles.paymentText, paymentMethod === 'go_cash' ? styles.paymentTextActive : null]}>Go Cash</Text>
               </TouchableOpacity>
             </View>
           </View>

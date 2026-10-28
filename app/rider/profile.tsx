@@ -56,7 +56,7 @@ export default function RiderProfileScreen() {
       const { data: wallet } = await supabase
         .from('go_cash_transactions')
         .select('amount')
-        .eq('user_id', user.id)
+        .eq('rider_id', user.id)
       if (wallet) {
         const balance = wallet.reduce((sum: number, t: { amount: number }) => sum + (t.amount ?? 0), 0)
         setGoCashBalance(Math.round(balance * 100) / 100)
@@ -123,7 +123,7 @@ export default function RiderProfileScreen() {
       const { data: goCash } = await supabase
         .from('go_cash_transactions')
         .select('amount')
-        .eq('user_id', user.id)
+        .eq('rider_id', user.id)
 
       if (goCash) {
         goCashBalance = Math.round(goCash.reduce((sum: number, t: { amount: number }) => sum + (t.amount ?? 0), 0) * 100) / 100

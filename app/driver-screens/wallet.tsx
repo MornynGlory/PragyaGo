@@ -20,7 +20,6 @@ import {
 import { PaystackProvider, usePaystack } from 'react-native-paystack-webview';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const COMMISSION_RATE = 0.15;
 const PAYSTACK_PUBLIC_KEY = process.env.EXPO_PUBLIC_PAYSTACK_PUBLIC_KEY ?? '';
 const PROVIDERS: MoMoProvider[] = ['mtn', 'tel', 'atl'];
 
@@ -70,8 +69,56 @@ export default function DriverWalletScreen() {
   const [transactions, setTransactions] = useState<any[]>([]);
 
   useEffect(() => {
-    loadData();
+    (async () => {
+      await loadData();
+      await sweepPendingTopUps();
+    })();
   }, []);
+
+  const sweepPendingTopUps = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: pending } = await supabase
+        .from('wallet_topups')
+        .select('reference')
+        .eq('status', 'pending')
+        .gte('created_at', since);
+      if (!pending || pending.length === 0) return;
+      let credited = false;
+      for (const row of pending) {
+        if (!row?.reference) continue;
+        const { data } = await supabase.functions.invoke('topup-verify', {
+          body: { reference: row.reference },
+        });
+        if (data?.success) credited = true;
+      }
+      if (credited) await loadData();
+    } catch (err) {
+      console.log('sweepPendingTopUps error:', err);
+    }
+  };
+
+  const verifyWithRetry = async (reference: string): Promise<
+    | { ok: true; amount: number }
+    | { ok: false; status: 'retry_exhausted' | 'failed' }
+  > => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { data, error } = await supabase.functions.invoke('topup-verify', {
+        body: { reference },
+      });
+      if (!error && data?.success) {
+        return { ok: true, amount: Number(data.amount) || 0 };
+      }
+      const status = data?.status;
+      if (status === 'failed' || status === 'abandoned' || status === 'mismatch') {
+        return { ok: false, status: 'failed' };
+      }
+      if (attempt < 4) await new Promise(r => setTimeout(r, 3000));
+    }
+    return { ok: false, status: 'retry_exhausted' };
+  };
 
   const loadData = async () => {
     try {
@@ -104,18 +151,8 @@ export default function DriverWalletScreen() {
       setGoCashEarnings(driver.go_cash_earnings || 0);
       setGoCashLocked(driver.go_cash_locked || false);
 
-      const dbCommission = driver.commission_owed ?? 0;
-      const dbLocked = driver.is_locked || false;
-      setCommissionOwed(dbCommission);
-      // Repair stale is_locked: lock is only valid when commission_owed > 0
-      if (dbLocked && dbCommission === 0) {
-        await supabase.from('drivers').update({ is_locked: false }).eq('id', driver.id);
-        setIsLocked(false);
-      } else {
-        setIsLocked(dbLocked);
-      }
-
-      await checkMidnightLock(driver);
+      setCommissionOwed(driver.commission_owed ?? 0);
+      setIsLocked(driver.is_locked || false);
 
       const { data: txns } = await supabase
         .from('driver_wallet_transactions')
@@ -131,17 +168,7 @@ export default function DriverWalletScreen() {
     }
   };
 
-  const checkMidnightLock = async (driver: any) => {
-    if (!driver.last_commission_date || !(driver.go_cash_earnings > 0)) return;
-    const lastDate = new Date(driver.last_commission_date).toISOString().split('T')[0];
-    const today = new Date().toISOString().split('T')[0];
-    if (lastDate < today && !driver.go_cash_locked) {
-      await supabase.from('drivers').update({ go_cash_locked: true }).eq('id', driver.id);
-      setGoCashLocked(true);
-    }
-  };
-
-  const handleTopUp = () => {
+  const handleTopUp = async () => {
     const amount = parseFloat(topUpAmount);
     if (!amount || amount < 1) {
       Alert.alert('Invalid Amount', 'Minimum top up is GH₵ 1.');
@@ -153,164 +180,117 @@ export default function DriverWalletScreen() {
     }
     if (!driverId || !userEmail) return;
 
-    // Capture all current state values before Paystack opens
-    const capturedDriverId = driverId;
-    const capturedAmount = amount;
     const capturedProvider = topUpProvider;
     const capturedPhone = topUpPhone.trim();
-    const capturedWalletBalance = walletBalance;
-    const capturedCommissionOwed = commissionOwed;
-    const capturedIsLocked = isLocked;
-    const capturedGoCashEarnings = goCashEarnings;
-    const reference = `WALLET_${driverId.slice(0, 8)}_${Date.now()}`;
-
-    setPaystackParams({
-      email: userEmail,
-      amount: capturedAmount, // GH₵ — Paystack GH₵ uses cedis, not pesewas
-      reference,
-      metadata: {
-        mobile_money_phone: capturedPhone,
-        mobile_money_provider: capturedProvider,
-      },
-      onSuccess: async (response: any) => {
-        const txRef = response.reference ?? reference;
-        const newBalance = capturedWalletBalance + capturedAmount;
-
-        setShowPaystack(false);
-        setSubmitting(true);
-        try {
-          await supabase
-            .from('drivers')
-            .update({ wallet_balance: newBalance })
-            .eq('id', capturedDriverId);
-
-          await supabase.from('payments').insert({
-            user_id: userIdRef.current,
-            reference: txRef,
-            amount: capturedAmount,
-            provider: PROVIDER_LABELS[capturedProvider],
-            phone: capturedPhone,
-            type: 'wallet_topup',
-            status: 'success',
-            created_at: new Date().toISOString(),
-          });
-
-          await supabase.from('driver_wallet_transactions').insert({
-            driver_id: capturedDriverId,
-            type: 'topup',
-            amount: capturedAmount,
-            description: `${PROVIDER_LABELS[capturedProvider]} MoMo top up of GH₵ ${capturedAmount.toFixed(2)}`,
-            reference: txRef,
-            created_at: new Date().toISOString(),
-          });
-
-          // Auto-deduct commission if the new balance covers it
-          let finalBalance = newBalance;
-          let finalCommission = capturedCommissionOwed;
-          let finalLocked = capturedIsLocked;
-
-          if (capturedCommissionOwed > 0 && newBalance >= capturedCommissionOwed) {
-            const deduction = capturedCommissionOwed;
-            let goCashDeduction = 0;
-            let walletDeduction = deduction;
-            if (capturedGoCashEarnings > 0) {
-              goCashDeduction = Math.min(capturedGoCashEarnings, deduction);
-              walletDeduction = deduction - goCashDeduction;
-            }
-            finalBalance -= walletDeduction;
-            finalCommission = 0;
-            finalLocked = false;
-
-            await supabase.from('driver_wallet_transactions').insert({
-              driver_id: capturedDriverId,
-              type: 'commission_deduction',
-              amount: deduction,
-              description: `Commission deducted automatically (${(COMMISSION_RATE * 100).toFixed(0)}%)`,
-              created_at: new Date().toISOString(),
-            });
-
-            const updates: any = { wallet_balance: finalBalance, commission_owed: 0, is_locked: false };
-            if (goCashDeduction > 0) {
-              const newGoCash = capturedGoCashEarnings - goCashDeduction;
-              updates.go_cash_earnings = newGoCash;
-              updates.go_cash_locked = false;
-              setGoCashEarnings(newGoCash);
-              setGoCashLocked(false);
-            }
-            await supabase.from('drivers').update(updates).eq('id', capturedDriverId);
-
-            Alert.alert(
-              'Top Up Successful!',
-              `GH₵ ${capturedAmount.toFixed(2)} added. Commission of GH₵ ${deduction.toFixed(2)} auto-deducted. Wallet unlocked!`,
-            );
-          } else {
-            Alert.alert('Top Up Successful!', `GH₵ ${capturedAmount.toFixed(2)} added to your wallet.`);
-          }
-
-          setWalletBalance(finalBalance);
-          setCommissionOwed(finalCommission);
-          setIsLocked(finalLocked);
-          setTopUpAmount('');
-          await refreshTransactions(capturedDriverId);
-        } catch {
-          Alert.alert(
-            'Balance Update Error',
-            `Payment received (ref: ${txRef}) but balance update failed. Please contact support.`,
-          );
-        } finally {
-          setSubmitting(false);
-        }
-      },
-      onCancel: () => setShowPaystack(false),
-    });
-
-    setShowPaystack(true);
-  };
-
-  const handleWithdraw = async () => {
-    const amount = parseFloat(withdrawAmount);
-    if (!amount || amount <= 0) { Alert.alert('Invalid Amount', 'Please enter a valid amount.'); return; }
-    if (amount > goCashEarnings) {
-      Alert.alert('Insufficient Balance', `Maximum withdrawal is GH₵ ${goCashEarnings.toFixed(2)}.`);
-      return;
-    }
-    if (!withdrawPhone.trim()) { Alert.alert('Phone Required', 'Please enter your Mobile Money number.'); return; }
-    if (commissionOwed > 0) { Alert.alert('Commission Owed', 'Please settle your commission before withdrawing.'); return; }
-    if (!driverId) return;
 
     setSubmitting(true);
     try {
-      await supabase.from('driver_withdrawals').insert([{
-        driver_id: driverId,
-        amount,
-        phone: withdrawPhone.trim(),
-        network: PROVIDER_LABELS[withdrawNetwork],
-        status: 'pending',
-        created_at: new Date().toISOString(),
-      }]);
+      const { data: initData, error: initError } = await supabase.functions.invoke('topup-init', {
+        body: { kind: 'driver_wallet', amount },
+      });
+      if (initError || !initData?.reference) {
+        Alert.alert('Error', 'Could not start the top-up. Please try again.');
+        return;
+      }
 
-      const newGoCash = goCashEarnings - amount;
-      await supabase.from('drivers').update({ go_cash_earnings: newGoCash }).eq('id', driverId);
-      setGoCashEarnings(newGoCash);
-      setWithdrawAmount('');
-      Alert.alert(
-        'Withdrawal Submitted',
-        `GH₵ ${amount.toFixed(2)} withdrawal to ${withdrawPhone} (${PROVIDER_LABELS[withdrawNetwork]}) submitted. Will be processed within 24 hours.`,
-      );
+      const reference: string = initData.reference;
+      const serverAmount: number = Number(initData.amount) || amount;
+      const email: string = initData.email || userEmail;
+
+      setPaystackParams({
+        email,
+        amount: serverAmount, // GH₵ — Paystack GH₵ uses cedis, not pesewas
+        reference,
+        metadata: {
+          mobile_money_phone: capturedPhone,
+          mobile_money_provider: capturedProvider,
+        },
+        onSuccess: async () => {
+          setShowPaystack(false);
+          setSubmitting(true);
+          try {
+            const result = await verifyWithRetry(reference);
+            if (result.ok) {
+              setTopUpAmount('');
+              Alert.alert('Top Up Successful!', `GH₵ ${result.amount.toFixed(2)} added to your wallet.`);
+              await loadData();
+            } else if (result.status === 'retry_exhausted') {
+              Alert.alert('Payment received', 'It will appear shortly.');
+            } else {
+              Alert.alert('Payment not completed');
+            }
+          } finally {
+            setSubmitting(false);
+          }
+        },
+        onCancel: () => setShowPaystack(false),
+      });
+
+      setShowPaystack(true);
     } catch {
-      Alert.alert('Error', 'Withdrawal failed. Please try again.');
+      Alert.alert('Error', 'Could not start the top-up. Please try again.');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const refreshTransactions = async (id: string) => {
-    const { data: txns } = await supabase
-      .from('driver_wallet_transactions')
-      .select('*')
-      .eq('driver_id', id)
-      .order('created_at', { ascending: false });
-    if (txns) setTransactions(txns);
+  const handleWithdraw = async () => {
+    const amount = parseFloat(withdrawAmount);
+    if (!amount || amount <= 0) { Alert.alert('Invalid Amount', 'Please enter a valid amount.'); return; }
+    if (!withdrawPhone.trim()) { Alert.alert('Phone Required', 'Please enter your Mobile Money number.'); return; }
+    if (!driverId) return;
+
+    setSubmitting(true);
+    try {
+      const { data, error } = await supabase.rpc('request_withdrawal', {
+        p_amount: amount,
+        p_network: PROVIDER_LABELS[withdrawNetwork],
+        p_number: withdrawPhone.trim(),
+      });
+
+      if (error) {
+        Alert.alert('Error', 'Withdrawal failed. Please try again.');
+        return;
+      }
+
+      if (!data?.success) {
+        const code = data?.error;
+        switch (code) {
+          case 'commission_owed':
+            Alert.alert('Pay your commission before withdrawing');
+            break;
+          case 'insufficient_balance':
+            Alert.alert('Insufficient balance');
+            break;
+          case 'invalid_number':
+            Alert.alert('Invalid Mobile Money number');
+            break;
+          case 'withdrawal_already_pending':
+            Alert.alert('You already have a withdrawal being processed');
+            break;
+          case 'minimum_is_1':
+            Alert.alert('Minimum withdrawal is GH₵ 1');
+            break;
+          case 'account_not_allowed':
+            Alert.alert('Your account is not allowed to withdraw');
+            break;
+          default:
+            Alert.alert('Error', 'Withdrawal failed. Please try again.');
+        }
+        return;
+      }
+
+      setWithdrawAmount('');
+      Alert.alert(
+        'Withdrawal Submitted',
+        `GH₵ ${amount.toFixed(2)} withdrawal to ${withdrawPhone} (${PROVIDER_LABELS[withdrawNetwork]}) submitted. Will be processed within 24 hours.`,
+      );
+      await loadData();
+    } catch {
+      Alert.alert('Error', 'Withdrawal failed. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const txnIcon = (type: string) => {
